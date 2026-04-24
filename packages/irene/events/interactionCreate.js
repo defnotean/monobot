@@ -557,6 +557,49 @@ export async function execute(interaction) {
     return;
   }
 
+  // ── Remind-me context-menu modal ──────────────────────────────────────────
+  // The modal is opened by the "remind me" message context command. Its
+  // submit goes through interactionCreate like every modal; route by customId
+  // prefix to the command's onModalSubmit handler.
+  if (interaction.isModalSubmit?.() && interaction.customId?.startsWith("remindme_modal:")) {
+    try {
+      const mod = await import("../commands/context/remindme.js");
+      if (typeof mod.onModalSubmit === "function") {
+        await mod.onModalSubmit(interaction);
+      }
+    } catch (err) {
+      log(`[RemindMe] modal dispatch failed: ${err?.message ?? err}`);
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: `something went wrong — ${err?.message ?? "unknown error"}`, flags: 64 }).catch(() => {});
+      }
+    }
+    return;
+  }
+
+  // ── Context-menu commands (right-click message → Apps) ────────────────────
+  // Uses the same client.commands registry as slash commands — the registrar
+  // just builds ContextMenuCommandBuilder instead of SlashCommandBuilder.
+  if (interaction.isContextMenuCommand?.()) {
+    const command = interaction.client.commands.get(interaction.commandName);
+    if (!command) return;
+    try {
+      await command.execute(interaction);
+    } catch (error) {
+      log(`Context command error [${interaction.commandName}]: ${error.message}`);
+      console.error(error);
+      const reply = {
+        embeds: [errorEmbed("Error", "Something went wrong running that action.")],
+        flags: 64,
+      };
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(reply).catch(() => {});
+      } else {
+        await interaction.reply(reply).catch(() => {});
+      }
+    }
+    return;
+  }
+
   // ── Slash commands ────────────────────────────────────────────────────────
   if (!interaction.isChatInputCommand()) return;
 
