@@ -1,0 +1,494 @@
+// ─── Advanced / Misc Executor ───────────────────────────────────────────────
+
+import { Parser as ExprParser } from "expr-eval";
+import { addReminder, removeReminder, addScheduledTask, getScheduledTasks, getScheduledTask, removeScheduledTask } from "../../database.js";
+import { armScheduledTask, scheduledTaskTimers, NON_SCHEDULABLE } from "../../utils/scheduler.js";
+import { log } from "../../utils/logger.js";
+import config from "../../config.js";
+import { GoogleGenAI } from "@google/genai";
+
+// Reusable Gemini clients for web search grounding — one per API key, round-robin.
+// Cheap to keep around; instantiated once per process.
+const _groundingClients = (config.geminiKeys ?? []).filter(Boolean).map((k) => new GoogleGenAI({ apiKey: k }));
+let _groundingIdx = 0;
+function getGroundingClient() {
+  if (!_groundingClients.length) return null;
+  const c = _groundingClients[_groundingIdx % _groundingClients.length];
+  _groundingIdx++;
+  return c;
+}
+
+const _exprParser = new ExprParser();
+
+// ─── Web rate limiting ──────────────────────────────────────────────────────
+const _webRateLimits = new Map();
+let _webRlCleanupCounter = 0;
+function checkWebRateLimit(userId, rateLimit) {
+  const now = Date.now();
+  let r = _webRateLimits.get(userId);
+  if (!r || r.resetAt < now) r = { count: 0, resetAt: now + 60_000 };
+  if (r.count >= rateLimit) return `rate limited — max ${rateLimit} web requests per minute`;
+  r.count++;
+  _webRateLimits.set(userId, r);
+  if (++_webRlCleanupCounter % 50 === 0) {
+    for (const [uid, entry] of _webRateLimits) {
+      if (entry.resetAt < now) _webRateLimits.delete(uid);
+    }
+  }
+  return null;
+}
+
+const HANDLED = new Set([
+  "configure_giveaway_pings", "configure_suggestions", "manage_giveaway",
+  "toggle_voice_listen", "manage_scrim", "reminder_set", "reminder_cancel",
+  "calculate", "web_search", "web_read", "ask_eris",
+  "schedule_task", "cancel_scheduled_task", "list_scheduled_tasks",
+]);
+
+const MAX_SCHEDULE_DELAY_SECONDS = 7 * 24 * 60 * 60; // 7 days
+const MIN_SCHEDULE_DELAY_SECONDS = 3;
+
+export async function execute(toolName, input, message, ctx) {
+  if (!HANDLED.has(toolName)) return undefined;
+
+  const { guild, findChannel, findRole, findRoles, findMember, webRateLimitPerMin } = ctx;
+
+  switch (toolName) {
+    case "configure_giveaway_pings": {
+      const { setGiveawayPingRoles, getGiveawayPingRoles } = await import("../../database.js");
+      if (input.ping_roles.toLowerCase() === "none") {
+        setGiveawayPingRoles(guild.id, []);
+        return "Giveaway ping roles cleared — no roles will be pinged.";
+      }
+      const roleIds = findRoles(guild, input.ping_roles);
+      if (!roleIds.length) return `No roles found matching "${input.ping_roles}"`;
+      setGiveawayPingRoles(guild.id, roleIds);
+      const roleNames = roleIds.map((id) => guild.roles.cache.get(id)?.name ?? id);
+      return `Giveaway ping roles set to: ${roleNames.map((n) => `@${n}`).join(", ")}`;
+    }
+
+    case "configure_suggestions": {
+      const { initSuggestionData, getSuggestionData } = await import("../../commands/utility/suggest.js");
+      const ch = findChannel(guild, input.channel_name);
+      if (!ch) return `couldn't find channel "${input.channel_name}"`;
+      const { suggestionData } = await import("../../commands/utility/suggest.js");
+      if (!suggestionData.has(guild.id)) suggestionData.set(guild.id, { channelId: null, suggestions: [], nextId: 1 });
+      suggestionData.get(guild.id).channelId = ch.id;
+      return `suggestions channel set to #${ch.name}`;
+    }
+
+    case "manage_giveaway": {
+      return `giveaways are managed via the /giveaway command — use /giveaway ${input.action} with the message ID`;
+    }
+
+    case "toggle_voice_listen": {
+      const { startListening, stopListening, isListening, getWakeWord, setWakeWord } = await import("../../voice/listener.js");
+      const action = input.action;
+
+      if (action === "status") {
+        const active = isListening(guild.id);
+        const wakeWord = getWakeWord(guild.id);
+        return active
+          ? `currently listening for wake word "${wakeWord}" in a voice channel`
+          : `not currently listening. wake word is "${wakeWord}"`;
+      }
+
+      if (action === "stop") {
+        if (!isListening(guild.id)) return "not currently listening in any voice channel";
+        stopListening(guild.id);
+        return "stopped listening in voice channel";
+      }
+
+      if (action === "start") {
+        const member = message.member;
+        const vc = member?.voice?.channel;
+        if (!vc) return "the user needs to be in a voice channel first";
+
+        if (isListening(guild.id)) return "already listening — use stop first";
+
+        if (input.wake_word) setWakeWord(guild.id, input.wake_word);
+
+        const result = await startListening(vc, message.channel);
+        if (result.success) {
+          const wakeWord = getWakeWord(guild.id);
+          return `now listening in ${vc.name}! users can say "Hey ${wakeWord}" to talk to me`;
+        }
+        return `failed to start listening: ${result.error}`;
+      }
+
+      return "use action: start, stop, or status";
+    }
+
+    case "manage_scrim": {
+      if (input.action === "create") {
+        const { activeScrims, buildLobbyEmbed } = await import("../../utils/scrims.js");
+        const scrimId = Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+        activeScrims.set(scrimId, {
+          id: scrimId,
+          host: message.author.id,
+          game: input.game,
+          teamSize: input.team_size || 5,
+          status: "lobby",
+          players: new Set([message.author.id]),
+          createdAt: Date.now(),
+        });
+        const payload = buildLobbyEmbed(activeScrims.get(scrimId));
+        await message.channel.send(payload);
+        return `Successfully instantiated custom ${input.game} scrim lobby with team size ${input.team_size || 5}! The lobby embed was sent directly.`;
+      }
+      return "Unsupported action.";
+    }
+
+    case "reminder_set": {
+      const delayMs = (input.delay_minutes ?? 0) * 60_000;
+      if (delayMs <= 0) return "delay must be greater than 0 minutes";
+      const fireAt = Date.now() + delayMs;
+      const reminder = addReminder(
+        message.author.id,
+        guild?.id ?? null,
+        message.channel.id,
+        input.message,
+        fireAt
+      );
+
+      const { reminderTimers } = await import("../../events/ready.js");
+      const timerId = setTimeout(async () => {
+        reminderTimers.delete(reminder.id);
+        try {
+          const ch = message.client.channels.cache.get(reminder.channelId);
+          if (ch) {
+            await ch.send(`<@${reminder.userId}> ⏰ Reminder: ${reminder.message}`);
+          } else {
+            const u = await message.client.users.fetch(reminder.userId).catch(() => null);
+            if (u) await u.send(`⏰ Reminder: ${reminder.message}`).catch(() => {});
+          }
+        } catch {}
+        removeReminder(reminder.id);
+      }, delayMs);
+      reminderTimers.set(reminder.id, timerId);
+
+      const fireTs = Math.floor(fireAt / 1000);
+      return `Reminder set (ID: ${reminder.id}) — I'll ping you <t:${fireTs}:R> with: "${input.message}"`;
+    }
+
+    case "reminder_cancel": {
+      const reminderId = input.reminder_id;
+      const { getReminders } = await import("../../database.js");
+      const reminders = getReminders();
+      const found = reminders.find((r) => r.id === reminderId && r.userId === message.author.id);
+      if (!found) return `Couldn't find reminder #${reminderId} (or it already fired)`;
+      const { reminderTimers } = await import("../../events/ready.js");
+      const timer = reminderTimers.get(reminderId);
+      if (timer) { clearTimeout(timer); reminderTimers.delete(reminderId); }
+      removeReminder(reminderId);
+      return `Reminder #${reminderId} cancelled`;
+    }
+
+    case "schedule_task": {
+      if (!guild) return "schedule_task only works inside a server, not DMs.";
+
+      const delaySec = Number(input.delay_seconds);
+      if (!Number.isInteger(delaySec) || delaySec < MIN_SCHEDULE_DELAY_SECONDS) {
+        return `delay_seconds must be a whole number ≥ ${MIN_SCHEDULE_DELAY_SECONDS} — for anything shorter, just call the tool directly.`;
+      }
+      if (delaySec > MAX_SCHEDULE_DELAY_SECONDS) {
+        return `delay_seconds can't exceed ${MAX_SCHEDULE_DELAY_SECONDS}s (7 days).`;
+      }
+
+      const toolNameRaw = String(input.tool_name || "").trim();
+      if (!toolNameRaw) return "tool_name is required.";
+      const toolName = toolNameRaw.toLowerCase();
+      if (NON_SCHEDULABLE.has(toolName) || NON_SCHEDULABLE.has(toolNameRaw)) {
+        return `${toolNameRaw} can't be scheduled (would recurse). Pick a different tool.`;
+      }
+
+      const toolInput = input.tool_input;
+      if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) {
+        return "tool_input must be an object with the same shape you'd pass to the tool directly.";
+      }
+      // Cap serialized size so a hostile input can't blow up bot_data storage.
+      let serialized;
+      try { serialized = JSON.stringify(toolInput); }
+      catch { return "tool_input must be JSON-serializable."; }
+      if (serialized.length > 4000) return "tool_input is too large — keep it under 4000 chars.";
+
+      const fireAt = Date.now() + delaySec * 1000;
+      let task;
+      try {
+        task = addScheduledTask(
+          guild.id,
+          message.channel.id,
+          message.author.id,
+          toolName,
+          toolInput,
+          fireAt,
+          input.note ? String(input.note).slice(0, 200) : null
+        );
+      } catch (err) {
+        return `couldn't schedule — db error: ${err?.message || err}`;
+      }
+      if (!task?.id) return "couldn't schedule — db returned no task id.";
+      armScheduledTask(task, message.client);
+
+      const fireTs = Math.floor(fireAt / 1000);
+      return `Scheduled task #${task.id} — will fire \`${toolName}\` <t:${fireTs}:R>${input.note ? ` (note: ${input.note})` : ""}`;
+    }
+
+    case "cancel_scheduled_task": {
+      if (!guild) return "cancel_scheduled_task only works inside a server.";
+      const taskId = Number(input.task_id);
+      if (!Number.isInteger(taskId) || taskId <= 0) return "task_id must be a positive integer.";
+
+      const task = getScheduledTask(taskId);
+      if (!task) return `No pending task with ID ${taskId}.`;
+      if (task.guildId !== guild.id) return `Task #${taskId} belongs to a different server.`;
+
+      const timer = scheduledTaskTimers.get(taskId);
+      if (timer) { clearTimeout(timer); scheduledTaskTimers.delete(taskId); }
+      removeScheduledTask(taskId);
+
+      return `Cancelled scheduled task #${taskId} (was going to run \`${task.toolName}\`).`;
+    }
+
+    case "list_scheduled_tasks": {
+      if (!guild) return "list_scheduled_tasks only works inside a server.";
+      const tasks = getScheduledTasks(guild.id);
+      if (!tasks.length) return "No scheduled tasks pending in this server.";
+
+      const lines = tasks
+        .slice()
+        .sort((a, b) => a.fireAt - b.fireAt)
+        .map((t) => {
+          const fireTs = Math.floor(t.fireAt / 1000);
+          const noteBit = t.note ? ` — ${t.note}` : "";
+          return `• #${t.id} \`${t.toolName}\` <t:${fireTs}:R>${noteBit}`;
+        });
+      return `Pending scheduled tasks:\n${lines.join("\n")}`;
+    }
+
+    case "calculate": {
+      const expr = input.expression;
+      if (!expr) return "No expression provided.";
+      if (expr.length > 500) return "Expression too long (max 500 characters)";
+      if (/\*{2,}\s*\d{2,}/.test(expr)) return "Math error: large exponents are forbidden for safety.";
+      try {
+        const statements = expr.split(";").map((s) => s.trim()).filter(Boolean);
+        const vars = { PI: Math.PI, E: Math.E };
+        let lastResult;
+        for (const stmt of statements) {
+          const assignMatch = stmt.match(/^([a-zA-Z_]\w*)\s*=\s*(.+)$/);
+          if (assignMatch) {
+            const [, varName, valExpr] = assignMatch;
+            lastResult = _exprParser.evaluate(valExpr, vars);
+            vars[varName] = lastResult;
+          } else {
+            lastResult = _exprParser.evaluate(stmt, vars);
+          }
+        }
+        if (lastResult === undefined || lastResult === null) return "Expression returned no result.";
+        let resultStr = typeof lastResult === "number"
+          ? (Number.isInteger(lastResult) ? String(lastResult) : parseFloat(lastResult.toPrecision(12)).toString())
+          : String(lastResult);
+        if (input.show_steps) {
+          const steps = statements.map((s, i) => `Step ${i + 1}: \`${s}\``).join("\n");
+          return `${steps}\n\n**Result: ${resultStr}**`;
+        }
+        return `**${resultStr}**  ← \`${expr}\``;
+      } catch (err) {
+        return `Math error: ${err.message}`;
+      }
+    }
+
+    case "web_search": {
+      const rateErr = checkWebRateLimit(message.author.id, webRateLimitPerMin);
+      if (rateErr) return rateErr;
+      if (!input.query) return "No search query provided.";
+
+      const encoded = encodeURIComponent(input.query);
+
+      // ── Tier 1: Google Custom Search (if configured) ──
+      const googleKey = process.env.GOOGLE_SEARCH_KEY;
+      const googleCx = process.env.GOOGLE_SEARCH_CX;
+      if (googleKey && googleCx) {
+        try {
+          // Custom Search API takes the key as a query parameter, NOT x-goog-api-key header.
+          const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(googleKey)}&cx=${encodeURIComponent(googleCx)}&q=${encoded}&num=5`;
+          const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.items?.length) {
+              const results = data.items.slice(0, 5).map((item, i) =>
+                `${i + 1}. **${item.title}**\n   ${item.link}\n   ${item.snippet ?? ""}`
+              );
+              return `🔍 Search results for "${input.query}":\n\n${results.join("\n\n")}`;
+            }
+          } else {
+            log(`[web_search] Google CSE ${res.status} — falling back to Gemini grounding`);
+          }
+        } catch (err) {
+          log(`[web_search] Google CSE error: ${err.message} — falling back to Gemini grounding`);
+        }
+      }
+
+      // ── Tier 2: Gemini Google Search grounding (always available when we have Gemini keys) ──
+      const client = getGroundingClient();
+      if (client) {
+        try {
+          const resp = await Promise.race([
+            client.models.generateContent({
+              model: config.geminiFastModel,
+              contents: [{ role: "user", parts: [{ text: `Search the web for: ${input.query}\n\nReturn 3-5 concise results with titles, one-line summaries, and source URLs. Plain text, no markdown headers.` }] }],
+              config: {
+                tools: [{ googleSearch: {} }],
+                maxOutputTokens: 1024,
+              },
+            }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("grounding timeout")), 25_000)),
+          ]);
+          const parts = resp?.candidates?.[0]?.content?.parts ?? [];
+          const text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("").trim();
+          if (text) {
+            // Append the grounding source URLs if Gemini surfaced them
+            const sources = resp?.candidates?.[0]?.groundingMetadata?.groundingChunks
+              ?.map((c) => c.web?.uri).filter(Boolean).slice(0, 5) ?? [];
+            const srcBlock = sources.length ? `\n\nSources:\n${sources.map((u) => `- ${u}`).join("\n")}` : "";
+            return `🔍 "${input.query}":\n\n${text}${srcBlock}`;
+          }
+        } catch (err) {
+          log(`[web_search] Gemini grounding failed: ${err.message} — falling back to DDG`);
+        }
+      }
+
+      // ── Tier 3: DuckDuckGo instant answer (last resort) ──
+      try {
+        const ddgUrl = `https://api.duckduckgo.com/?q=${encoded}&format=json&no_html=1&skip_disambig=1`;
+        const res = await fetch(ddgUrl, { signal: AbortSignal.timeout(8_000) });
+        const data = await res.json();
+
+        const parts = [];
+        if (data.AbstractText) parts.push(`**${data.AbstractSource}**: ${data.AbstractText}`);
+        if (data.Answer) parts.push(`**Answer**: ${data.Answer}`);
+        if (data.RelatedTopics?.length) {
+          const topics = data.RelatedTopics.slice(0, 5)
+            .filter((t) => t.Text)
+            .map((t, i) => `${i + 1}. ${t.Text}${t.FirstURL ? ` — ${t.FirstURL}` : ""}`);
+          if (topics.length) parts.push(`**Related**:\n${topics.join("\n")}`);
+        }
+        if (parts.length) return `🔍 "${input.query}":\n\n${parts.join("\n\n")}`;
+
+        const liteUrl = `https://lite.duckduckgo.com/lite/?q=${encoded}`;
+        return `No results found. Try searching directly: ${liteUrl}`;
+      } catch (err) {
+        return `Search failed: ${err.message}`;
+      }
+    }
+
+    case "web_read": {
+      const rateErr = checkWebRateLimit(message.author.id, webRateLimitPerMin);
+      if (rateErr) return rateErr;
+      if (!input.url) return "No URL provided.";
+      try {
+        const parsed = new URL(input.url);
+        if (!["http:", "https:"].includes(parsed.protocol)) return "Only HTTP/HTTPS URLs allowed";
+        const host = parsed.hostname.toLowerCase();
+        if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" ||
+            host === "::1" || host === "::" || host === "169.254.169.254" ||
+            host.startsWith("10.") || host.startsWith("172.16.") || host.startsWith("192.168.") ||
+            host.endsWith(".internal") || host.endsWith(".local")) {
+          return "Can't access private/internal networks";
+        }
+      } catch { return "Invalid URL"; }
+      try {
+        const res = await fetch(input.url, {
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; DiscordBot/1.0)" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) return `Failed to fetch: HTTP ${res.status}`;
+        const html = await res.text();
+
+        const text = html
+          .replace(/<script[\s\S]*?<\/script>/gi, "")
+          .replace(/<style[\s\S]*?<\/style>/gi, "")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/&nbsp;/g, " ")
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        const truncated = text.slice(0, 3000);
+        const note = text.length > 3000 ? "\n\n*(truncated — page has more content)*" : "";
+        return `📄 Content from ${input.url}:\n\n${truncated}${note}`;
+      } catch (err) {
+        return `Failed to read page: ${err.message}`;
+      }
+    }
+
+    case "ask_eris": {
+      const ERIS_API = "https://irene-bot.onrender.com/api/twin";
+      const action = input.action;
+
+      try {
+        if (action === "remind") {
+          const delayMs = (input.delay_minutes ?? 60) * 60_000;
+          const remindAt = new Date(Date.now() + delayMs).toISOString();
+          const res = await fetch(`${ERIS_API}/remind`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: input.user_id || message.author.id,
+              channel_id: input.channel_id || message.channel.id,
+              reminder_text: input.reminder_text || input.message || "reminder",
+              remind_at: remindAt,
+            }),
+          });
+          const data = await res.json();
+          return data.success ? `told my sister eris to set that reminder — she'll ping in ${input.delay_minutes || 60} minutes` : `eris couldn't set it up: ${data.error}`;
+        }
+
+        if (action === "note") {
+          const res = await fetch(`${ERIS_API}/note`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: input.user_id || message.author.id,
+              title: input.title || "Note from Irene",
+              content: input.content || "",
+            }),
+          });
+          const data = await res.json();
+          return data.success ? "passed that note to eris — she's got it saved" : `eris couldn't save it: ${data.error || res.status}`;
+        }
+
+        if (action === "fact") {
+          const res = await fetch(`${ERIS_API}/fact`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: input.user_id || message.author.id, fact: input.fact }),
+          });
+          const data = await res.json();
+          return data.success ? "told eris to remember that" : "she couldn't save it";
+        }
+
+        if (action === "mood") {
+          const res = await fetch(`${ERIS_API}/mood`);
+          const data = await res.json();
+          return `eris's mood: ${data.mood_score > 0 ? "good" : data.mood_score < 0 ? "bad" : "neutral"} (score: ${data.mood_score}, energy: ${data.energy})`;
+        }
+
+        if (action === "status") {
+          const res = await fetch(`${ERIS_API}/status`);
+          const data = await res.json();
+          return `eris is ${data.status} — uptime: ${data.uptime}s. she says: "${data.message}"`;
+        }
+
+        return `i don't know how to ask eris to do "${action}" yet`;
+      } catch (e) {
+        return `couldn't reach eris right now — she might be sleeping (${e.message})`;
+      }
+    }
+  }
+}

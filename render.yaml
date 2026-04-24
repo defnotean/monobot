@@ -1,0 +1,12 @@
+services:
+  - type: worker
+    name: irene-bot
+    runtime: node
+    plan: standard
+    buildCommand: npm install --production
+    startCommand: node index.js
+    envVars:
+      - key: NODE_ENV
+        value: "production"
+      - key: PORT
+        value: "3001"

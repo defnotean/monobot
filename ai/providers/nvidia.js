@@ -1,0 +1,308 @@
+// ─── NVIDIA AI Provider — Kimi K2.5 (1TB) via integrate.api.nvidia.com ──────
+// OpenAI-compatible chat completions endpoint with tool calling support.
+//
+// Implements the same interface as ai/providers/gemini.js so the rest of the
+// bot doesn't care which AI is running. Switch via AI_PROVIDER=nvidia in .env.
+
+import config from "../../config.js";
+import { log } from "../../utils/logger.js";
+import { executeTool } from "../executor.js";
+
+const NV = config.nvidia;
+
+// ─── Tool schema conversion (Anthropic → OpenAI format) ─────────────────────
+
+function sanitizeForOpenAI(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeForOpenAI);
+  const cleaned = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "$schema") continue;
+    if (key === "type" && Array.isArray(value)) {
+      cleaned.type = value.filter(t => t !== "null")[0] || "string";
+      continue;
+    }
+    cleaned[key] = sanitizeForOpenAI(value);
+  }
+  return cleaned;
+}
+
+const _toolCache = new WeakMap();
+
+export function toGeminiTools(tools) {
+  if (!tools || !tools.length) return undefined;
+  const cached = _toolCache.get(tools);
+  if (cached) return cached;
+
+  // Tools may arrive in three shapes:
+  //   1. Anthropic-style: [{name, description, input_schema}, ...]
+  //   2. Gemini-style:    [{functionDeclarations: [{name, description, parameters}, ...]}]
+  //   3. OpenAI-style:    [{type: "function", function: {name, description, parameters}}, ...]
+  //                       Already-formatted, return as-is.
+  if (tools[0]?.type === "function" && tools[0]?.function?.name) {
+    _toolCache.set(tools, tools);
+    return tools;
+  }
+
+  let raw = tools;
+  if (tools[0]?.functionDeclarations) {
+    raw = tools.flatMap(t => t.functionDeclarations || []);
+  }
+
+  const result = raw
+    .filter(t => t && t.name)
+    .map(t => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description || "",
+        parameters: sanitizeForOpenAI(t.input_schema || t.parameters) || { type: "object", properties: {} },
+      },
+    }));
+  _toolCache.set(tools, result);
+  return result;
+}
+
+// ─── Quick reply (no tools, fast acknowledgment) ────────────────────────────
+
+export async function quickReply(_client, systemInstruction, userText, context) {
+  try {
+    const messages = [
+      { role: "system", content: systemInstruction },
+      { role: "user", content: userText },
+    ];
+    const res = await fetch(`${NV.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${NV.apiKey}`,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      },
+      body: JSON.stringify({
+        model: NV.fastModel,
+        messages,
+        max_tokens: 256,
+        temperature: NV.temperature,
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      log(`[NVIDIA] quickReply HTTP ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content?.trim();
+    if (text && context?.reply) {
+      await context.reply(text).catch(() => {});
+    }
+  } catch (e) { log(`[NVIDIA] quickReply: ${e.message}`); }
+}
+
+// ─── Looks-like-task heuristic ─────────────────────────────────────────────
+
+const TASK_KEYWORDS = /\b(set|create|make|delete|remove|update|change|configure|enable|disable|start|stop|skip|play|pause|fetch|get|show|list|search|find|add|give|send|kick|ban|mute|warn|timeout|track|watch|bet|gamble|flip|roll|spin|blackjack|hit|stand|fish|hunt|dig|work|beg|daily|weekly|monthly|rob|steal|duel|trivia|fortune|confess|curse|balance|coin|leaderboard|bump|reminder|karaoke|lyrics|music|queue|volume|filter)\b/i;
+
+export function looksLikeTask(text) {
+  if (!text) return false;
+  return TASK_KEYWORDS.test(text);
+}
+
+// ─── Rate limit hooks ──────────────────────────────────────────────────────
+
+export function setRateLimitCallbacks() { /* TODO if needed */ }
+export function isRateLimited() { return false; }
+
+// ─── Main chat call with tool calling loop ──────────────────────────────────
+// Irene's runGeminiChat takes an options OBJECT, not positional args, because
+// her dual.js interface differs from Eris's. This adapter handles both.
+
+export async function runGeminiChat(arg1, ...rest) {
+  // Detect call style
+  let geminiClient, systemInstruction, history, tools, msgCtx, isAdmin, useFastModel, executor, onToolStatus;
+  if (typeof arg1 === "object" && arg1 && (arg1.systemInstruction || arg1.history)) {
+    // Irene-style object call
+    ({ geminiClient, systemInstruction, history, tools, message: msgCtx, isAdmin, useFastModel, onToolStatus } = arg1);
+    executor = arg1.executor;
+  } else {
+    // Eris-style positional call: (client, sysInstr, tools, history, userMsg, executor, opts)
+    geminiClient = arg1;
+    systemInstruction = rest[0];
+    tools = rest[1];
+    history = rest[2];
+    const userMessage = rest[3];
+    executor = rest[4];
+    const opts = rest[5] || {};
+    useFastModel = opts.useFastModel;
+    msgCtx = { userMessage };
+  }
+
+  // Default executor — uses the bot's own executeTool if caller didn't provide one
+  // (Irene's runGeminiChat doesn't take an executor; it uses the global executor)
+  if (!executor) {
+    executor = (toolName, toolArgs) => executeTool(toolName, toolArgs, msgCtx);
+  }
+
+  const model = useFastModel ? NV.fastModel : NV.model;
+  const nvidiaTools = toGeminiTools(tools);
+
+  // Append tool-use directive with explicit examples for Qwen.
+  let sysPrompt = systemInstruction;
+  if (nvidiaTools && nvidiaTools.length) {
+    sysPrompt += `\n\n[TOOL USE — CRITICAL]
+You have ${nvidiaTools.length} tools available. Your job is to CALL THE RIGHT TOOL, not describe what you would do.
+
+ALWAYS call a tool when the user asks for ANY of these:
+- "send a gif" / "gif of X" / "dab" / "shrug" / "shocked" / any short reaction word → call send_gif with that word as the query
+- "make a meme" / "create meme" → call create_meme
+- "look up X" / "search for X" / "google X" → call web_search
+- "play X" / "queue X" / "put on X in vc" → call play_music. BUT if they're just sharing/showing off music ("heres my spotify", "check out my music", dropping an artist link with no play verb) → do NOT call play_music, just react like a person
+- "skip" / "stop" / "pause" / "resume" / "volume" → matching music tool
+- "lyrics" / "karaoke" → call start_lyrics_mode or karaoke commands
+- "remember X" → call remember_fact
+- "remind me X" → call set_reminder
+- "kick" / "ban" / "mute" / "warn" / "purge" → matching mod tool
+- "set X channel" / "configure X" / "setup X" → matching config tool
+- ANY other clear request to perform an action → find the closest tool and call it
+
+Only respond with plain text for: casual chitchat, opinions, jokes, answering questions from memory.
+
+Output format: tool calls go in tool_calls field, NOT in text content.]`;
+  }
+
+  // Convert Gemini-style history to OpenAI messages format
+  const messages = [{ role: "system", content: sysPrompt }];
+  for (const turn of (history || [])) {
+    const text = turn.parts?.[0]?.text || turn.content || "";
+    if (!text) continue;
+    if (turn.role === "model" || turn.role === "assistant") {
+      messages.push({ role: "assistant", content: text });
+    } else {
+      messages.push({ role: "user", content: text });
+    }
+  }
+
+  const toolsUsed = [];
+  let finalText = "";
+  // Track tool call signatures to break out of infinite retry loops.
+  const calledSignatures = new Set();
+
+  for (let iteration = 0; iteration < 10; iteration++) {
+    const body = {
+      model,
+      messages,
+      max_tokens: NV.maxTokens,
+      temperature: NV.temperature,
+      top_p: NV.topP ?? 0.95,
+      stream: false,
+    };
+    if (nvidiaTools && nvidiaTools.length) {
+      body.tools = nvidiaTools;
+      body.tool_choice = "auto";
+    }
+    if (NV.thinking) {
+      // Qwen uses 'enable_thinking', Kimi uses 'thinking' — send both for compat
+      body.chat_template_kwargs = { enable_thinking: true, thinking: true };
+    }
+
+    let data;
+    try {
+      const res = await fetch(`${NV.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${NV.apiKey}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+      }
+      data = await res.json();
+    } catch (e) {
+      log(`[NVIDIA] chat call failed: ${e.message}`);
+      return { text: "i'm having trouble thinking rn, try again in a sec", toolsUsed };
+    }
+
+    const choice = data.choices?.[0];
+    const msg = choice?.message;
+    if (!msg) {
+      log(`[NVIDIA] No message in response`);
+      return { text: "", toolsUsed };
+    }
+
+    if (!msg.tool_calls || msg.tool_calls.length === 0) {
+      finalText = msg.content || "";
+      break;
+    }
+
+    messages.push({
+      role: "assistant",
+      content: msg.content || null,
+      tool_calls: msg.tool_calls,
+    });
+
+    // Two-phase: classify every call (skip duplicates) then Promise.all the
+    // fresh ones. Lets the model fire N parallel web_searches in one turn
+    // without paying N× latency.
+    let allDuplicates = true;
+    const slots = msg.tool_calls.map((call) => {
+      const fnName = call.function?.name;
+      let fnArgs = {};
+      try { fnArgs = JSON.parse(call.function?.arguments || "{}"); }
+      catch (e) { log(`[NVIDIA] Bad tool args for ${fnName}: ${e.message}`); }
+      const signature = `${fnName}::${JSON.stringify(fnArgs)}`;
+      if (calledSignatures.has(signature)) {
+        log(`[NVIDIA] Skipping duplicate ${fnName} call (already executed)`);
+        return { call, fnName, fnArgs, duplicate: true };
+      }
+      calledSignatures.add(signature);
+      allDuplicates = false;
+      return { call, fnName, fnArgs, duplicate: false };
+    });
+
+    const fresh = slots.filter((s) => !s.duplicate);
+    if (fresh.length > 1) log(`[NVIDIA] running ${fresh.length} tool calls in parallel: ${fresh.map((s) => s.fnName).join(", ")}`);
+    const execResults = await Promise.all(fresh.map(async ({ fnName, fnArgs }) => {
+      log(`[NVIDIA] ${fnName}(${JSON.stringify(fnArgs).slice(0, 100)})`);
+      try {
+        if (!executor) return "no executor";
+        return await executor(fnName, fnArgs);
+      } catch (e) {
+        log(`[NVIDIA] Tool ${fnName} failed: ${e.message}`);
+        return `tool error: ${e.message}`;
+      }
+    }));
+    const resultByCallId = new Map();
+    fresh.forEach((s, i) => { resultByCallId.set(s.call.id, execResults[i]); toolsUsed.push(s.fnName); });
+
+    // Append in the original tool_calls order so the model sees a coherent sequence.
+    for (const s of slots) {
+      if (s.duplicate) {
+        messages.push({
+          role: "tool",
+          tool_call_id: s.call.id,
+          content: `Already executed this exact call earlier. Don't call ${s.fnName} again with these arguments. Move on or finish.`,
+        });
+      } else {
+        const result = resultByCallId.get(s.call.id);
+        messages.push({
+          role: "tool",
+          tool_call_id: s.call.id,
+          content: typeof result === "string" ? result : JSON.stringify(result),
+        });
+      }
+    }
+
+    if (allDuplicates) {
+      log(`[NVIDIA] Model stuck repeating tool calls — exiting loop`);
+      finalText = msg.content || "";
+      break;
+    }
+  }
+
+  return { text: finalText, toolsUsed };
+}
