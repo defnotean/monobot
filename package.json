@@ -13,7 +13,7 @@
     "test": "npm test --workspaces --if-present",
     "test:eris": "npm test --workspace=@defnotean/eris",
     "test:irene": "npm test --workspace=@defnotean/irene",
-    "lint:shared-sync": "node scripts/verify-shared-sync.js"
+    "lint:version-sync": "node scripts/verify-version-sync.js"
   },
   "engines": {
     "node": ">=18.0.0"

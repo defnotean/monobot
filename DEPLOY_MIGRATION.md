@@ -21,12 +21,38 @@ Environment variables, bot tokens, Supabase keys, service plans, and ports **do 
 
 ---
 
+## Post-mortem: the 2026-04-24 Irene incident
+
+The first Irene cutover attempt **failed silently in production** — her process came up,
+62 commands loaded, Discord gateway connected, but user-facing interactions stopped
+responding. Root cause: npm workspace version hoisting.
+
+Eris specified `discord.js@^14.26.2`, Irene specified `^14.14.1`. `14.26.3` satisfied
+BOTH ranges, so npm hoisted `14.26.3` to the root and Irene — with no local override —
+ran against a minor-version she wasn't built for. Interaction-reply APIs changed between
+14.14 and 14.26; Irene's handlers silently broke. Unit tests passed because they ran
+against the same hoisted version that prod did — both "broken" in the same matching way.
+
+Rollback took ~2 minutes via the Render dashboard repo flip documented below.
+
+**Lessons encoded into this guide:**
+1. Every shared dep must have **byte-identical** version ranges across workspaces. Pin
+   exact (no caret) for reproducibility. Enforced by `npm run lint:version-sync`.
+2. Disable Auto-Deploy *before* changing settings on the Render dashboard. Batch the
+   repo + start command changes, then Manual Deploy. Prevents the in-flight-deploy-with-
+   half-updated-state failure mode.
+3. Unit tests are **not sufficient** to validate a cross-version migration. Add a real-
+   Discord smoke test checklist (below) as the final gate before declaring success.
+
+---
+
 ## Pre-flight
 
 Before touching Render, confirm locally:
 
 ```bash
 cd bots-monorepo
+npm run lint:version-sync    # MUST pass — fails loudly on any divergent dep range
 npm install
 npm test --workspace=@defnotean/eris   # 337/338 (known pre-existing flake in bumpApplause.test.ts)
 npm test --workspace=@defnotean/irene  # 100/100
@@ -42,14 +68,17 @@ Irene is less public-facing than Eris in current usage, so roll Irene first. If 
 
 ### Step 1 — Render dashboard: Irene service
 
-1. Open the `irene-bot` service on Render.
-2. **Settings → Repository → "Change Repository"** → select `defnotean/bots-monorepo` on the `main` branch.
-3. **Settings → Build & Deploy**:
-   - **Root Directory**: leave **blank** (must be empty — do NOT set to `packages/irene`). npm workspaces requires install from the repo root to establish symlinks; setting a sub-root breaks that.
-   - **Build Command**: `npm install`
-   - **Start Command**: `npm run start:irene`
-4. Leave all env vars alone — they carry over with the service, the repo change does not touch them.
-5. **Manual Deploy → Deploy latest commit**.
+**Critical procedural fix learned from 2026-04-24:** disable Auto-Deploy FIRST. Otherwise each settings change triggers its own auto-deploy and you end up with an in-flight deploy that captured the old start command against the new repo (or vice-versa) — exactly what caused the failed rollback attempt on 2026-04-24.
+
+1. Open the Irene service on Render.
+2. **Settings → Deploy → Auto-Deploy**: change to **Off**. Save.
+3. **Settings → Deploy → Start Command**: change to `npm run start:irene`. Save. (No deploy triggers because Auto-Deploy is off.)
+4. **Settings → Build → Repository → "Change Repository"** → select `defnotean/bots-monorepo` on the `main` branch. Save.
+5. **Settings → Build**: verify **Root Directory** is **blank** (must be empty — do NOT set to `packages/irene`. npm workspaces requires install from the repo root to establish symlinks; setting a sub-root breaks that.)
+6. **Settings → Build → Build Command**: confirm `npm install`.
+7. Leave all env vars alone — they carry over with the service, the repo change does not touch them.
+8. **Manual Deploy → Deploy latest commit**. *Now* the deploy runs, with both repo and start command settings correctly applied atomically.
+9. **After the deploy is confirmed Live and smoke-tested:** Settings → Deploy → Auto-Deploy → **On Commit**. Save.
 
 ### Step 2 — Watch the first deploy
 
@@ -58,12 +87,18 @@ On the Logs tab, expect:
 - Build completes → service enters `Live`.
 - First log line from Irene's `index.js` should be the usual startup banner.
 
-**Sanity smoke test** (run against your dev Discord guild):
-- `/ping` or equivalent: Irene responds.
-- `/setup` (the setupExecutor path): uses `@defnotean/shared/roleCategorizer` — confirm role categorization still works against a guild with existing roles.
-- Twin API: trigger anything that signs an outbound HMAC via `@defnotean/shared/twinSign` (e.g., a `twinPunish` call) and verify Eris accepts it.
+**Sanity smoke test** — run ALL of these against your dev Discord guild before claiming success. The 2026-04-24 incident bypassed smoke tests entirely and we declared success on "process is alive" — which missed that interaction handlers were silently broken.
 
-If all three pass, leave Irene on the monorepo for **at least 24 hours** before touching Eris. This catches slow-burn bugs that only surface under real guild load (long-lived cache entries, role change listeners, etc.).
+1. **`/ping`** — simplest interaction path. If this fails, interaction handling is broken. (This is the test that would have caught the 2026-04-24 incident.)
+2. **Any slash command that sends an embed** — validates discord.js Embed APIs still work across the version bump.
+3. **`/setup` or any command that lists roles** — uses `@defnotean/shared/roleCategorizer`; confirms shared package resolves.
+4. **Mention the bot in a guild channel** — exercises the message handler + AI path, different from slash commands.
+5. **Twin API** — trigger anything that signs an outbound HMAC via `@defnotean/shared/twinSign` (e.g., a `twinPunish` call) and verify the receiving bot accepts it.
+6. **Check `[Bot] N commands loaded` count in the log** — compare to the previous known-good deploy. If it's lower than before, some command file failed to load silently (this is what happened to Irene on 2026-04-24: 63 → 62 commands; one file was silently skipped).
+
+If any smoke test fails, **rollback immediately** (see "Rollback" below). Do not debug in prod; the other bot is still on its old repo and stable.
+
+Leave the migrated bot on the monorepo for **at least 24 hours** before touching the other one. Slow-burn bugs (long-lived cache entries, role change listeners, scheduled task jitter) only surface under real guild load.
 
 ### Rollback (Irene)
 

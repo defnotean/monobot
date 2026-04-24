@@ -21,15 +21,15 @@
   "license": "ISC",
   "dependencies": {
     "@defnotean/shared": "*",
-    "@google/genai": "^1.48.0",
+    "@google/genai": "1.50.1",
     "@octokit/rest": "^22.0.1",
-    "@supabase/supabase-js": "^2.101.1",
+    "@supabase/supabase-js": "2.104.1",
     "canvas": "^3.2.3",
     "cheerio": "^1.2.0",
-    "discord.js": "^14.26.2",
+    "discord.js": "14.26.3",
     "dotenv": "^17.4.0",
     "googleapis": "^171.4.0",
-    "voyageai": "^0.2.1"
+    "voyageai": "0.2.1"
   },
   "devDependencies": {
     "@types/node": "^20.19.39",
