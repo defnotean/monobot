@@ -1,0 +1,910 @@
+// ─── Music Queue Manager — Lavalink Backend via Shoukaku ────────────────────
+// Audio streaming handled by Lavalink server (runs on VPS with UDP support).
+// Bot sends commands over WebSocket/REST — no local voice, yt-dlp, or ffmpeg.
+
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { onTrackStart, onTrackEnd, hasSession, extractSongInfo, stopKaraoke } from "../ai/karaoke.js";
+import { log } from "../utils/logger.js";
+import { saveQueue as dbSaveQueue, getSavedQueues, clearSavedQueue, clearAllSavedQueues } from "../database.js";
+
+// Shoukaku instance — set by initMusic() from index.js
+let shoukaku = null;
+
+// Per-guild mutex — prevents race conditions in queue operations (skip, stop, play)
+const _queueLocks = new Map();
+async function withQueueLock(guildId, fn) {
+  let release;
+  const current = new Promise((r) => (release = r));
+  // Set lock BEFORE awaiting — prevents race where two calls see same prev
+  const prev = _queueLocks.get(guildId) ?? Promise.resolve();
+  _queueLocks.set(guildId, current);
+  await prev;
+  try { return await fn(); } finally {
+    release();
+    if (_queueLocks.get(guildId) === current) _queueLocks.delete(guildId);
+  }
+}
+
+export function initMusic(shoukakuInstance) {
+  shoukaku = shoukakuInstance;
+  log("[Music] Shoukaku initialized");
+
+  // Auto-save queues every 60s while music is playing — survives ungraceful
+  // shutdowns where SIGTERM → SIGKILL happens too fast for the shutdown
+  // handler's Supabase flush to complete. Makes redeployments seamless.
+  setInterval(() => {
+    let saved = 0;
+    for (const [guildId, queue] of queues) {
+      if (!queue.playing || !queue.songs.length) continue;
+      const currentPos = queue.player?.position || 0;
+      const songs = queue.songs.filter(s => !s.isTTS).map((s, i) => ({
+        title: s.title, artist: s.artist, url: s.url, duration: s.duration,
+        thumbnail: s.thumbnail, lavalinkTrack: s.lavalinkTrack,
+        requestedBy: s.requestedBy,
+        ...(i === 0 && currentPos > 2000 ? { resumePos: currentPos } : {}),
+      }));
+      if (!songs.length) continue;
+      dbSaveQueue(guildId, {
+        voiceChannelId: queue.voiceChannel?.id,
+        textChannelId: queue.textChannel?.id,
+        songs, volume: queue.volume,
+        looping: queue.looping, loopingQueue: queue.loopingQueue,
+        shuffle: queue.shuffle,
+      });
+      saved++;
+    }
+    if (saved) log(`[Music] Auto-saved ${saved} queue(s)`);
+  }, 60_000);
+}
+
+// Per-guild queues
+const queues = new Map();
+
+const PLAYLIST_LIMIT = 300;
+
+export function getQueue(guildId) {
+  return queues.get(guildId);
+}
+
+export function createQueue(guildId, voiceChannel, textChannel) {
+  const queue = {
+    guildId,
+    voiceChannel,
+    textChannel,
+    player: null,       // Shoukaku Player — set by connectToChannel
+    songs: [],
+    volume: 80,
+    playing: false,
+    looping: false,
+    loopingQueue: false,
+    shuffle: false,
+    songStartedAt: null,
+    nowPlayingMsg: null,  // reference to the control panel message
+    _autoLeaveTimer: null,
+  };
+
+  queues.set(guildId, queue);
+  return queue;
+}
+
+export function deleteQueue(guildId) {
+  const queue = queues.get(guildId);
+  if (!queue) return;
+  queues.delete(guildId);
+  if (queue._autoLeaveTimer) clearTimeout(queue._autoLeaveTimer);
+  if (queue._stuckTimeout) clearTimeout(queue._stuckTimeout);
+  try { queue.nowPlayingMsg?.delete().catch(() => {}); } catch {}
+  // Stop lyrics if running — music is gone
+  if (hasSession(guildId)) stopKaraoke(guildId, "queue deleted").catch(() => {});
+  // Remove all event listeners to prevent memory leak
+  try { queue.player?.removeAllListeners(); } catch {}
+  try { queue.player?.stopTrack(); } catch {}
+  try { queue.player?.connection?.disconnect(); } catch {}
+  try { shoukaku?.leaveVoiceChannel(guildId); } catch {}
+  // Null the player reference — stops any post-deletion playSong() call from
+  // operating on a freshly-stopped-but-still-referenced player. The queue
+  // object itself is also orphaned but anyone holding a reference shouldn't
+  // be able to do harm to the old player.
+  queue.player = null;
+  queue.tracks = [];
+  queue._destroyed = true;
+}
+
+// ─── Now Playing Control Panel ──────────────────────────────────────────────
+
+function buildNowPlayingPanel(queue) {
+  const song = queue.songs[0];
+  if (!song) return null;
+
+  // Build up-next queue preview
+  const upcoming = queue.songs.slice(1, 6);
+  let queueText = "";
+  if (upcoming.length > 0) {
+    const lines = upcoming.map((s, i) => `\`${i + 1}.\` [${s.title}](${s.url}) — \`${s.duration || "?"}\``);
+    const remaining = queue.songs.length - 1 - upcoming.length;
+    if (remaining > 0) lines.push(`*...and ${remaining} more*`);
+    queueText = lines.join("\n");
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(0x1DB954)
+    .setAuthor({ name: "Now Playing 🎶" })
+    .setTitle(song.title || "Unknown Track")
+    .setURL(song.url || null)
+    .setThumbnail(song.thumbnail || null)
+    .addFields(
+      { name: "Duration", value: `\`${song.duration || "Live"}\``, inline: true },
+      { name: "Requested by", value: song.requestedBy || "Unknown", inline: true },
+      { name: "Volume", value: `\`${queue.volume}%\``, inline: true },
+    );
+
+  if (queueText) {
+    if (queueText.length > 1000) queueText = queueText.slice(0, 997) + "...";
+    embed.addFields({ name: `Up Next (${queue.songs.length - 1})`, value: queueText, inline: false });
+  }
+
+  const statusParts = [];
+  if (queue.looping)      statusParts.push("🔂 Loop Song");
+  if (queue.loopingQueue) statusParts.push("🔁 Loop Queue");
+  if (queue.shuffle)      statusParts.push("🔀 Shuffle");
+  embed.setFooter({ text: statusParts.length ? statusParts.join(" | ") : "No loop or shuffle active" });
+
+  const gid = queue.guildId;
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`music:pause:${gid}`).setEmoji("⏯").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`music:skip:${gid}`).setEmoji("⏭").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`music:stop:${gid}`).setEmoji("⏹").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`music:loop:${gid}`).setEmoji("🔂").setStyle(queue.looping || queue.loopingQueue ? ButtonStyle.Success : ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`music:shuffle:${gid}`).setEmoji("🔀").setStyle(queue.shuffle ? ButtonStyle.Success : ButtonStyle.Secondary),
+  );
+
+  return { embeds: [embed], components: [row] };
+}
+
+async function sendNowPlayingPanel(queue) {
+  // Delete old panel
+  try { await queue.nowPlayingMsg?.delete().catch(() => {}); } catch {}
+  queue.nowPlayingMsg = null;
+
+  const panel = buildNowPlayingPanel(queue);
+  if (!panel) return;
+
+  // Send to the voice channel's built-in text chat if available,
+  // otherwise fall back to the text channel where the command was used
+  const vc = queue.voiceChannel;
+  const targetChannel = vc?.type === 2 // GuildVoice — has its own chat since Discord update
+    ? vc
+    : queue.textChannel;
+
+  if (!targetChannel) return;
+
+  try {
+    queue.nowPlayingMsg = await targetChannel.send(panel);
+  } catch {
+    // If VC chat fails (permissions), fall back to text channel
+    if (targetChannel !== queue.textChannel && queue.textChannel) {
+      try {
+        queue.nowPlayingMsg = await queue.textChannel.send(panel);
+      } catch (err) {
+        log(`[Music] Failed to send now-playing panel: ${err.message}`);
+      }
+    }
+  }
+}
+
+// Export for button handler to update the panel
+export { buildNowPlayingPanel, sendNowPlayingPanel };
+
+export async function connectToChannel(queue) {
+  if (!shoukaku) throw new Error("Music system not initialized — Lavalink not connected");
+
+  const node = shoukaku.options?.nodeResolver?.(shoukaku.nodes) ?? shoukaku.nodes.values().next().value;
+  if (!node) throw new Error("No Lavalink nodes available");
+
+  const player = await shoukaku.joinVoiceChannel({
+    guildId: queue.guildId,
+    channelId: queue.voiceChannel.id,
+    shardId: 0,
+    deaf: true, // self-deafen for privacy
+  });
+
+  // Strip any listeners from prior connect attempts on this player.
+  // The "closed" handler re-enters connectToChannel, and Shoukaku's
+  // joinVoiceChannel may return the same Player instance — without this
+  // we'd accumulate listeners and fire handleTrackEnd N times per end
+  // event, which silently skips N-1 songs ahead of schedule.
+  try { player.removeAllListeners(); } catch {}
+
+  queue.player = player;
+
+  // ── Wire up track-end events for auto-advance ────────────────────────
+  player.on("end", (data) => {
+    if (!queues.has(queue.guildId)) return;
+    // If replaced (e.g. skip), don't auto-advance — the skip already handles it
+    if (data.reason === "replaced") return;
+    log(`[Music] Track ended in ${queue.guildId}: reason=${data.reason}`);
+    handleTrackEnd(queue);
+  });
+
+  // Track exceptions — Lavalink reports errors like YouTube 403, age-
+  // restricted video, deleted video, or stream closed mid-playback as
+  // "exception" events. Without this handler the queue gets stuck on
+  // the failed track forever (no "end" event is emitted).
+  player.on("exception", (data) => {
+    if (!queues.has(queue.guildId)) return;
+    const msg = data?.exception?.message || data?.message || "unknown";
+    log(`[Music] Track exception in ${queue.guildId}: ${msg} — advancing queue`);
+    handleTrackEnd(queue);
+  });
+
+  // Track stuck — wait 10 seconds before skipping (was 5s, too aggressive —
+  // slow networks and large files need more buffer time)
+  player.on("stuck", () => {
+    log(`[Music] Track stuck in ${queue.guildId} — waiting 10s before skipping`);
+    if (queue._stuckTimeout) return; // already waiting
+    queue._stuckTimeout = setTimeout(() => {
+      queue._stuckTimeout = null;
+      if (queues.has(queue.guildId) && queue.playing) {
+        log(`[Music] Track still stuck after 10s — skipping`);
+        handleTrackEnd(queue);
+      }
+    }, 10_000);
+  });
+
+  player.on("closed", (data) => {
+    log(`[Music] Voice connection closed in ${queue.guildId}: code=${data.code}`);
+    // Only truly fatal: 4014 = channel deleted/kicked
+    if (data.code === 4014) {
+      deleteQueue(queue.guildId);
+      return;
+    }
+    // Everything else (4006 session invalid, 4001, 4003, 4009, 4015) is
+    // recoverable — Discord rotates voice sessions regularly. Attempt to
+    // rejoin and resume from current position.
+    if (queue.voiceChannel && queue.songs.length > 0) {
+      log(`[Music] Attempting voice reconnect in ${queue.guildId} after close code ${data.code}`);
+      const currentPos = queue.player?.position || 0;
+      if (queue.songs[0] && currentPos > 0) queue.songs[0].resumePos = currentPos;
+      setTimeout(async () => {
+        try {
+          if (!queues.has(queue.guildId)) return;
+          await connectToChannel(queue);
+          if (queue.songs.length) await playSong(queue);
+          log(`[Music] Reconnected successfully in ${queue.guildId}`);
+        } catch (e) {
+          log(`[Music] Reconnect failed in ${queue.guildId}: ${e.message} — giving up`);
+          deleteQueue(queue.guildId);
+        }
+      }, 3000);
+    }
+  });
+
+  return player;
+}
+
+function handleTrackEnd(queue) {
+  // Clear any pending stuck-timeout so it doesn't fire later and skip the
+  // NEXT track. Without this, if a track briefly got stuck but then ended
+  // normally, the 10s delayed timeout would wake up, see queue.playing is
+  // true (next song playing), and call handleTrackEnd again — truncating
+  // the next song.
+  if (queue._stuckTimeout) {
+    clearTimeout(queue._stuckTimeout);
+    queue._stuckTimeout = null;
+  }
+
+  // Karaoke hook — notify lyric engine track ended (fire-and-forget)
+  if (hasSession(queue.guildId)) {
+    onTrackEnd(queue.textChannel?.client, queue.guildId).catch(() => {});
+  }
+
+  // TTS messages are always one-shot — remove immediately, never loop
+  if (queue.songs[0]?.isTTS) {
+    queue.songs.shift();
+    queue.songStartedAt = null;
+    if (queue.songs.length > 0) {
+      playSong(queue).catch((e) => log(`[Music] Auto-advance after TTS: ${e.message}`));
+    } else {
+      queue.playing = false;
+      queue._autoLeaveTimer = setTimeout(() => {
+        const q = queues.get(queue.guildId);
+        if (q && !q.playing && q.songs.length === 0) deleteQueue(queue.guildId);
+      }, 120_000);
+    }
+    return;
+  }
+
+  // Check if this is a skip — bypass loop for this one track end
+  const wasSkipped = queue._skipOnce === true;
+  queue._skipOnce = false;
+
+  // Single-track loop (only if not skipped)
+  if (!wasSkipped && queue.looping && queue.songs.length > 0) {
+    playSong(queue).catch((e) => log(`[Music] Loop error: ${e.message}`));
+    return;
+  }
+
+  const finished = queue.songs.shift();
+  queue.songStartedAt = null;
+
+  // Queue loop — push finished song back to end
+  if (queue.loopingQueue && finished) queue.songs.push(finished);
+
+  // Shuffle toggle is now fully handled by UI button clicks instantly reshaping the array.
+
+  if (queue.songs.length > 0) {
+    playSong(queue).catch((e) => log(`[Music] Auto-advance error: ${e.message}`));
+  } else {
+    queue.playing = false;
+    // Auto-leave after 2 minutes of silence
+    queue._autoLeaveTimer = setTimeout(() => {
+      const q = queues.get(queue.guildId);
+      if (q && !q.playing && q.songs.length === 0) deleteQueue(queue.guildId);
+    }, 120_000);
+  }
+}
+
+export async function playSong(queue, _retries = 0) {
+  return withQueueLock(queue.guildId, async () => {
+    // Re-check queue existence — it may have been deleted while waiting for lock
+    if (!queues.has(queue.guildId)) return;
+    if (!queue.songs.length || !queue.player) return;
+
+    const song = queue.songs[0];
+    queue.playing = true;
+
+    try {
+      // Resolve the track through Lavalink
+      const node = shoukaku.nodes.values().next().value;
+      if (!node) { log("[Music] No Lavalink nodes available"); throw new Error("No Lavalink nodes available"); }
+      let track;
+      if (song.encodedTrack) {
+        track = { encoded: song.encodedTrack, info: { title: song.title } };
+      } else {
+        const identifier = song.lavalinkTrack || song.url;
+        log(`[Music] Resolving: ${identifier}`);
+        const result = await node.rest.resolve(identifier);
+        log(`[Music] Resolve result: loadType=${result?.loadType}, hasData=${!!result?.data}`);
+
+        if (result?.loadType === "track" || result?.loadType === "TRACK_LOADED") {
+          track = result.data ?? result.tracks?.[0] ?? result;
+        } else if (result?.loadType === "playlist" || result?.loadType === "PLAYLIST_LOADED") {
+          track = result.data?.tracks?.[0] ?? result.tracks?.[0];
+        } else if (result?.loadType === "search" || result?.loadType === "SEARCH_RESULT") {
+          track = result.data?.[0] ?? result.tracks?.[0];
+        } else if (result?.loadType === "empty" || result?.loadType === "NO_MATCHES" || result?.loadType === "error" || result?.loadType === "LOAD_FAILED") {
+          // Retry with a shorter/simpler search query if the original was a ytsearch
+          if (identifier.startsWith("ytsearch:")) {
+            const shortQuery = identifier.replace("ytsearch:", "").split(/[-,|(]/).slice(0, 2).join(" ").trim().slice(0, 60);
+            log(`[Music] Retrying with shorter query: ytsearch:${shortQuery}`);
+            const retry = await node.rest.resolve(`ytsearch:${shortQuery}`);
+            if (retry?.loadType === "search" || retry?.loadType === "SEARCH_RESULT") {
+              track = retry.data?.[0] ?? retry.tracks?.[0];
+            } else if (retry?.loadType === "track" || retry?.loadType === "TRACK_LOADED") {
+              track = retry.data ?? retry.tracks?.[0];
+            }
+          }
+          if (!track) {
+            const errMsg = result?.data?.message || result?.exception?.message || "no results";
+            log(`[Music] Lavalink error/empty: ${errMsg}`);
+            throw new Error(`Lavalink: ${errMsg}`);
+          }
+        }
+
+        if (!track) {
+          throw new Error("Could not resolve track from Lavalink");
+        }
+      }
+
+      log(`[Music] Playing track: ${track.info?.title} (encoded: ${track.encoded?.slice(0, 30)}...)`);
+      const playOpts = { track: { encoded: track.encoded } };
+      if (song.resumePos) playOpts.options = { startTime: Math.floor(song.resumePos) };
+      await queue.player.playTrack(playOpts);
+      
+      queue.player.setGlobalVolume(queue.volume);
+      queue.songStartedAt = song.resumePos ? Date.now() - Math.floor(song.resumePos) : Date.now();
+      delete song.resumePos;
+
+      log(`[Music] ✓ Now playing: ${song.title}`);
+
+      // Karaoke hook — notify lyric engine of new track (fire-and-forget)
+      if (hasSession(queue.guildId)) {
+        const { title, artist } = extractSongInfo(song);
+        onTrackStart(queue.textChannel?.client, queue.guildId, title, artist).catch(() => {});
+      }
+
+      // Send the now-playing control panel (skip for TTS messages)
+      if (!song.isTTS) await sendNowPlayingPanel(queue);
+    } catch (error) {
+      log(`[Music] ✗ Failed to play "${song.title}": ${error.message}`);
+      queue.songs.shift();
+      queue.songStartedAt = null;
+      // Skip failed songs but DON'T accumulate retries across different songs.
+      // Old behavior: 3 consecutive failures = give up entirely.
+      // New behavior: skip the failed song, try the next one fresh. Only give up
+      // if we've skipped 10+ songs in a row (entire queue is likely broken).
+      if (queue.songs.length > 0 && _retries < 10) {
+        log(`[Music] Skipping to next song (${_retries + 1} consecutive failures)`);
+        return playSong(queue, _retries + 1);
+      } else {
+        queue.playing = false;
+        if (_retries >= 10) log(`[Music] 10+ consecutive failures in ${queue.guildId} — stopping`);
+        throw error;
+      }
+    }
+  });
+}
+
+// ─── Search Functions ───────────────────────────────────────────────────────
+
+import getPreview from "spotify-url-info";
+import fetch from "node-fetch";
+const spotifyExt = getPreview(fetch);
+
+export async function searchPlaylist(query) {
+  if (!shoukaku) return null;
+
+  try {
+    const node = shoukaku.nodes.values().next().value;
+    if (!node) { log("[Music] No Lavalink nodes available"); return null; }
+
+    // Only handle playlist URLs
+    if (!query.includes("youtube.com/playlist") && !query.includes("list=") && !query.includes("spotify.com")) {
+      return null;
+    }
+
+    // Strip tracking parameters from Spotify links which can cause LavaSrc plugin to fail
+    let resolveQuery = query;
+    if (resolveQuery.includes("spotify.com") && resolveQuery.includes("?")) {
+      resolveQuery = resolveQuery.split("?")[0];
+    }
+
+    const result = await node.rest.resolve(resolveQuery);
+
+    // Spotify Fallback check
+    if ((result?.loadType === "empty" || result?.loadType === "NO_MATCHES" || result?.loadType === "error" || result?.loadType === "LOAD_FAILED" || !result) && resolveQuery.includes("spotify.com")) {
+      try {
+        const tracksRaw = await spotifyExt.getTracks(resolveQuery);
+        if (tracksRaw && tracksRaw.length > 0) {
+          log(`[Music] Spotify Playlist fallback: fetched ${tracksRaw.length} tracks manually`);
+          const tracks = tracksRaw.slice(0, PLAYLIST_LIMIT).map(t => ({
+            title: `${t.name} - ${t.artist}`,
+            url: resolveQuery,
+            duration: formatDuration(Math.floor((t.duration || 0) / 1000)),
+            thumbnail: t.previewUrl || null,
+            lavalinkTrack: `ytsearch:${t.name.slice(0, 80)} ${t.artist.split(",")[0]} audio`,
+          }));
+          const preview = await spotifyExt.getData(resolveQuery);
+          return { tracks, name: preview?.name || "Spotify Playlist" };
+        }
+      } catch (err) {
+        log(`[Music] Spotify playlist fallback failed: ${err.message}`);
+      }
+      return null;
+    }
+
+    if (result?.loadType !== "playlist" && result?.loadType !== "PLAYLIST_LOADED") return null;
+
+    const tracks = (result?.data?.tracks ?? result?.tracks ?? []).slice(0, PLAYLIST_LIMIT).map((t) => ({
+      title: t.info.title ?? "Unknown",
+      artist: t.info.author ?? "Unknown",
+      url: t.info.uri ?? query,
+      duration: formatDuration(t.info.length / 1000),
+      durationMs: t.info.length ?? 0,
+      thumbnail: t.info.artworkUrl ?? null,
+      lavalinkTrack: t.info.uri ?? t.track,
+    }));
+
+    return { tracks, name: result?.data?.info?.name ?? result?.playlistInfo?.name ?? "Playlist" };
+  } catch (error) {
+    log(`[Music] searchPlaylist error: ${error.message}`);
+    return null;
+  }
+}
+
+export async function searchSong(query) {
+  if (!shoukaku) return null;
+
+  try {
+    const node = shoukaku.nodes.values().next().value;
+    if (!node) { log("[Music] No Lavalink nodes available"); return null; }
+
+    // Strip tracking parameters from Spotify links which can cause LavaSrc plugin to fail
+    let resolveQuery = query;
+    if (resolveQuery.includes("spotify.com") && resolveQuery.includes("?")) {
+      resolveQuery = resolveQuery.split("?")[0];
+    }
+
+    // If it's a URL, resolve directly. Otherwise prefix with ytsearch:
+    const searchQuery = resolveQuery.startsWith("http://") || resolveQuery.startsWith("https://")
+      ? resolveQuery
+      : `ytsearch:${resolveQuery}`;
+
+    let result = await node.rest.resolve(searchQuery);
+
+    // Spotify Fallback: If Lavalink lacks LavaSrc and rejects the URL, scrape Spotify and search YouTube
+    if ((result?.loadType === "empty" || result?.loadType === "NO_MATCHES" || result?.loadType === "error" || result?.loadType === "LOAD_FAILED" || !result) && resolveQuery.includes("spotify.com")) {
+      try {
+        const res = await fetch(resolveQuery);
+        const html = await res.text();
+        const match = html.match(/<title>(.*?)<\/title>/);
+        if (match) {
+          let title = match[1].replace(/ \| Spotify/gi, "").trim();
+          title = title.replace(/- song and lyrics by/gi, "").replace(/- single by/gi, "").replace(/- song by/gi, "").replace(/- playlist by/gi, "").trim();
+          log(`[Music] Spotify fallback: fetching YouTube for "${title}" instead`);
+          result = await node.rest.resolve(`ytsearch:${title} audio`);
+        }
+      } catch (err) {
+        log(`[Music] Spotify fallback failed: ${err.message}`);
+      }
+    }
+
+    let track;
+    if (result?.loadType === "track" || result?.loadType === "TRACK_LOADED") {
+      track = result.data ?? result.tracks?.[0] ?? result;
+    } else if (result?.loadType === "playlist" || result?.loadType === "PLAYLIST_LOADED") {
+      track = result?.data?.tracks?.[0] ?? result?.tracks?.[0];
+    } else if (result?.loadType === "search" || result?.loadType === "SEARCH_RESULT") {
+      track = result?.data?.[0] ?? result?.tracks?.[0];
+    }
+
+    if (!track) return null;
+
+    return {
+      title: track.info.title ?? "Unknown",
+      artist: track.info.author ?? "Unknown",
+      url: track.info.uri ?? query,
+      duration: formatDuration(track.info.length / 1000),
+      durationMs: track.info.length ?? 0,
+      thumbnail: track.info.artworkUrl ?? null,
+      lavalinkTrack: track.info.uri,
+    };
+  } catch (error) {
+    log(`[Music] Search error for "${query}": ${error.message}`);
+    return null;
+  }
+}
+
+// ─── Queue Persistence — save before shutdown, restore on startup ───────────
+
+/**
+ * Save all active queues to the database (called on SIGTERM/SIGINT).
+ * Only saves serializable data — no player/connection/message refs.
+ */
+export function saveAllQueues() {
+  let saved = 0;
+  for (const [guildId, queue] of queues) {
+    if (!queue.songs.length) continue;
+    // Only save songs that aren't TTS. Include current position so the
+    // first song resumes where it left off instead of restarting.
+    const currentPos = queue.player?.position || 0;
+    const songs = queue.songs.filter((s) => !s.isTTS).map((s, i) => ({
+      title: s.title, artist: s.artist, url: s.url, duration: s.duration,
+      thumbnail: s.thumbnail, lavalinkTrack: s.lavalinkTrack,
+      requestedBy: s.requestedBy,
+      ...(i === 0 && currentPos > 2000 ? { resumePos: currentPos } : {}),
+    }));
+    if (!songs.length) continue;
+    dbSaveQueue(guildId, {
+      voiceChannelId: queue.voiceChannel?.id,
+      textChannelId: queue.textChannel?.id,
+      songs,
+      volume: queue.volume,
+      looping: queue.looping,
+      loopingQueue: queue.loopingQueue,
+      shuffle: queue.shuffle,
+    });
+    saved++;
+  }
+  log(`[Music] Saved ${saved} queue(s) to database`);
+}
+
+/**
+ * Restore saved queues after bot restart.
+ * Rejoins VCs and starts playing from the next song.
+ * @param {Client} client - Discord.js client
+ */
+export async function restoreQueues(client) {
+  const saved = getSavedQueues();
+  const entries = Object.entries(saved);
+  if (!entries.length) return;
+
+  log(`[Music] Restoring ${entries.length} saved queue(s)...`);
+  clearAllSavedQueues(); // Clear immediately so we don't restore twice
+
+  for (const [guildId, queueData] of entries) {
+    // Skip if saved more than 10 minutes ago (stale — deploy should take <5min)
+    const ageMin = Math.round((Date.now() - (queueData.savedAt ?? 0)) / 60_000);
+    if (ageMin > 10) {
+      log(`[Music] Skipping stale queue for ${guildId} (saved ${ageMin}min ago)`);
+      continue;
+    }
+
+    try {
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) continue;
+
+      const vc = guild.channels.cache.get(queueData.voiceChannelId);
+      const tc = guild.channels.cache.get(queueData.textChannelId);
+      if (!vc) {
+        log(`[Music] Cannot restore queue for ${guildId} — voice channel no longer exists`);
+        if (tc) tc.send("⚠️ Your music queue couldn't be restored — the voice channel was deleted while I was restarting.").catch(() => {});
+        continue;
+      }
+
+      // Create queue and connect
+      const queue = createQueue(guildId, vc, tc);
+      queue.volume = queueData.volume ?? 80;
+      queue.looping = queueData.looping ?? false;
+      queue.loopingQueue = queueData.loopingQueue ?? false;
+      queue.shuffle = queueData.shuffle ?? false;
+      queue.songs = queueData.songs ?? [];
+
+      if (!queue.songs.length) { queues.delete(guildId); continue; }
+
+      await connectToChannel(queue);
+      await playSong(queue);
+
+      log(`[Music] ✓ Restored queue for "${guild.name}" — ${queue.songs.length} songs, starting with "${queue.songs[0]?.title}"`);
+
+      // Quiet resume notification — don't spam if it's seamless
+      if (tc && ageMin > 2) {
+        tc.send(`🔄 resuming with **${queue.songs[0]?.title}** (${queue.songs.length} songs)`).catch(() => {});
+      }
+    } catch (err) {
+      log(`[Music] Failed to restore queue for ${guildId}: ${err.message}`);
+      queues.delete(guildId);
+    }
+  }
+}
+
+// ─── Text-to-Speech via Gemini TTS + Lavalink HTTP source ───────────────────
+// Uses gemini-2.5-flash-preview-tts for natural-sounding speech.
+// Generates audio → stores in HTTP cache → Lavalink plays the URL.
+
+import { GoogleGenAI } from "@google/genai";
+import { randomUUID } from "crypto";
+import config from "../config.js";
+import { ttsAudioCache, addTtsCache } from "../presence.js";
+import { getTtsVoice } from "../database.js";
+
+// Round-robin Gemini client for TTS
+const _ttsClients = config.geminiKeys?.map((k) => new GoogleGenAI({ apiKey: k })) ?? [];
+let _ttsKeyIdx = 0;
+function getTtsClient() {
+  if (!_ttsClients.length) return null;
+  return _ttsClients[_ttsKeyIdx++ % _ttsClients.length];
+}
+
+// PCM → WAV header helper (Gemini returns raw PCM 24kHz 16-bit mono)
+function pcmToWav(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16) {
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+
+  // Apply 50% attenuation on a copy to prevent clipping without mutating the source buffer
+  const attenuated = Buffer.alloc(pcmBuffer.length);
+  for (let i = 0; i < pcmBuffer.length - 1; i += 2) {
+    attenuated.writeInt16LE(Math.floor(pcmBuffer.readInt16LE(i) / 2), i);
+  }
+  const dataSize = attenuated.length;
+
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);       // chunk size
+  header.writeUInt16LE(1, 20);        // PCM format
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, attenuated]);
+}
+
+export async function playTTS(guildId, text, voiceChannel, textChannel) {
+  const client = getTtsClient();
+  if (!client) return;
+
+  let queue = getQueue(guildId);
+  if (!queue) {
+    queue = createQueue(guildId, voiceChannel, textChannel);
+    await connectToChannel(queue);
+  }
+
+  try {
+    const voice = getTtsVoice(guildId);
+    log(`[TTS] Generating: "${text.slice(0, 60)}..." voice=${voice}`);
+
+    // Use exact format from Google's TTS docs
+    const transcript = `Say naturally: ${text.slice(0, 500)}`;
+
+    let response;
+    try {
+      response = await client.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: transcript }] }],
+        config: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: voice },
+            },
+          },
+        },
+      });
+    } catch (ttsErr) {
+      // If TTS model fails, try with simpler prompt format
+      log(`[TTS] First attempt failed: ${ttsErr.message} — retrying with simpler prompt`);
+      response = await client.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: text.slice(0, 500) }] }],
+        config: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: voice },
+            },
+          },
+        },
+      });
+    }
+
+    // Find the audio part — might not be the first part
+    const parts = response.candidates?.[0]?.content?.parts ?? [];
+    const audioPart = parts.find((p) => p.inlineData?.data);
+    if (!audioPart) { log("[TTS] No audio data in response"); return; }
+
+    const mimeType = audioPart.inlineData.mimeType ?? "audio/L16;rate=24000";
+    const rawBuffer = Buffer.from(audioPart.inlineData.data, "base64");
+    log(`[TTS] Got ${rawBuffer.length} bytes, mime=${mimeType}`);
+
+    // Convert to proper format based on what Gemini returns
+    let audioBuffer;
+    let contentType;
+
+    if (mimeType.includes("wav") || mimeType.includes("wave") || rawBuffer.toString("utf8", 0, 4) === "RIFF") {
+      audioBuffer = rawBuffer;
+      contentType = "audio/wav";
+    } else if (mimeType.includes("L16") || mimeType.includes("pcm") || mimeType.includes("raw")) {
+      // Raw PCM — wrap in WAV header so Lavalink can decode it
+      const rateMatch = mimeType.match(/rate=(\d+)/);
+      const sampleRate = rateMatch ? parseInt(rateMatch[1]) : 24000;
+      audioBuffer = pcmToWav(rawBuffer, sampleRate);
+      contentType = "audio/wav";
+    } else {
+      // MP3, OGG, etc — Lavalink handles natively
+      audioBuffer = rawBuffer;
+      contentType = mimeType.startsWith("audio/") ? mimeType : "audio/mpeg";
+    }
+
+    // Store in HTTP cache (addTtsCache handles eviction + TTL)
+    const id = randomUUID();
+    addTtsCache(id, { buffer: audioBuffer, contentType });
+
+    const selfUrl = process.env.EXTERNAL_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${config.port}`;
+    const ttsUrl = `${selfUrl}/tts/${id}`;
+
+    // Resolve through Lavalink
+    const node = shoukaku.nodes.values().next().value;
+    if (!node) { log("[Music] No Lavalink nodes available"); return; }
+    const result = await node.rest.resolve(ttsUrl);
+
+    let track;
+    if (result?.loadType === "track") track = result.data;
+    else if (result?.loadType === "search") track = result.data?.[0];
+    if (!track) { log(`[TTS] Lavalink resolve failed: loadType=${result?.loadType}`); return; }
+
+    const ttsSong = {
+      title: "TTS",
+      url: ttsUrl,
+      duration: "TTS",
+      thumbnail: null,
+      lavalinkTrack: ttsUrl,
+      requestedBy: "TTS",
+      isTTS: true,
+      encodedTrack: track.encoded,
+    };
+
+    if (!track?.encoded) { log("[TTS] No track to play"); return; }
+
+    if (!queue.playing || !queue.songs.length) {
+      // Nothing playing — just play TTS directly
+      queue.songs.unshift(ttsSong);
+      await playSong(queue);
+    } else {
+      const isPlayingMusic = !queue.songs[0].isTTS;
+
+      // Find the first non-TTS index to inject the new TTS track
+      let insertIdx = 0;
+      while (insertIdx < queue.songs.length && queue.songs[insertIdx].isTTS) {
+        insertIdx++;
+      }
+
+      if (isPlayingMusic && insertIdx === 0) {
+        // We are directly interrupting a MUSIC track right now! Save its playback position.
+        queue.songs[0].resumePos = queue.player.position;
+      }
+
+      // Inject the TTS track at the end of the current TTS block
+      queue.songs.splice(insertIdx, 0, ttsSong);
+
+      if (isPlayingMusic && insertIdx === 0) {
+        // We literally just interrupted music, so play this new TTS immediately.
+        await queue.player.playTrack({ track: { encoded: track.encoded } });
+        queue.player.setGlobalVolume(queue.volume);
+      }
+      // If insertIdx > 0, a TTS is already playing, so Lavalink will auto-advance to this one!
+    }
+    log("[TTS] ✓ Queued/Playing");
+  } catch (err) {
+    log(`[TTS] Error: ${err.message}`);
+  }
+}
+
+export async function playSoundEffect(guildId, url, voiceChannel) {
+  let queue = getQueue(guildId);
+  if (!queue) {
+    queue = createQueue(guildId, voiceChannel, null);
+    await connectToChannel(queue);
+  }
+
+  const node = shoukaku.nodes.values().next().value;
+  if (!node) throw new Error("No Lavalink nodes available");
+
+  const result = await node.rest.resolve(url);
+  let track;
+  if (result?.loadType === "track") track = result.data;
+  else if (result?.loadType === "search") track = result.data?.[0];
+
+  if (!track || !track.encoded) {
+    log(`[Soundboard] Lavalink couldn't resolve ${url} — skipping playback`);
+    throw new Error("Could not resolve sound effect URL through Lavalink");
+  }
+
+  const sfxSong = {
+    title: "Sound Effect",
+    url: url,
+    duration: "SFX",
+    thumbnail: null,
+    lavalinkTrack: url,
+    requestedBy: "Soundboard",
+    isTTS: true, // Acts exactly like a TTS priority skip
+    encodedTrack: track.encoded,
+  };
+
+  if (!queue.playing || !queue.songs.length) {
+    queue.songs.unshift(sfxSong);
+    await playSong(queue);
+  } else {
+    // Inject natively just below ongoing interruptions
+    let insertIdx = 0;
+    while (insertIdx < queue.songs.length && queue.songs[insertIdx].isTTS) {
+      insertIdx++;
+    }
+
+    if (!queue.songs[0].isTTS && queue.player && !queue.player.paused) {
+      queue.player.setPaused(true);
+      setTimeout(() => { if (queue.player) queue.player.stopTrack(); }, 200);
+    }
+    queue.songs.splice(insertIdx, 0, sfxSong);
+  }
+}
+
+function formatDuration(seconds) {
+  if (!seconds || isNaN(seconds)) return "Unknown";
+  const s = Math.floor(seconds);
+  if (s < 3600) {
+    const m = Math.floor(s / 60);
+    const sec = String(s % 60).padStart(2, "0");
+    return `${m}:${sec}`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const sec = String(s % 60).padStart(2, "0");
+  return `${h}:${m}:${sec}`;
+}

@@ -1,0 +1,8 @@
+node_modules/
+bot.db
+bot-data.json
+.env
+bot.log
+
+.claude/
+
