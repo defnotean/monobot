@@ -8,7 +8,7 @@
 
 import config from "../config.js";
 import { log } from "./logger.js";
-import { signTwinRequest } from "./twinSign.js";
+import { signTwinRequest } from "@defnotean/shared/twinSign";
 
 export async function firePunishSignal({ guildId, userId, action, reason }) {
   const url = config.twinApiUrl;

@@ -113,7 +113,7 @@ async function loadCommands() {
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     if (r.status === "rejected") {
-      log(`[Commands] Failed to load: ${r.reason?.message ?? r.reason}`);
+      log(`[Commands] Failed to load ${filePaths[i].dir}/${filePaths[i].path.split(/[\\/]/).pop()}: ${r.reason?.message ?? r.reason}`);
     } else if (r.value?.data && r.value?.execute) {
       const name = r.value.data.name;
       client.commands.set(name, r.value);
