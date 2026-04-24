@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+!.env.example
+agent-ui/config.json
+*.log
+dist/
+logs/
+.claude/*.local.md

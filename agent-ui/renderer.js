@@ -1,0 +1,724 @@
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let editor = null, monacoReady = false;
+let openTabs = [], activeTab = null;
+let sessions = [{ id: 0, name: 'Main session', history: [] }];
+let activeSessionId = 0;
+let isConnected = false, isBusy = false;
+let autoApprove = false;
+let currentFolder = null;
+let allRepos = [];
+let termHistory = [], termIdx = -1;
+
+// ─── MONACO ────────────────────────────────────────────────────────────────────
+require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } });
+require(['vs/editor/editor.main'], () => {
+    monaco.editor.defineTheme('irene', {
+        base: 'vs-dark', inherit: true,
+        rules: [
+            { token: 'comment', foreground: '3a3c4e', fontStyle: 'italic' },
+            { token: 'keyword', foreground: 'e8294a' },
+            { token: 'string', foreground: '22c55e' },
+            { token: 'number', foreground: '6366f1' },
+        ],
+        colors: {
+            'editor.background': '#0d0e10', 'editor.foreground': '#e2e3ec',
+            'editorLineNumber.foreground': '#252830', 'editorLineNumber.activeForeground': '#e8294a',
+            'editor.selectionBackground': '#e8294a22', 'editorCursor.foreground': '#e8294a',
+            'editor.lineHighlightBackground': '#111318', 'editorWidget.background': '#181a20',
+            'scrollbarSlider.background': '#1e2028',
+        }
+    });
+    editor = monaco.editor.create(document.getElementById('editor-wrap'), {
+        theme: 'irene', language: 'javascript', value: '',
+        fontSize: 13, fontFamily: 'JetBrains Mono, monospace', lineHeight: 22,
+        minimap: { enabled: false }, scrollBeyondLastLine: false,
+        smoothScrolling: true, cursorBlinking: 'smooth',
+        cursorSmoothCaretAnimation: 'on', padding: { top: 12, bottom: 12 },
+        automaticLayout: true,
+    });
+    monacoReady = true;
+    document.getElementById('no-editor').style.display = 'flex';
+    editor.getDomNode().style.display = 'none';
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveFile);
+    editor.onDidChangeModelContent(() => {
+        const t = openTabs.find(x => x.path === activeTab);
+        if (t && !t.dirty) { t.dirty = true; renderTabs(); }
+    });
+});
+
+// ─── MODE ─────────────────────────────────────────────────────────────────────
+function setMode(mode) {
+    ['chat', 'code', 'terminal'].forEach(m => {
+        const v = document.getElementById(`view-${m}`);
+        if (v) v.style.display = m === mode ? 'flex' : 'none';
+        if (m === 'code') v.style.flexDirection = 'column';
+    });
+    document.querySelectorAll('.mtab').forEach((t, i) => {
+        t.classList.toggle('active', ['chat','code','terminal'][i] === mode);
+    });
+    if (mode === 'code' && monacoReady) editor.layout();
+}
+
+// ─── CONNECT ──────────────────────────────────────────────────────────────────
+async function toggleConnect() {
+    const btn = document.getElementById('conn-btn');
+    const label = document.getElementById('conn-label');
+    if (isConnected) {
+        await agent.disconnect();
+        setConnState(false);
+        addToolCall('🔌', 'Disconnected from Supabase', '', true);
+    } else {
+        label.textContent = 'Connecting…';
+        btn.disabled = true;
+        const r = await agent.connect();
+        btn.disabled = false;
+        if (r.ok) {
+            setConnState(true);
+            addIreneMsg("ok i'm connected. what are we building 😈");
+        } else {
+            label.textContent = 'Connect';
+            addToolCall('❌', 'Connection failed', r.error, true);
+        }
+    }
+}
+
+function setConnState(on) {
+    isConnected = on;
+    const btn = document.getElementById('conn-btn');
+    const dot = document.getElementById('tb-dot');
+    const inp = document.getElementById('chat-in');
+    const send = document.getElementById('send-btn');
+    btn.className = 'conn-btn' + (on ? ' on' : '');
+    document.getElementById('conn-label').textContent = on ? 'Connected' : 'Connect';
+    dot.className = 'tb-indicator' + (on ? ' on' : '');
+    inp.disabled = !on; send.disabled = !on;
+    document.getElementById('input-hint').textContent = on ? 'Shift+Enter for new line  ·  plans auto-break complex tasks' : 'Connect to start chatting';
+}
+
+// ─── CHAT ─────────────────────────────────────────────────────────────────────
+function chatKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } }
+function autoResize(el) { el.style.height = '22px'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
+function toggleAuto() {
+    autoApprove = !autoApprove;
+    document.getElementById('auto-toggle').classList.toggle('on', autoApprove);
+}
+
+async function sendChat() {
+    const input = document.getElementById('chat-in');
+    const msg = input.value.trim();
+    if (!msg || isBusy) return;
+    input.value = ''; input.style.height = '22px';
+    document.getElementById('welcome')?.remove();
+
+    addUserMsg(msg);
+    isBusy = true; document.getElementById('send-btn').disabled = true;
+
+    const session = sessions.find(s => s.id === activeSessionId);
+    const history = session?.history || [];
+
+    // Decide if this is a coding/task request that needs a plan
+    const taskKeywords = /\b(build|create|make|write|implement|fix|add|refactor|clone|research|find|analyze|investigate|compare)\b/i;
+    const needsPlan = taskKeywords.test(msg) && msg.length > 30;
+
+    const typing = addTyping();
+
+    if (needsPlan) {
+        // Phase 1: Generate implementation plan via sub-agent
+        const planResult = await agent.spawnSubagent({
+            task: `Analyze this request and return a JSON implementation plan: "${msg}"\n\nReturn ONLY valid JSON in this exact format:\n{"title":"<short title>","steps":[{"title":"<step title>","desc":"<what will be done>","type":"<code|terminal|research|analysis>"}]}\n\nMax 6 steps. Be specific and actionable.`,
+            parentContext: `Working folder: ${currentFolder || 'not set'}. Session history items: ${history.length}`,
+            agentName: 'Planner'
+        });
+
+        typing.remove();
+
+        let plan = null;
+        if (planResult.ok) {
+            try {
+                const jsonMatch = planResult.reply.match(/\{[\s\S]*\}/);
+                if (jsonMatch) plan = JSON.parse(jsonMatch[0]);
+            } catch {}
+        }
+
+        if (plan?.steps?.length) {
+            const planEl = addPlan(plan, msg, history);
+
+            // Auto-approve if toggle is on
+            if (autoApprove) {
+                setTimeout(() => executePlan(planEl, plan, msg, history), 600);
+            }
+        } else {
+            // Fall back to regular chat
+            const r = await agent.chatIrene({ message: msg, history });
+            if (r.ok) {
+                history.push({ role: 'user', text: msg }, { role: 'model', text: r.reply });
+                addIreneMsg(r.reply);
+            } else addToolCall('❌', 'Error', r.error, true);
+        }
+    } else {
+        // Regular conversational response
+        const r = await agent.chatIrene({ message: msg, history });
+        typing.remove();
+        if (r.ok) {
+            history.push({ role: 'user', text: msg }, { role: 'model', text: r.reply });
+            if (history.length > 40) history.splice(0, 2);
+            addIreneMsg(r.reply);
+        } else addToolCall('❌', 'Error', r.error, true);
+    }
+
+    isBusy = false; document.getElementById('send-btn').disabled = !isConnected;
+}
+
+// ─── IMPLEMENTATION PLAN ──────────────────────────────────────────────────────
+function executeStoredPlan(btn) {
+    const wrap = btn.closest('.msg-wrap');
+    if (wrap && wrap._plan) {
+        executePlan(wrap, wrap._plan, wrap._msg, wrap._history);
+    }
+}
+
+function addPlan(plan, originalMsg, history) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-wrap';
+    const id = 'plan-' + Date.now();
+    wrap.innerHTML = `
+    <div class="msg-row irene">
+      <div class="avatar irene">😈</div>
+      <div class="msg-body">
+        <div class="msg-sender">irene · planner</div>
+        <div class="plan-card" id="${id}">
+          <div class="plan-header">
+            <span class="plan-title">${esc(plan.title)}</span>
+            <span class="plan-badge planning" id="${id}-badge">Planning</span>
+          </div>
+          <div class="plan-steps" id="${id}-steps">
+            ${plan.steps.map((s, i) => `
+              <div class="plan-step" id="${id}-step-${i}">
+                <div class="step-num">${i+1}</div>
+                <div class="step-info">
+                  <div class="step-title">${esc(s.title)}</div>
+                  <div class="step-desc">${esc(s.desc)}</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          <div class="plan-actions">
+            <button class="plan-approve-btn" id="${id}-approve" onclick="executeStoredPlan(this)">▶ Approve & Execute</button>
+            <button style="padding:7px 14px;border-radius:8px;background:none;border:1px solid var(--border);color:var(--text2);font-size:12px" onclick="this.closest('.plan-card').querySelector('.plan-actions').innerHTML='<span style=&quot;color:var(--text3);font-size:12px&quot;>Plan cancelled</span>'">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+    document.getElementById('messages').appendChild(wrap);
+    scrollChat();
+
+    wrap._plan = plan; wrap._msg = originalMsg; wrap._history = history;
+    return wrap;
+}
+
+async function executePlan(planWrap, plan, originalMsg, history) {
+    const id = planWrap.querySelector('.plan-card')?.id;
+    if (!id) return;
+
+    const badge = document.getElementById(`${id}-badge`);
+    const approveBtn = document.getElementById(`${id}-approve`);
+    if (badge) { badge.textContent = 'Running'; badge.className = 'plan-badge running'; }
+    if (approveBtn) approveBtn.disabled = true;
+
+    const results = [];
+
+    for (let i = 0; i < plan.steps.length; i++) {
+        const step = plan.steps[i];
+        const stepEl = document.getElementById(`${id}-step-${i}`);
+        if (stepEl) stepEl.className = 'plan-step running';
+
+        let output = '';
+        let stepLogs = [];
+
+        if (step.type === 'research') {
+            const r = await agent.spawnSubagent({
+                task: step.desc + '\n\nOriginal request: ' + originalMsg + '\nUse web search to find accurate, current information. Summarize findings.',
+                parentContext: results.map((r, j) => `Step ${j+1}: ${r}`).join('\n'),
+                agentName: `Research: ${step.title}`,
+                useSearch: true
+            });
+            output = r.ok ? r.reply : `Error: ${r.error}`;
+            if (r.ok) stepLogs.push(`Searched the web for: ${step.title}`);
+        } else if (step.type === 'terminal') {
+            const r = await agent.runTerminal({ command: step.desc, cwd: currentFolder });
+            output = r.output || '(done)';
+            stepLogs.push(`Executed: ${step.desc}`);
+        } else {
+            // Code/analysis step
+            const workspacePrompt = `You have full autonomous capability. Your working directory is ${currentFolder || 'unknown'}. 
+To view files, use Powershell commands like 'Get-Content'.
+To write to a file, output EXACTLY this format and nothing else around it for that file (I will intercept it):
+[WRITE_FILE_START: filename.js]
+the code content inside
+[WRITE_FILE_END]`;
+
+            const r = await agent.spawnSubagent({
+                task: step.desc + '\n\nContext: ' + originalMsg + '\n\n' + workspacePrompt,
+                parentContext: results.slice(-2).join('\n'),
+                agentName: step.title
+            });
+            
+            output = r.ok ? r.reply : `Error: ${r.error}`;
+            
+            // Intercept file edits
+            if (r.ok && output.includes('[WRITE_FILE_START:')) {
+                const regex = /\[WRITE_FILE_START:\s*(.+?)\]([\s\S]*?)\[WRITE_FILE_END\]/g;
+                let match;
+                while ((match = regex.exec(output)) !== null) {
+                    const filePath = currentFolder ? `${currentFolder}\\${match[1].trim()}` : match[1].trim();
+                    const content = match[2].trim();
+                    const wr = await agent.writeFile({ filePath, content });
+                    if (wr.ok) {
+                        stepLogs.push(`✅ Edited file: ${match[1].trim()}`);
+                    } else {
+                        stepLogs.push(`❌ Failed to edit: ${match[1].trim()} (${wr.error})`);
+                    }
+                }
+                output = output.replace(regex, '*(Automatically edited files)*');
+            } else {
+                stepLogs.push('Analyzed codebase elements.');
+            }
+        }
+
+        results.push(output);
+
+        if (stepEl) {
+            stepEl.className = 'plan-step done';
+            const info = stepEl.querySelector('.step-info');
+            if (info) {
+                const outEl = document.createElement('div');
+                outEl.className = 'step-output';
+                outEl.innerHTML = stepLogs.join('<br>') + (output.length > 300 ? '<br><span style="opacity:0.5">...output truncated</span' : '<br><span style="opacity:0.5">' + esc(output) + '</span>');
+                info.appendChild(outEl);
+            }
+        }
+        scrollChat();
+    }
+
+
+    // Final synthesis
+    if (badge) { badge.textContent = 'Synthesizing…'; }
+    const synthResult = await agent.chatIrene({
+        message: `I've completed the implementation plan for: "${originalMsg}"\n\nHere are results from each step:\n${results.map((r, i) => `Step ${i+1} (${plan.steps[i].title}):\n${r}`).join('\n\n')}\n\nPlease give a final concise summary of what was accomplished and any next steps.`,
+        history
+    });
+
+    if (badge) { badge.textContent = 'Done'; badge.className = 'plan-badge done'; }
+    const actions = document.querySelector(`#${id} .plan-actions`);
+    if (actions) actions.innerHTML = '<span style="color:var(--green);font-size:12px">✓ Completed</span>';
+
+    if (synthResult.ok) addIreneMsg(synthResult.reply);
+    scrollChat();
+}
+
+// ─── RESEARCH DEEP DIVE ───────────────────────────────────────────────────────
+// Called when user asks something research-heavy with multiple angles
+async function deepResearch(query, angles) {
+    addToolCall('🔍', `Deep research: ${query}`, `Spawning ${angles.length} research agents…`, true);
+    const results = await Promise.all(angles.map(angle =>
+        agent.spawnSubagent({
+            task: `Research this specific angle: "${angle}" for the query: "${query}"\nBe thorough, cite specific facts. Use search.`,
+            parentContext: '',
+            agentName: angle,
+            useSearch: true
+        })
+    ));
+    return results.filter(r => r.ok).map(r => r.reply);
+}
+
+// ─── MESSAGE BUILDERS ─────────────────────────────────────────────────────────
+function addUserMsg(text) {
+    append(`<div class="msg-row user">
+      <div class="avatar">🧑</div>
+      <div class="msg-body">
+        <div class="msg-sender">you</div>
+        <div class="bubble user">${esc(text)}</div>
+      </div></div>`);
+}
+
+function addIreneMsg(text) {
+    append(`<div class="msg-row irene">
+      <div class="avatar irene">😈</div>
+      <div class="msg-body">
+        <div class="msg-sender">irene</div>
+        <div class="bubble irene">${esc(text)}</div>
+      </div></div>`);
+}
+
+function addToolCall(icon, label, body, expanded = false) {
+    const id = 'tc-' + Date.now();
+    append(`<div class="tool-call${expanded?' open':''}" id="${id}">
+      <div class="tool-call-header" onclick="document.getElementById('${id}').classList.toggle('open')">
+        <span class="tool-call-icon">${icon}</span>
+        <span class="tool-call-label">${esc(label)}</span>
+        <span class="tool-call-chevron">›</span>
+      </div>
+      ${body ? `<div class="tool-call-body">${esc(body)}</div>` : ''}
+    </div>`);
+}
+
+function addSubagentCard(name, output) {
+    append(`<div class="subagent-card">
+      <div class="subagent-header">🤖 Sub-agent: ${esc(name)}</div>
+      <div class="subagent-body">${esc(output)}</div>
+    </div>`);
+}
+
+function addTyping() {
+    const id = 'typing-' + Date.now();
+    append(`<div class="msg-row irene" id="${id}">
+      <div class="avatar irene">😈</div>
+      <div class="msg-body">
+        <div class="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>
+      </div></div>`);
+    return { remove: () => document.getElementById(id)?.remove() };
+}
+
+function append(html) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-wrap';
+    wrap.innerHTML = html;
+    document.getElementById('messages').appendChild(wrap);
+    scrollChat();
+    return wrap;
+}
+function scrollChat() { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; }
+function esc(s) {
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                 .replace(/"/g,'&quot;').replace(/\n/g,'<br>');
+}
+
+// ─── SESSIONS ─────────────────────────────────────────────────────────────────
+function newSession() {
+    const id = Date.now();
+    sessions.push({ id, name: 'Session ' + sessions.length, history: [] });
+    activeSessionId = id;
+    document.getElementById('messages').innerHTML = '';
+    document.getElementById('welcome')?.remove();
+    renderSessions();
+}
+
+function renderSessions() {
+    const list = document.getElementById('session-list');
+    list.innerHTML = sessions.slice().reverse().map(s => `
+        <div class="sb-item${s.id===activeSessionId?' active':''}" onclick="switchSession(${s.id})">
+          <span>💬</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(s.name)}</span>
+        </div>`).join('');
+}
+
+function switchSession(id) {
+    activeSessionId = id;
+    renderSessions();
+}
+
+// ─── GITHUB ───────────────────────────────────────────────────────────────────
+async function githubConnect() {
+    const token = document.getElementById('gh-token').value.trim();
+    if (!token) return;
+    document.getElementById('gh-token').value = '';
+    addToolCall('🐙', 'Connecting to GitHub…', '', false);
+    const r = await agent.githubConnect(token);
+    if (r.ok) setGitHubUser(r);
+    else addToolCall('❌', 'GitHub auth failed', r.error, true);
+}
+
+function setGitHubUser(r) {
+    document.getElementById('gh-auth-ui').style.display = 'none';
+    document.getElementById('gh-user-ui').style.display = 'block';
+    document.getElementById('gh-avatar').src = r.avatar || '';
+    document.getElementById('gh-username').textContent = r.user;
+    addIreneMsg(`connected to github as @${r.user} — loading your repos`);
+    loadRepos();
+}
+
+async function githubDisconnect() {
+    await agent.githubDisconnect();
+    document.getElementById('gh-auth-ui').style.display = 'block';
+    document.getElementById('gh-user-ui').style.display = 'none';
+    document.getElementById('repo-section').style.display = 'none';
+}
+
+async function loadRepos() {
+    const btn = document.querySelector('#gh-user-ui .new-btn');
+    if (btn) btn.textContent = '↻ Loading…';
+    const r = await agent.githubRepos();
+    if (btn) btn.innerHTML = '<span class="nb-icon">↻</span> Refresh repos';
+    if (!r.ok) { addToolCall('❌', 'GitHub repos error', r.error, true); return; }
+    allRepos = r.repos;
+    document.getElementById('repo-count').textContent = `${allRepos.length}`;
+    const section = document.getElementById('repo-section');
+    section.style.display = 'flex';
+    section.style.flexDirection = 'column';
+    // Hide explorer when repos are shown
+    document.getElementById('explorer-sec').style.display = 'none';
+    renderRepos(allRepos);
+}
+
+function renderRepos(repos) {
+    const list = document.getElementById('repo-list');
+    list.innerHTML = repos.map(r => `
+        <div class="repo-item" onclick="cloneRepo('${esc(r.url)}','${esc(r.name)}')">
+          <div class="repo-name">
+            ${esc(r.name)} ${r.private ? '<span class="lock">🔒</span>' : ''}
+            ${r.fork ? '<span class="lock" title="Fork">🍴</span>' : ''}
+          </div>
+          ${r.description ? `<div class="repo-desc">${esc(r.description)}</div>` : ''}
+          <div class="repo-meta">
+            ${r.language ? `<span class="lang-dot lang-${r.language.toLowerCase()}" style="background:${langColor(r.language)}"></span><span>${r.language}</span>` : ''}
+            ${r.stars ? `<span>★ ${r.stars}</span>` : ''}
+          </div>
+        </div>`).join('');
+}
+
+function filterRepos(q) {
+    const filtered = q ? allRepos.filter(r => r.name.toLowerCase().includes(q.toLowerCase()) || r.description.toLowerCase().includes(q.toLowerCase())) : allRepos;
+    renderRepos(filtered);
+}
+
+async function cloneRepo(url, name) {
+    addToolCall('⬇', `Cloning ${name}…`, '', false);
+    const r = await agent.githubClone({ cloneUrl: url, repoName: name });
+    if (r.ok) {
+        addToolCall('✅', `Cloned ${name}`, r.path, true);
+        addIreneMsg(`cloned ${name} to ${r.path} — opening in explorer`);
+        await loadDir(r.path);
+        setMode('code');
+    } else if (!r.canceled) {
+        addToolCall('❌', `Clone failed: ${name}`, r.error || 'Unknown error', true);
+    }
+}
+
+function langColor(lang) {
+    const map = { JavaScript: '#f7df1e', TypeScript: '#3178c6', Python: '#3572a5', HTML: '#e34c26', CSS: '#563d7c', Go: '#00add8', Rust: '#dea584', Java: '#b07219', 'C++': '#f34b7d', Ruby: '#701516', Swift: '#f05138', Kotlin: '#a97bff' };
+    return map[lang] || '#6b6e84';
+}
+
+// ─── FILE EXPLORER ───────────────────────────────────────────────────────────
+async function openFolder() {
+    const p = await agent.openFolderDialog();
+    if (!p) return;
+    currentFolder = p;
+    await loadDir(p);
+}
+
+async function loadDir(dir, el) {
+    let container = el;
+    if (!container) {
+        currentFolder = dir;
+        container = document.getElementById('file-tree');
+        container.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px">Loading...</div>';
+        document.getElementById('explorer-sec').style.display = 'flex';
+    }
+    
+    const r = await agent.readDir(dir);
+    if (!r.ok) {
+        if (!el) container.innerHTML = `<div style="color:var(--red);font-size:11px;padding:8px">Error: ${esc(r.error)}</div>`;
+        return;
+    }
+    
+    container.innerHTML = '';
+    const sorted = r.items.sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name));
+    
+    sorted.forEach(item => {
+        const rowWrap = document.createElement('div');
+        
+        const row = document.createElement('div');
+        row.className = 'ft-item';
+        const chevron = item.isDir ? '<span class="ft-chev">›</span> ' : '<span style="width:12px;display:inline-block"></span>';
+        row.innerHTML = `${chevron}${item.isDir ? '📁' : fileIcon(item.name)} ${esc(item.name)}`;
+        
+        const children = document.createElement('div');
+        children.className = 'ft-children';
+        children.style.display = 'none';
+        children.style.paddingLeft = '14px';
+        children.style.borderLeft = '1px solid var(--border2)';
+        children.style.marginLeft = '6px';
+        
+        row.onclick = () => {
+            if (item.isDir) {
+                const isOpen = children.style.display === 'block';
+                if (isOpen) {
+                    children.style.display = 'none';
+                    row.querySelector('.ft-chev').style.transform = 'rotate(0deg)';
+                } else {
+                    children.style.display = 'block';
+                    row.querySelector('.ft-chev').style.transform = 'rotate(90deg)';
+                    if (children.innerHTML === '') {
+                        children.innerHTML = '<div style="color:var(--text3);font-size:10px;padding:4px">...</div>';
+                        loadDir(item.path, children);
+                    }
+                }
+            } else {
+                openFile(item.path, item.name);
+            }
+        };
+        
+        rowWrap.appendChild(row);
+        rowWrap.appendChild(children);
+        container.appendChild(rowWrap);
+    });
+}
+
+function fileIcon(name) {
+    const ext = name.split('.').pop().toLowerCase();
+    return { js:'🟨', ts:'🔷', jsx:'🟧', tsx:'🟦', py:'🐍', html:'🌐', css:'🎨', json:'📋', md:'📝', sh:'💠', ps1:'💠', yml:'⚙', yaml:'⚙', rs:'🦀', go:'🐹' }[ext] || '📄';
+}
+
+// ─── CODE EDITOR ──────────────────────────────────────────────────────────────
+async function openFile(filePath, name) {
+    if (openTabs.find(t => t.path === filePath)) { activateTab(filePath); setMode('code'); return; }
+    const r = await agent.readFile(filePath);
+    if (!r.ok) { addToolCall('❌', 'Read error', r.error, true); return; }
+    openTabs.push({ path: filePath, name, content: r.content, dirty: false });
+    activateTab(filePath);
+    setMode('code');
+}
+
+function escPath(s) {
+    return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function activateTab(p) {
+    if (activeTab) { const t = openTabs.find(x=>x.path===activeTab); if(t && editor) t.content = editor.getValue(); }
+    activeTab = p;
+    const tab = openTabs.find(t=>t.path===p);
+    if (!tab || !monacoReady) return;
+    const noEd = document.getElementById('no-editor');
+    if (noEd) noEd.style.display = 'none';
+    editor.getDomNode().style.display = '';
+    const ext = p.split('.').pop().toLowerCase();
+    const langMap = { js:'javascript', ts:'typescript', jsx:'javascript', tsx:'typescript', py:'python', html:'html', css:'css', json:'json', md:'markdown', sh:'shell', ps1:'powershell', yml:'yaml', yaml:'yaml', rs:'rust', go:'go' };
+    const model = monaco.editor.createModel(tab.content, langMap[ext]||'plaintext', monaco.Uri.file(p));
+    const old = editor.getModel();
+    editor.setModel(model);
+    if (old) try { old.dispose(); } catch {}
+    editor.layout();
+    renderTabs();
+}
+
+function renderTabs() {
+    const bar = document.getElementById('tab-bar');
+    if (!openTabs.length) { bar.innerHTML = '<div class="no-editor" style="flex:1;flex-direction:row;gap:8px;font-size:12px;color:var(--text3)">Open a file from the explorer</div>'; return; }
+    bar.innerHTML = openTabs.map(t => `
+        <div class="etab${t.path===activeTab?' active':''}" onclick="activateTab('${escPath(t.path)}')">
+          ${t.dirty ? '<span style="color:var(--red)">●</span> ' : ''}${esc(t.name)}
+          <span class="etab-close" onclick="event.stopPropagation();closeTab('${escPath(t.path)}')">×</span>
+        </div>`).join('');
+}
+
+function closeTab(p) {
+    openTabs = openTabs.filter(t => t.path !== p);
+    if (activeTab === p) {
+        activeTab = openTabs.at(-1)?.path || null;
+        if (activeTab) activateTab(activeTab);
+        else { editor?.getDomNode() && (editor.getDomNode().style.display='none'); document.getElementById('no-editor').style.display='flex'; }
+    }
+    renderTabs();
+}
+
+async function saveFile() {
+    if (!activeTab || !editor) return;
+    const t = openTabs.find(x => x.path === activeTab);
+    if (!t) return;
+    const content = editor.getValue();
+    const r = await agent.writeFile({ filePath: activeTab, content });
+    if (r.ok) { t.content = content; t.dirty = false; renderTabs(); termLog(`✓ Saved ${t.name}`, 'var(--green)'); }
+    else addToolCall('❌', 'Save error', r.error, true);
+}
+
+// ─── TERMINAL ─────────────────────────────────────────────────────────────────
+async function termKey(e) {
+    const inp = document.getElementById('term-in');
+    if (e.key === 'ArrowUp') { if (termIdx < termHistory.length-1) { termIdx++; inp.value = termHistory[termIdx]; } return; }
+    if (e.key === 'ArrowDown') { if (termIdx > 0) { termIdx--; inp.value = termHistory[termIdx]; } else { termIdx=-1; inp.value=''; } return; }
+    if (e.key !== 'Enter') return;
+    const cmd = inp.value.trim(); if (!cmd) return;
+    inp.value = ''; termHistory.unshift(cmd); termIdx = -1;
+    termLog(`PS › ${cmd}`, 'var(--red)');
+    const r = await agent.runTerminal({ command: cmd, cwd: currentFolder });
+    termLog(r.output || '(no output)');
+}
+
+function termLog(text, color) {
+    const out = document.getElementById('term-out');
+    const line = document.createElement('div');
+    if (color) line.style.color = color;
+    line.textContent = text;
+    out.appendChild(line);
+    out.scrollTop = out.scrollHeight;
+}
+
+// ─── SETTINGS ─────────────────────────────────────────────────────────────────
+async function openSettings() {
+    document.getElementById('settings-modal').classList.remove('hidden');
+    // Load masked current values
+    const r = await agent.getConfig();
+    if (r.ok) {
+        Object.entries(r.config).forEach(([k, v]) => {
+            const el = document.getElementById(`key-${k}`);
+            if (el && v) el.placeholder = v;
+        });
+    }
+}
+function closeSettings() { document.getElementById('settings-modal').classList.add('hidden'); }
+
+async function saveKey(key) {
+    const el = document.getElementById(`key-${key}`);
+    const value = el.value.trim();
+    if (!value) return;
+    const r = await agent.saveConfigKey({ key, value });
+    if (r.ok) {
+        el.value = '';
+        el.placeholder = value.slice(0,6) + '••••••••' + value.slice(-4);
+        // If it's the github token, re-check connection
+        if (key === 'githubToken') {
+            const gr = await agent.githubLoadSaved();
+            if (gr.ok) setGitHubUser(gr);
+        }
+        addToolCall('✅', `Saved ${key}`, '', false);
+    } else addToolCall('❌', `Failed to save ${key}`, r.error, true);
+}
+
+// ─── AGENT EVENTS ─────────────────────────────────────────────────────────────
+agent.onCommandStart(d => {
+    addToolCall('⚡', `PC command: ${String(d.command||d).slice(0,60)}`, d.command || d, false);
+});
+agent.onCommandDone(d => {
+    termLog(`[agent] ${d.count} command(s) run`, 'var(--text3)');
+});
+
+async function githubCliConnect() {
+    addToolCall('🐙', 'Connecting via GitHub CLI…', 'Running `gh auth token`', false);
+    const btn = document.querySelector('#gh-auth-ui .new-btn');
+    if (btn) btn.disabled = true;
+    const r = await agent.runTerminal({command: 'gh auth token', cwd: ''});
+    if (r.exitCode === 0 && r.output) {
+        // use output as token
+        const token = r.output.trim();
+        document.getElementById('gh-token').value = token;
+        await githubConnect();
+    } else {
+        addToolCall('❌', 'GH CLI Failed', 'Check if `gh` is installed and authenticated.', true);
+        if (btn) btn.disabled = false;
+    }
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+(async () => {
+    // Restore GitHub session if saved
+    const gh = await agent.githubLoadSaved();
+    if (gh.ok) {
+        setGitHubUser(gh);
+    }
+    
+    // Auto-connect to database if we have tokens saved
+    const conf = await agent.getConfig();
+    if (conf.ok && conf.config.SUPABASE_URL && conf.config.SUPABASE_KEY) {
+        toggleConnect();
+    }
+})();

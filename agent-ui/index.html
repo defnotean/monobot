@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Eris IDE</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- TITLEBAR -->
+<div class="titlebar">
+  <div class="tb-controls">
+    <button class="tb-btn tb-close" onclick="agent.closeApp()"></button>
+    <button class="tb-btn tb-min" onclick="agent.minimizeApp()"></button>
+    <button class="tb-btn tb-max" onclick="agent.maximizeApp()"></button>
+  </div>
+  <div class="tb-brand">
+    <div class="tb-indicator" id="tb-dot"></div>
+    Eris
+  </div>
+  <div class="mode-tabs">
+    <button class="mtab active" onclick="setMode('chat')">Chat</button>
+    <button class="mtab" onclick="setMode('code')">Code</button>
+    <button class="mtab" onclick="setMode('terminal')">Terminal</button>
+  </div>
+  <div class="tb-right">
+    <button class="icon-btn" onclick="openSettings()" title="Settings">⚙</button>
+    <button class="conn-btn" id="conn-btn" onclick="toggleConnect()">
+      <span class="cd"></span><span id="conn-label">Connect</span>
+    </button>
+  </div>
+</div>
+
+<div class="layout">
+
+  <!-- LEFT SIDEBAR - Explorer -->
+  <div class="sidebar left-sidebar">
+    <div class="sb-sec flex1" id="explorer-sec" style="border-top:none; border-right: 1px solid var(--border);">
+      <div class="sb-label" style="margin-top:4px;">
+        <span>Explorer</span>
+        <button onclick="openFolder()" title="Open folder" style="background:var(--s3);border-radius:6px;padding:2px 6px;">📂 Open</button>
+      </div>
+      <div class="file-tree" id="file-tree">
+        <div style="color:var(--text3);font-size:11px;padding:4px 8px;text-align:center;margin-top:20px;">No folder open</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT SIDEBAR - Agents & GitHub -->
+  <div class="sidebar right-sidebar">
+    <div class="sb-top">
+      <button class="new-btn" onclick="newSession()">
+        <span class="nb-icon">✦</span> New session
+      </button>
+    </div>
+
+    <!-- Sessions -->
+    <div class="sb-sec">
+      <div class="sb-label"><span>Sessions</span></div>
+      <div id="session-list">
+        <div class="sb-item active" data-id="0">
+          <span>💬</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis">Main session</span>
+          <span class="si-time">now</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- GitHub -->
+    <div class="sb-sec" id="gh-section">
+      <div class="sb-label"><span>GitHub</span></div>
+      <div id="gh-auth-ui">
+        <button class="new-btn" onclick="githubCliConnect()" style="justify-content:center;font-size:12px;margin-bottom:8px;background:var(--red-subtle);color:var(--text);border-color:rgba(255,51,102,0.3)">
+          <span class="nb-icon" style="color:var(--red)">🐙</span> Auto-connect via GH CLI
+        </button>
+        <div style="text-align:center;font-size:10px;color:var(--text3);margin-bottom:8px">OR USE TOKEN</div>
+        <input class="gh-input" id="gh-token" type="password" placeholder="Personal access token..." onkeydown="if(event.key==='Enter')githubConnect()">
+        <button class="new-btn" onclick="githubConnect()" style="justify-content:center;font-size:11px">
+          Connect with Token
+        </button>
+        <div style="font-size:10px;color:var(--text3);margin-top:6px;line-height:1.6">
+          Needs <code>repo</code> scope. <span style="color:var(--red);cursor:pointer" onclick="agent.openExternal('https://github.com/settings/tokens')">Get token →</span>
+        </div>
+      </div>
+      <div id="gh-user-ui" style="display:none">
+        <div class="gh-user-row">
+          <img class="gh-avatar" id="gh-avatar" src="">
+          <span id="gh-username" style="font-size:12px;font-weight:600;flex:1;color:#fff"></span>
+          <button onclick="githubDisconnect()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px">✕</button>
+        </div>
+        <button class="new-btn" onclick="loadRepos()" style="justify-content:center;font-size:11px;margin-bottom:6px">
+          <span class="nb-icon">↻</span> Load repos
+        </button>
+      </div>
+    </div>
+
+    <!-- Repo list -->
+    <div id="repo-section" style="display:none;flex:1;flex-direction:column;overflow:hidden">
+      <div class="sb-sec" style="border-bottom:none;padding-bottom:4px">
+        <div class="sb-label">
+          <span>Repositories</span>
+          <span id="repo-count" style="color:var(--text3);font-weight:400;text-transform:none;font-size:10px"></span>
+        </div>
+        <input class="repo-search" id="repo-search" placeholder="Search..." oninput="filterRepos(this.value)">
+      </div>
+      <div id="repo-list" style="flex:1;overflow-y:auto;padding:0 8px 8px"></div>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <div class="main">
+
+    <!-- CHAT -->
+    <div id="view-chat" class="chat-view">
+      <div class="messages" id="messages">
+        <div class="msg-wrap" id="welcome">
+          <div class="welcome">
+            <div class="welcome-icon">😈</div>
+            <h2>Eris IDE</h2>
+            <p>Your AI agent with full PC access, GitHub integration, and multi-step planning.</p>
+            <div class="welcome-features">
+              <div class="wf-pill">📋 Implementation plans</div>
+              <div class="wf-pill">🤖 Sub-agents</div>
+              <div class="wf-pill">🔍 Web research</div>
+              <div class="wf-pill">🐙 GitHub repos</div>
+              <div class="wf-pill">💻 PC control</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <div class="input-container">
+          <div class="input-box">
+            <textarea id="chat-in" rows="1" placeholder="Ask Irene anything…" disabled
+              oninput="autoResize(this)" onkeydown="chatKey(event)"></textarea>
+            <div class="input-tools">
+              <button class="send-btn" id="send-btn" onclick="sendChat()" disabled title="Send">↑</button>
+            </div>
+          </div>
+          <div class="input-meta">
+            <span class="input-hint" id="input-hint">Connect to start chatting</span>
+            <div class="auto-approve-row">
+              <span>Auto-approve</span>
+              <div class="ts" id="auto-toggle" onclick="toggleAuto()"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CODE -->
+    <div id="view-code" class="code-view" style="display:none">
+      <div class="tab-bar" id="tab-bar">
+        <div class="no-editor" style="flex:1;flex-direction:row;gap:8px;font-size:12px;color:var(--text3)">
+          Open a file from the explorer
+        </div>
+      </div>
+      <div id="editor-wrap" style="flex:1;overflow:hidden;position:relative">
+        <div class="no-editor" id="no-editor">
+          <div class="ne-icon">💻</div>
+          <span style="color:var(--text2)">Select a file to edit</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- TERMINAL -->
+    <div id="view-terminal" class="term-view" style="display:none">
+      <div class="term-out" id="term-out">
+        <span style="color:var(--text3)">Eris Terminal — PowerShell</span><br><br>
+      </div>
+      <div class="term-row">
+        <span class="term-prompt">PS ›</span>
+        <input id="term-in" placeholder="Enter command…" onkeydown="termKey(event)">
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div class="modal-overlay hidden" id="settings-modal" onclick="if(event.target===this)closeSettings()">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">⚙ Settings & API Keys</span>
+      <button class="modal-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="setting-row">
+        <label>Gemini API Keys (comma separated)</label>
+        <div class="setting-input-row">
+          <input class="setting-input" id="key-GEMINI_API_KEY" type="password" placeholder="AIza..., AIza...">
+          <button class="save-key-btn" onclick="saveKey('GEMINI_API_KEY')">Save</button>
+        </div>
+        <div class="setting-hint">Multiple keys will be auto-split to avoid rate limits</div>
+      </div>
+      <div class="setting-divider"></div>
+      <div class="setting-row">
+        <label>Discord Bot Token</label>
+        <div class="setting-input-row">
+          <input class="setting-input" id="key-DISCORD_TOKEN" type="password" placeholder="MTk...">
+          <button class="save-key-btn" onclick="saveKey('DISCORD_TOKEN')">Save</button>
+        </div>
+      </div>
+      <div class="setting-divider"></div>
+      <div class="setting-row">
+        <label>Supabase URL</label>
+        <div class="setting-input-row">
+          <input class="setting-input" id="key-SUPABASE_URL" type="text" placeholder="https://xxx.supabase.co">
+          <button class="save-key-btn" onclick="saveKey('SUPABASE_URL')">Save</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>Supabase Anon Key</label>
+        <div class="setting-input-row">
+          <input class="setting-input" id="key-SUPABASE_KEY" type="password" placeholder="eyJ...">
+          <button class="save-key-btn" onclick="saveKey('SUPABASE_KEY')">Save</button>
+        </div>
+      </div>
+      <div class="setting-divider"></div>
+      <div class="setting-row">
+        <label>GitHub Token</label>
+        <div class="setting-input-row">
+          <input class="setting-input" id="key-githubToken" type="password" placeholder="ghp_...">
+          <button class="save-key-btn" onclick="saveKey('githubToken')">Save</button>
+        </div>
+        <div class="setting-hint">Alternatively paste it in the GitHub sidebar panel</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>
