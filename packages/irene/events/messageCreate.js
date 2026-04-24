@@ -32,6 +32,7 @@ import { buildOpinionContext } from "../ai/opinions.js";
 import { buildSelfCanonContext } from "../ai/selfCanon.js";
 import { buildTwinStateContext } from "../utils/twinState.js";
 import { sendHumanReply } from "../utils/humanDelay.js";
+import { recordMessage as recordEvidenceMessage } from "../utils/messageEvidence.js";
 let _humanityCounter = 0;
 
 
@@ -338,6 +339,11 @@ export async function execute(message) {
   // this event was queued, bail before touching sendTyping/reply/modLog APIs.
   if (message.guild && !message.client.guilds.cache.has(message.guild.id)) return;
   if (!message.channel) return;
+
+  // Record for the evidence buffer — last N messages per user per guild,
+  // attached to ban/kick mod-log embeds if the user is later sanctioned.
+  // No-op for DMs, bot messages, and self. Cheap (in-memory LRU).
+  recordEvidenceMessage(message);
 
   // Sleep mode — owner can wake her with @mention OR just saying "wake up"
   if (isSleeping()) {

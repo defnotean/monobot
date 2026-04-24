@@ -2,6 +2,7 @@ import { sendModLog } from "../utils/logger.js";
 import { logEvent } from "../utils/embeds.js";
 import { getWarnings } from "../database.js";
 import { recordServerRemoval } from "./voiceStateUpdate.js";
+import { getEvidence, formatEvidence } from "../utils/messageEvidence.js";
 
 export const name = "guildBanAdd";
 
@@ -105,12 +106,40 @@ export async function execute(ban) {
     rolesField = { name: `Roles at time of ban (${roleTokens.length})`, value, inline: false };
   }
 
+  // Attach the last few messages this user sent before getting banned, if
+  // the in-memory evidence buffer caught any. Discord embed field value
+  // is capped at 1024 chars; truncate at the entry boundary so we don't
+  // cut a message in half.
+  let evidenceField = null;
+  const evidence = getEvidence(ban.guild.id, ban.user.id);
+  if (evidence.length > 0) {
+    const full = formatEvidence(evidence);
+    let value = full;
+    if (value.length > 1024) {
+      // Trim entries from the OLDEST side (keep the most recent context) until
+      // we fit under 1024 with an ellipsis. Entries are most-recent-LAST.
+      const lines = full.split("\n");
+      while (lines.length > 1 && lines.join("\n").length > 1020) {
+        lines.shift();
+      }
+      value = (full.split("\n").length > lines.length ? "… (older trimmed) …\n" : "") + lines.join("\n");
+      if (value.length > 1024) value = value.slice(0, 1021) + "…";
+    }
+    evidenceField = {
+      name: `Recent messages before ban (${evidence.length})`,
+      value,
+      inline: false,
+    };
+  }
+
+  const fields = [rolesField, evidenceField].filter(Boolean);
+
   await sendModLog(ban.guild, logEvent({
     kind: "ban",
     target: ban.user,
     actor: moderator,
     reason: reason || "no reason provided",
     meta,
-    fields: rolesField ? [rolesField] : undefined,
+    fields: fields.length > 0 ? fields : undefined,
   }));
 }

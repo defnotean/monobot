@@ -6,6 +6,7 @@ import { log } from "../utils/logger.js";
 import { updateStatsChannels } from "../utils/stats.js";
 import { tempChannels, tempTextChannels, tempVcSeq, tempControlPanels, renameTimers, manualRenames, ownerGraceTimers, tempVcCreatedAt, tempVcMembers } from "../utils/tempvc.js";
 import { transferOwnership, recordServerRemoval } from "./voiceStateUpdate.js";
+import { getEvidence, formatEvidence } from "../utils/messageEvidence.js";
 
 const LEAVE_CHANNEL_NAMES = ["goodbye", "farewell", "leave", "departures", "bye"];
 
@@ -84,6 +85,34 @@ export async function execute(member) {
     // Still run temp-VC + leave-message + stats cleanup below.
   } else {
     const createdTs = member.user.createdTimestamp || null;
+
+    const fields = [];
+    if (roles !== "none") {
+      fields.push({ name: "Roles", value: roles.slice(0, 1000), inline: false });
+    }
+
+    // Attach recent-messages evidence ONLY on kicks (mod action), not on
+    // voluntary leaves. Evidence is pulled from the in-memory buffer; if the
+    // user hadn't said anything recently (or the bot was restarted), skip.
+    if (kind === "kick") {
+      const evidence = getEvidence(member.guild.id, member.id);
+      if (evidence.length > 0) {
+        const full = formatEvidence(evidence);
+        let value = full;
+        if (value.length > 1024) {
+          const lines = full.split("\n");
+          while (lines.length > 1 && lines.join("\n").length > 1020) lines.shift();
+          value = (full.split("\n").length > lines.length ? "… (older trimmed) …\n" : "") + lines.join("\n");
+          if (value.length > 1024) value = value.slice(0, 1021) + "…";
+        }
+        fields.push({
+          name: `Recent messages before kick (${evidence.length})`,
+          value,
+          inline: false,
+        });
+      }
+    }
+
     const embed = logEvent({
       kind,
       target: member.user,
@@ -94,9 +123,7 @@ export async function execute(member) {
         "Time in Server": timeInServer !== null ? `${timeInServer}d` : "unknown",
         "Account Created": createdTs ? `<t:${Math.floor(createdTs / 1000)}:R>` : "unknown",
       },
-      fields: roles !== "none"
-        ? [{ name: "Roles", value: roles.slice(0, 1000), inline: false }]
-        : undefined,
+      fields: fields.length > 0 ? fields : undefined,
     });
 
     await sendModLog(member.guild, embed);
