@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { LRUCache } from "../../utils/LRUCache.js";
+import { LRUCache } from "@defnotean/shared/LRUCache";
 
 describe("LRUCache", () => {
   let cache: InstanceType<typeof LRUCache>;

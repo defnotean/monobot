@@ -4,7 +4,7 @@
 
 import { isOwner, isTrusted } from "../../utils/permissions.js";
 import { log } from "../../utils/logger.js";
-import { signTwinRequest } from "../../utils/twinSign.js";
+import { signTwinRequest } from "@defnotean/shared/twinSign";
 import { resolveMember } from "../../utils/discord.js";
 import config from "../../config.js";
 

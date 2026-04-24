@@ -1,7 +1,7 @@
 {
-  "name": "monobot",
-  "version": "3.0.0",
-  "description": "Eris - Discord AI bot with 46 tools, persistent memory, and local PC agent",
+  "name": "@defnotean/eris",
+  "version": "3.1.0",
+  "description": "Eris — Discord AI bot with 170+ tools, persistent memory, and local PC agent. Twin of Irene.",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -20,6 +20,7 @@
   "author": "defnotean",
   "license": "ISC",
   "dependencies": {
+    "@defnotean/shared": "*",
     "@google/genai": "^1.48.0",
     "@octokit/rest": "^22.0.1",
     "@supabase/supabase-js": "^2.101.1",

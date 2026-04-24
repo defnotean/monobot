@@ -146,7 +146,7 @@ function sanitizeSchema(schema) {
 // Cached by sorted tool-name list so we avoid rebuilding 80+ schemas per message.
 // Bounded to 50 unique tool combinations — different guilds / contexts pass
 // different tool subsets, so without a cap this grew unbounded.
-import { LRUCache } from "../utils/LRUCache.js";
+import { LRUCache } from "@defnotean/shared/LRUCache";
 const _geminiToolsCache = new LRUCache(50);
 function toGeminiTools(tools) {
   const cacheKey = tools.map(t => t.name).sort().join(",");

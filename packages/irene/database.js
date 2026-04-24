@@ -548,7 +548,7 @@ export function getTicketConfig(guildId) {
 // the categorizer can see the live roles cache.
 export async function resolveTicketRoles(guild) {
   const cfg = getTicketConfig(guild.id);
-  const { getRolesByCategory } = await import("./utils/roleCategorizer.js");
+  const { getRolesByCategory } = await import("@defnotean/shared/roleCategorizer");
   const _expand = (explicitIds, autoCat) => {
     const out = new Set();
     for (const id of explicitIds || []) if (guild.roles.cache.has(id)) out.add(id);

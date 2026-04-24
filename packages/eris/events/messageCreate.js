@@ -142,7 +142,7 @@ function wakeSleep() {
   log(`[SLEEP] Eris woke up from ${wasNap ? "nap" : "sleep"}`);
 }
 
-import { LRUCache } from "../utils/LRUCache.js";
+import { LRUCache } from "@defnotean/shared/LRUCache";
 
 // Memory context cache (60s TTL per user, max 500 entries)
 const _memoryCtxCache = new LRUCache(500, 60_000);

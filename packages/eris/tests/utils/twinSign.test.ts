@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error - importing JS module without types
-import { signTwinRequest, verifyTwinRequest, TWIN_MAX_SKEW_MS } from "../../utils/twinSign.js";
+import { signTwinRequest, verifyTwinRequest, TWIN_MAX_SKEW_MS } from "@defnotean/shared/twinSign";
 
 const SECRET = "test-secret-hex-0123456789abcdef";
 

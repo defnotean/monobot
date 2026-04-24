@@ -156,7 +156,7 @@ export async function execute(toolName, input, message, _context) {
 
     case "list_roles_by_category": {
       if (!message.guild) return "role categorization only works in servers";
-      const { getRolesByCategory, categorizeRole } = await import("../../utils/roleCategorizer.js");
+      const { getRolesByCategory, categorizeRole } = await import("@defnotean/shared/roleCategorizer");
       const category = String(input?.category || "").trim().toLowerCase();
       if (!category) return "pass a category — one of: admin, moderator, helper, bot, everyone, cosmetic, staff, trusted.";
       const matches = getRolesByCategory(message.guild, category);

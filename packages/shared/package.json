@@ -1,0 +1,19 @@
+{
+  "name": "@defnotean/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared core utilities for the Eris + Irene twin-bot system",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./roleCategorizer": "./src/roleCategorizer.js",
+    "./twinSign": "./src/twinSign.js",
+    "./LRUCache": "./src/LRUCache.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1"
+  },
+  "author": "defnotean",
+  "license": "ISC"
+}

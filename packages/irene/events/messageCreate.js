@@ -10,7 +10,7 @@ import { executeTool, findRole, findMember } from "../ai/executor.js";
 import { runGeminiChat, quickReply, looksLikeTask } from "../ai/providers/index.js";
 import { buildMemoryContext } from "../ai/memory.js";
 import { checkSpam, checkMentionSpam, checkBadWords } from "../utils/safety.js";
-import { LRUCache } from "../utils/LRUCache.js";
+import { LRUCache } from "@defnotean/shared/LRUCache";
 import { addXp, getLevelSettings, getLevelRewards } from "../utils/leveling.js";
 import { checkAfkMentions, checkAfkReturn } from "../commands/utility/afk.js";
 import { checkHighlights } from "../commands/utility/highlight.js";

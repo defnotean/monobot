@@ -10,7 +10,7 @@
 
 import { log } from "../utils/logger.js";
 import config from "../config.js";
-import { LRUCache } from "../utils/LRUCache.js";
+import { LRUCache } from "@defnotean/shared/LRUCache";
 
 // ─── In-Memory Stores ───────────────────────────────────────────────────────
 

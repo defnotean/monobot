@@ -130,7 +130,7 @@ const TOOL_ALIASES = {
   set_mood: "adjust_mood", cheer_up: "adjust_mood", nap: "adjust_mood",
 };
 
-import { LRUCache } from "../utils/LRUCache.js";
+import { LRUCache } from "@defnotean/shared/LRUCache";
 import { checkToolRateLimit } from "../utils/toolRateLimit.js";
 
 // ─── Tool Result Cache (LRU, 200 entries, 15s TTL) ────────────────────────

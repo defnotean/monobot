@@ -1,6 +1,6 @@
 import { sendModLog } from "../utils/logger.js";
 import { logEvent } from "../utils/embeds.js";
-import { categorizeRole } from "../utils/roleCategorizer.js";
+import { categorizeRole } from "@defnotean/shared/roleCategorizer";
 
 export const name = "roleCreate";
 

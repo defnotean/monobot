@@ -1,7 +1,7 @@
 import * as db from "../database.js";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
-import { verifyTwinRequest } from "../utils/twinSign.js";
+import { verifyTwinRequest } from "@defnotean/shared/twinSign";
 
 function moodLabel(score) {
   if (score >= 60) return "ecstatic";

@@ -248,7 +248,7 @@ export async function execute(interaction) {
     if (!_requireAdmin(interaction)) return;
     const scope = interaction.options.getString("scope") || "staff";
     const alsoPing = !!interaction.options.getBoolean("ping");
-    const { getRolesByCategory } = await import("../../utils/roleCategorizer.js");
+    const { getRolesByCategory } = await import("@defnotean/shared/roleCategorizer");
     const currentMatches = getRolesByCategory(interaction.guild, scope);
 
     setTicketAutoCategory(interaction.guild.id, "view", scope);

@@ -473,7 +473,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "list_roles_by_category": {
-      const { getRolesByCategory, categorizeRole } = await import("../../utils/roleCategorizer.js");
+      const { getRolesByCategory, categorizeRole } = await import("@defnotean/shared/roleCategorizer");
       const category = String(input?.category || "").trim().toLowerCase();
       if (!category) return "Pass a category — one of: admin, moderator, helper, bot, everyone, cosmetic, staff, trusted.";
       const matches = getRolesByCategory(guild, category);
@@ -527,7 +527,7 @@ export async function execute(toolName, input, message, ctx) {
       //   - category keywords (mods/admins/staff/helpers/trusted) — looked
       //     up by actual PERMISSIONS so a cosmetic role called "Moderator"
       //     with zero perms can't be mistaken for a real mod.
-      const { resolveRoleHints } = await import("../../utils/roleCategorizer.js");
+      const { resolveRoleHints } = await import("@defnotean/shared/roleCategorizer");
       const _resolveRoleIds = (raw) => resolveRoleHints(guild, raw).map((r) => r.id);
 
       const touched = [];

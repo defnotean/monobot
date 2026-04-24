@@ -3,7 +3,7 @@
 import http from "http";
 import config from "./config.js";
 import { log } from "./utils/logger.js";
-import { verifyTwinRequest } from "./utils/twinSign.js";
+import { verifyTwinRequest } from "@defnotean/shared/twinSign";
 
 // TTS audio cache — stores generated WAV buffers keyed by random ID, served via /tts/:id
 // Bounded to TTS_MAX_CACHE entries; oldest entries evicted on insert. Entries expire after 5 min.

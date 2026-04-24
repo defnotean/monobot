@@ -10,7 +10,7 @@ import {
   getRolesByCategory,
   asCategoryKeyword,
   resolveRoleHints,
-} from "../../utils/roleCategorizer.js";
+} from "@defnotean/shared/roleCategorizer";
 import { PermissionFlagsBits as P } from "discord.js";
 
 // ─── Test harness ─────────────────────────────────────────────────────────
