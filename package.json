@@ -1,0 +1,23 @@
+{
+  "name": "defnotean-bots-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monorepo for the Eris + Irene Discord twin-bot system with shared core utilities",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "start:eris": "npm start --workspace=@defnotean/eris",
+    "start:irene": "npm start --workspace=@defnotean/irene",
+    "test": "npm test --workspaces --if-present",
+    "test:eris": "npm test --workspace=@defnotean/eris",
+    "test:irene": "npm test --workspace=@defnotean/irene",
+    "lint:shared-sync": "node scripts/verify-shared-sync.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "defnotean",
+  "license": "ISC"
+}
