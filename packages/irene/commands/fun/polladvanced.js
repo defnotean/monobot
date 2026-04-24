@@ -115,11 +115,11 @@ async function handleCreatePoll(interaction) {
   const row = new ActionRowBuilder().addComponents(buttons);
 
   try {
-    const msg = await interaction.reply({
+    await interaction.reply({
       embeds: [embed],
       components: [row],
-      fetchReply: true,
     });
+    const msg = await interaction.fetchReply();
 
     // Track poll
     activePolls.set(msg.id, {

@@ -24,15 +24,16 @@ export async function execute(interaction) {
 
   const description = options.map((o, i) => `${NUMBER_EMOJI[i]} ${o}`).join("\n\n");
 
-  const msg = await interaction.reply({
+  const replied = await interaction.reply({
     embeds: [
       infoEmbed(`Poll: ${question}`, description)
         .setFooter({ text: `Poll by ${interaction.user.username}` }),
     ],
-    fetchReply: true,
-  }).catch(() => null);
+  }).then(() => true).catch(() => false);
 
-  if (!msg) return; // reply failed (e.g. permissions or deferred interaction)
+  if (!replied) return; // reply failed (e.g. permissions or deferred interaction)
+  const msg = await interaction.fetchReply().catch(() => null);
+  if (!msg) return;
   for (let i = 0; i < options.length; i++) {
     await msg.react(NUMBER_EMOJI[i]).catch(() => {}); // ignore individual react failures
   }

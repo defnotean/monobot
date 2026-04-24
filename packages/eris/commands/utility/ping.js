@@ -6,7 +6,8 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction) {
   const ws = interaction.client.ws.ping;
-  const sent = await interaction.reply({ content: "pinging...", fetchReply: true });
+  await interaction.reply({ content: "pinging..." });
+  const sent = await interaction.fetchReply();
   const rt = sent.createdTimestamp - interaction.createdTimestamp;
   await interaction.editReply(`pong — ${rt}ms roundtrip, ${ws}ms websocket`);
 }

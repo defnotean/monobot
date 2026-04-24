@@ -66,10 +66,11 @@ export async function paginate(interaction, { items, itemsPerPage = 10, formatPa
     );
   }
 
-  const opts = { embeds: [getPage()], components: [getButtons()], fetchReply: true };
+  const opts = { embeds: [getPage()], components: [getButtons()] };
   if (ephemeral) opts.flags = 64;
 
-  const message = await interaction.reply(opts);
+  await interaction.reply(opts);
+  const message = await interaction.fetchReply();
 
   const collector = message.createMessageComponentCollector({
     componentType: ComponentType.Button,
