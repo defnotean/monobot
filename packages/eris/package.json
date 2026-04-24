@@ -1,0 +1,40 @@
+{
+  "name": "monobot",
+  "version": "3.0.0",
+  "description": "Eris - Discord AI bot with 46 tools, persistent memory, and local PC agent",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "tsx --watch index.ts",
+    "agent": "node local_agent.cjs",
+    "deploy": "node deploy-commands.js",
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "migrate": "node migrate.cjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "defnotean",
+  "license": "ISC",
+  "dependencies": {
+    "@google/genai": "^1.48.0",
+    "@octokit/rest": "^22.0.1",
+    "@supabase/supabase-js": "^2.101.1",
+    "canvas": "^3.2.3",
+    "cheerio": "^1.2.0",
+    "discord.js": "^14.26.2",
+    "dotenv": "^17.4.0",
+    "googleapis": "^171.4.0",
+    "voyageai": "^0.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "electron": "^41.1.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}

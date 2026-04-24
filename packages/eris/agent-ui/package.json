@@ -1,0 +1,17 @@
+{
+  "name": "eris-agent",
+  "version": "1.0.0",
+  "description": "Eris Local PC Agent",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@google/genai": "^1.48.0",
+    "@supabase/supabase-js": "^2.101.1",
+    "dotenv": "^17.4.0"
+  },
+  "devDependencies": {
+    "electron": "^33.4.1"
+  }
+}
