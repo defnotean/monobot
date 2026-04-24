@@ -7,6 +7,16 @@ Legend: ✅ shipped · 🚧 in progress · ⬜ planned · ⏭️ skipped (with r
 
 ## Recently shipped
 
+### Monorepo migration + feature sprint (2026-04-24)
+- ✅ **Monorepo migrated** — both bots now run from `defnotean/bots-monorepo`. Shared core utilities (`roleCategorizer`, `twinSign`, `LRUCache`) live in `@defnotean/shared`. Deploy-time drift is eliminated: unified exact-pinned deps across workspaces (`discord.js@14.26.3`, `@google/genai@1.50.1`, `@supabase/supabase-js@2.104.1`, `voyageai@0.2.1`).
+- ✅ **Version-sync pre-flight** — `scripts/verify-version-sync.js` (`npm run lint:version-sync`) diffs dep ranges across workspaces and fails loudly on divergence. Wired into `DEPLOY_MIGRATION.md` as a required pre-flight check.
+- ✅ **Mini-games batch** — 3 new slash commands:
+  - `/tictactoe @opponent` — 3×3 grid, challenge/accept flow, win highlighting.
+  - `/connect4 @opponent` — 7×6 grid, 7 column buttons (drops to lowest empty), 4-axis win detection.
+  - `/hangman` — solo, 50-word default list, StringSelect letter picker (already-guessed letters filtered), ASCII art rendering.
+  - Pure logic modules in `ai/games/` (unit-testable, no Discord deps). 49 new tests.
+- ✅ **`fetchReply` deprecation fixed** — 5 call sites across Eris + Irene migrated from `{ fetchReply: true }` option form (deprecated in discord.js 14.17+) to `.fetchReply()` method form.
+
 ### Council execution round (2026-04-23 evening)
 - ✅ **Dead-code purge** — deleted `tasks/` folder (5 .ts files, orphan refactor with no callers) + `db/` folder (21 .ts files, same) + dead stock functions in `ai/stocks.js` + dead `eris_stocks` table accessors in `database.js`. Net ~2,300 LOC removed, zero behavior change.
 - ✅ **Moonshot regression tests** — 82 new tests across `tests/ai/poker.test.ts`, `tests/ai/stockMarket.test.ts`, `tests/ai/lottery.test.ts`, `tests/utils/roleCategorizer.test.ts`. Target the exact bug classes we shipped: split-pot leftover, share-count overflow, weighted-draw proportionality, cosmetic-role spoof. Extracted `splitPot()` + `evalFiveCards` + `compareHands` from inside `resolveTable` so the math is unit-testable. All 82 pass.
@@ -97,7 +107,7 @@ Legend: ✅ shipped · 🚧 in progress · ⬜ planned · ⏭️ skipped (with r
 
 ### Multiplayer games
 - ⬜ Chess
-- ⬜ Connect-4 / Tic-tac-toe / Hangman
+- ✅ Connect-4 / Tic-tac-toe / Hangman — shipped 2026-04-24
 - ⬜ Daily Wordle-style puzzle
 - ⬜ Daily crossword
 - ⬜ Sudoku

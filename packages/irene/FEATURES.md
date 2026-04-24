@@ -7,9 +7,21 @@ Legend: ✅ shipped · 🚧 in progress · ⬜ planned · ⏭️ skipped (with r
 
 ## Recently shipped
 
+### Monorepo migration + feature sprint (2026-04-24)
+- ✅ **Monorepo migrated** — both bots now run from `defnotean/bots-monorepo`. Shared core utilities (`roleCategorizer`, `twinSign`, `LRUCache`) live in `@defnotean/shared`. Migration had a bump: first cutover attempt silently broke Irene's interaction handlers due to npm workspace dep-version hoisting (she was on `discord.js@14.26` when she was tested on 14.14). Rolled back in ~2 min, re-attempted with unified exact-pinned deps across all workspaces. See `DEPLOY_MIGRATION.md` post-mortem for the bug story and the pre-flight (`npm run lint:version-sync`) that now prevents this class of bug.
+- ✅ **Evidence preservation on ban/kick** — when a mod (or Irene's AI mod tools) bans or kicks a user, the mod-log embed now includes a "Recent messages before ban/kick" field with the user's last ~10 messages before action. Rolling in-memory buffer (`utils/messageEvidence.js`), 24h TTL, bounded at 1000 user-buckets across all guilds. Intentionally ephemeral — never persisted to DB (GDPR-friendly).
+- ✅ **Message context-menu commands** — right-click any message → Apps → 3 new actions:
+  - **Remember this** — saves the message to Irene's per-guild memory store (dedupes against existing memories).
+  - **Remind me** — opens a duration modal, then schedules a reminder via the existing reminder system. Duration parser accepts `s/m/h/d/w` with decimals, case-insensitive, 10s–365d bounds.
+  - **Translate** — ephemeral Gemini-translated English (or most-likely other lang if already English).
+- ✅ **Command loader observability** — `[Commands] Failed to load: <msg>` now includes the `<dir>/<filename>` so load failures are diagnosable in seconds, not minutes. Would have made the 2026-04-24 migration incident ~instantly traceable.
+- ✅ **`twinPunish.js` stale import fixed** — bare relative import `./twinSign.js` that the original sed pass missed. Contributed to Irene silently losing 1 command on migration.
+- ✅ **`bumpconfig.js` 106-char subcommand description fixed** — pre-existing bug: one subcommand description exceeded discord.js's 100-char limit, causing `RangeError: Invalid string length` at command-load time. Silently dropped 1 command from the registry on every Irene startup (both on standalone and monorepo). Fixed.
+- ✅ **`fetchReply` deprecation fixed** — 5 call sites migrated from `{ fetchReply: true }` option form (deprecated in discord.js 14.17+) to `.fetchReply()` method form. Preemptive for post-migration running on hoisted 14.26.
+
 ### Council execution round (2026-04-23 evening)
 - ✅ **LRUCache synced with Eris** — ported Eris's new group-key indexing so `deleteGroup(userId)` is O(k). Both bots' `utils/LRUCache.js` are now byte-identical, reducing drift ahead of the planned extraction.
-- ✅ **Shared core extraction plan** — `EXTRACTION_PLAN.md` drafted (mirrored from Eris). Documents the full monorepo migration: phase 0 drift reconciliation, workspace setup, per-file move order, deploy changes, risk register. Execution deferred.
+- ✅ **Shared core extraction plan** — `EXTRACTION_PLAN.md` drafted (mirrored from Eris). Documents the full monorepo migration: phase 0 drift reconciliation, workspace setup, per-file move order, deploy changes, risk register. Executed 2026-04-24.
 
 ### Security & correctness (2026-04-23 council audit round)
 - ✅ **Anti-nuke owner/admin exemption** — `utils/antinuke.js` was synchronous, accepted `guild` as a 4th arg it ignored, and its only exemption path was an explicit allowlist. Server owner could get anti-nuke'd and their roles stripped (really happened). Now async, with four-tier exemption: guild owner (always), bot owner (always), explicit allowlist, admins (default exempt, togglable via `track_admins`). Defense-in-depth re-check in the response path refuses to strip/ban protected users even if something else bypassed tracking.
@@ -67,7 +79,7 @@ Legend: ✅ shipped · 🚧 in progress · ⬜ planned · ⏭️ skipped (with r
 
 ### Moderation & safety
 - ⬜ Time-limited punishments with auto-reversal (UX layer on schedule_task)
-- ⬜ Evidence preservation on ban/kick (last 10 messages snapshot)
+- ✅ Evidence preservation on ban/kick — shipped 2026-04-24 (last ~10 messages, 24h ring buffer, ephemeral)
 - ⬜ Appeals system (banned users DM the bot, mods see structured form)
 - ⬜ Shadow-ban mode
 - ⬜ Word-filter severity tiers + learning mode
@@ -115,7 +127,7 @@ Legend: ✅ shipped · 🚧 in progress · ⬜ planned · ⏭️ skipped (with r
 - ⬜ Threaded reminders
 - ⬜ Recurring events
 - ⬜ Live countdown timers
-- ⬜ Context-menu commands (right-click message → remember / remind / translate)
+- ✅ Context-menu commands (right-click message → remember / remind / translate) — shipped 2026-04-24
 - ⬜ Anniversary messages
 - ⬜ Bookmark-to-DM
 - ⬜ Message translation
