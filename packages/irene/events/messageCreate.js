@@ -33,6 +33,7 @@ import { buildSelfCanonContext } from "../ai/selfCanon.js";
 import { buildTwinStateContext } from "../utils/twinState.js";
 import { sendHumanReply } from "../utils/humanDelay.js";
 import { recordMessage as recordEvidenceMessage } from "../utils/messageEvidence.js";
+import { enforceMessage } from "../ai/rulesEnforcer.js";
 let _humanityCounter = 0;
 
 
@@ -344,6 +345,15 @@ export async function execute(message) {
   // attached to ban/kick mod-log embeds if the user is later sanctioned.
   // No-op for DMs, bot messages, and self. Cheap (in-memory LRU).
   recordEvidenceMessage(message);
+
+  // Auto-mod rule enforcement — opt-in per guild via `/rules enable`.
+  // No-op when disabled; otherwise runs the cheap regex pre-filter, and
+  // only if THAT trips, the LLM judge with surrounding context. NEVER
+  // throws — auto-mod failure must not break the message pipeline. If an
+  // action was taken (delete / warn / timeout), skip the rest of this
+  // handler so we don't AI-reply on top of moderating the user.
+  const enforcerActed = await enforceMessage(message).catch(() => false);
+  if (enforcerActed) return;
 
   // Sleep mode — owner can wake her with @mention OR just saying "wake up"
   if (isSleeping()) {
