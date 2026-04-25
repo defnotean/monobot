@@ -34,6 +34,7 @@ import { buildTwinStateContext } from "../utils/twinState.js";
 import { sendHumanReply } from "../utils/humanDelay.js";
 import { recordMessage as recordEvidenceMessage } from "../utils/messageEvidence.js";
 import { enforceMessage } from "../ai/rulesEnforcer.js";
+import { buildCommandsContext } from "../utils/commandsHelp.js";
 let _humanityCounter = 0;
 
 
@@ -1097,6 +1098,38 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
         const directiveLines = active.map(d => `- ${d.text}`).join("\n");
         systemPromptWithMemory += `\n\n[DIRECTIVES — rules you MUST follow in this server. these were set by admins and override your default behavior:\n${directiveLines}]`;
       }
+    }
+  }
+
+  // Inject COMMANDS AWARENESS — list of loaded slash commands so Irene knows
+  // what commands actually exist in this server and can suggest real ones
+  // (instead of hallucinating "/banhammer" or similar). Cheap: just iterates
+  // client.commands and produces a string.
+  {
+    const commandsBlock = buildCommandsContext(message.client?.commands);
+    if (commandsBlock) {
+      systemPromptWithMemory += `\n\n${commandsBlock}`;
+    }
+  }
+
+  // Inject SERVER RULES — the auto-mod rules engine's stored rules. Different
+  // from DIRECTIVES (which govern Irene's behavior); these govern USER behavior
+  // in the server. When users ask "what are the rules" or reference rule
+  // numbers, Irene can answer accurately. Also lets her recognize when a
+  // message is borderline so she can verbally caution users (separate from the
+  // auto-mod's actual punishment pipeline, which runs upstream).
+  if (guild) {
+    const { getRules, isAutoModEnabled } = await import("../database.js");
+    const rules = getRules(guild.id);
+    if (rules.length) {
+      const rulesText = rules
+        .sort((a, b) => a.number - b.number)
+        .map(r => `${r.number}. [${r.severity}] ${r.text}`)
+        .join("\n");
+      const enforcementNote = isAutoModEnabled(guild.id)
+        ? "Auto-mod is ENABLED — actual punishments fire automatically when serious violations are detected."
+        : "Auto-mod is currently DISABLED — these are the rules but no automatic enforcement.";
+      systemPromptWithMemory += `\n\n[SERVER RULES — the official rules of this server (use these when users ask "what are the rules" or reference a rule number). DO NOT invent rules that aren't in this list:\n${rulesText}\n\n${enforcementNote}]`;
     }
   }
 

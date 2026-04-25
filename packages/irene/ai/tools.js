@@ -1444,6 +1444,20 @@ export const ADMIN_TOOLS = [
     },
   },
   {
+    name: "learn_rules_from_channel",
+    description: "Read a server's rules channel and extract individual rules into the auto-mod rules engine. Use this when an admin says things like 'learn the rules from #rules', 'check #rules-and-info and remember our rules', 'go look at #rules', or 'take a look at our rules channel'. Reads the last 50 messages from the channel, asks the AI to identify each distinct rule with severity (low/medium/high), and stores them. Doesn't enable enforcement — that's a separate /rules enable step the admin runs after reviewing. Admin-only.",
+    input_schema: {
+      type: "object",
+      properties: {
+        channel_name: {
+          type: "string",
+          description: "The rules channel name (e.g. 'rules', '#rules', 'rules-and-info') or ID.",
+        },
+      },
+      required: ["channel_name"],
+    },
+  },
+  {
     name: "setup_ticket",
     description: "Configure the ticket system. PREFER THE INTERACTIVE FLOW: if the admin hasn't specified every detail, tell them to run `/ticket setup` for a button-driven wizard — it has a channel picker for the category, role pickers for view/ping, a modal for custom welcome text, and a 'Post Panel' button. You only need to call THIS tool directly when the admin has given you explicit values to save, or when they ask you to post a custom-styled panel via send_message (in which case set the button's action to 'open_ticket'). If the admin says something vague like 'set up tickets' without specifying category, view role, ping role, or welcome text — ASK them which knobs they want OR point them at `/ticket setup`. Don't silently pick defaults for them. By default, new tickets are visible ONLY to the opener and Irene — staff access is expected to come from the ticket category's permissions. All fields here are optional; omitted fields keep their current value so you can iterate (e.g. call once with `view_roles`, again with `welcome_description`). Pass an empty array (`[]`) to CLEAR a roles setting. Pass the string 'reset' to clear welcome title/description. Pass `post_panel: true` to also (re)post the open-ticket panel in the category's open-ticket channel.",
     input_schema: {

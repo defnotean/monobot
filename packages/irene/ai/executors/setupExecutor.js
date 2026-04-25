@@ -16,6 +16,7 @@ const HANDLED = new Set([
   "set_ghost_ping_channels",
   "sticky_message", "remove_sticky",
   "list_roles_by_category",
+  "learn_rules_from_channel",
 ]);
 
 export async function execute(toolName, input, message, ctx) {
@@ -485,6 +486,93 @@ export async function execute(toolName, input, message, ctx) {
         return `• **${r.name}** (ID ${r.id}) — ${cat}${perms.length ? ` [${permSummary}]` : ""}`;
       });
       return `Roles categorized as **${category}** (${matches.length}):\n${lines.join("\n")}`;
+    }
+
+    case "learn_rules_from_channel": {
+      // Admin gate (defense in depth — ai/executor.js already filters
+      // ADMIN_TOOLS out of the schema sent to non-admins, but a runtime
+      // re-check here protects against any prompt-routing slip-ups).
+      const isOwner = message.member?.id === guild.ownerId;
+      const isAdmin = message.member?.permissions?.has?.(PermissionFlagsBits.ManageGuild);
+      if (!isOwner && !isAdmin) {
+        return "Only admins (Manage Server) can teach me the rules.";
+      }
+      const ch = findChannel(guild, input.channel_name);
+      if (!ch) return `Couldn't find channel "${input.channel_name}" — try the channel name or #mention.`;
+      if (!ch.isTextBased?.()) return `#${ch.name} isn't a text channel.`;
+
+      // Pull last 50 messages — same as the slash-command flow.
+      let messages;
+      try {
+        const fetched = await ch.messages.fetch({ limit: 50 });
+        messages = [...fetched.values()].reverse(); // chronological
+      } catch (err) {
+        return `Couldn't read #${ch.name}: ${err.message}`;
+      }
+
+      const corpus = messages
+        .filter((m) => !m.author.bot && m.content.trim())
+        .map((m) => m.content)
+        .join("\n");
+      if (corpus.trim().length < 20) {
+        return `#${ch.name} has no usable text. Add rules manually with /rules add or pick a different channel.`;
+      }
+
+      const { addRule } = await import("../../database.js");
+      const { quickReply } = await import("../providers/index.js");
+
+      const systemInstruction = [
+        "You are extracting individual rules from a Discord server's rules channel.",
+        "Read the user's text and identify each distinct rule.",
+        "Return ONLY a JSON array of objects, with no commentary, no markdown fences, no preamble.",
+        "Each object has shape: { \"text\": string, \"severity\": \"low\" | \"medium\" | \"high\" }",
+        "Severity guide:",
+        "  low    — minor etiquette (English-only, no spam, use right channels)",
+        "  medium — community standards (banter ok, no targeted harassment, no self-promo)",
+        "  high   — TOS-level (NSFW, slurs, threats, doxxing)",
+        "Examples of NON-rules to ignore: server welcome text, decoration emojis, the date the server was made, descriptions of channels.",
+        "If you can't find any rules, return an empty array [].",
+        "Output exactly: a single JSON array.",
+      ].join("\n");
+
+      let raw;
+      try {
+        raw = await quickReply(message.client, systemInstruction, corpus, null);
+      } catch (err) {
+        return `Rule extraction failed: ${err?.message ?? err}`;
+      }
+
+      let parsed;
+      try {
+        const cleaned = String(raw ?? "").replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+        const start = cleaned.indexOf("[");
+        const end = cleaned.lastIndexOf("]");
+        if (start < 0 || end <= start) throw new Error("no JSON array");
+        parsed = JSON.parse(cleaned.slice(start, end + 1));
+        if (!Array.isArray(parsed)) throw new Error("not an array");
+      } catch (err) {
+        return `Couldn't parse the AI's rule extraction: ${err.message}`;
+      }
+
+      const added = [];
+      const skipped = [];
+      for (const item of parsed) {
+        const text = String(item?.text ?? "").trim();
+        if (!text) { skipped.push("(empty)"); continue; }
+        const severity = ["low", "medium", "high"].includes(item?.severity) ? item.severity : "medium";
+        const r = addRule(guild.id, text, severity, by?.id || message.author.id);
+        if (r.success) added.push(`#${r.rule.number} [${r.rule.severity}] ${r.rule.text}`);
+        else skipped.push(`(${r.reason})`);
+      }
+
+      if (added.length === 0 && skipped.length === 0) {
+        return `Read #${ch.name} but didn't find any rules to extract.`;
+      }
+      const summary = added.length
+        ? `Got it. Learned ${added.length} rule${added.length === 1 ? "" : "s"} from #${ch.name}:\n${added.join("\n")}`
+        : `Read #${ch.name} but everything I extracted was already known or empty.`;
+      const tail = `\n\nAuto-mod is currently OFF — run /rules enable to turn on enforcement, or /rules list to review.`;
+      return summary + tail;
     }
 
     case "setup_ticket": {
