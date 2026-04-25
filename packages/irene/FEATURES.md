@@ -10,6 +10,7 @@ Legend: ✅ shipped · 🚧 in progress · ⬜ planned · ⏭️ skipped (with r
 ### Monorepo migration + feature sprint (2026-04-24)
 - ✅ **Monorepo migrated** — both bots now run from `defnotean/bots-monorepo`. Shared core utilities (`roleCategorizer`, `twinSign`, `LRUCache`) live in `@defnotean/shared`. Migration had a bump: first cutover attempt silently broke Irene's interaction handlers due to npm workspace dep-version hoisting (she was on `discord.js@14.26` when she was tested on 14.14). Rolled back in ~2 min, re-attempted with unified exact-pinned deps across all workspaces. See `DEPLOY_MIGRATION.md` post-mortem for the bug story and the pre-flight (`npm run lint:version-sync`) that now prevents this class of bug.
 - ✅ **Evidence preservation on ban/kick** — when a mod (or Irene's AI mod tools) bans or kicks a user, the mod-log embed now includes a "Recent messages before ban/kick" field with the user's last ~10 messages before action. Rolling in-memory buffer (`utils/messageEvidence.js`), 24h TTL, bounded at 1000 user-buckets across all guilds. Intentionally ephemeral — never persisted to DB (GDPR-friendly).
+- ✅ **`/audit` searchable mod log** — three subcommands: `user @X` (actions on a user), `by @mod` (actions performed by a mod), `recent` (last 24h, any actor). Reads Discord's `guild.fetchAuditLogs` (45-day retention). Filters to moderation action types only (kick/ban/unban/timeout/role-update/move/disconnect). Embed truncates oldest-first to fit Discord's 1024-char field limit. `auditFormat` extracted as a pure module — 13 unit tests on the formatter, no Discord mocks.
 - ✅ **Message context-menu commands** — right-click any message → Apps → 3 new actions:
   - **Remember this** — saves the message to Irene's per-guild memory store (dedupes against existing memories).
   - **Remind me** — opens a duration modal, then schedules a reminder via the existing reminder system. Duration parser accepts `s/m/h/d/w` with decimals, case-insensitive, 10s–365d bounds.
@@ -87,7 +88,7 @@ Legend: ✅ shipped · 🚧 in progress · ⬜ planned · ⏭️ skipped (with r
 - ⏭️ Cross-server federated ban list — governance/liability nightmare
 
 ### Logging & insights
-- ⬜ Searchable audit log (`/audit who banned @X`)
+- ✅ Searchable audit log (`/audit user|by|recent`) — shipped 2026-04-25 (45-day window via Discord API; persistent storage deferred)
 - ⬜ Per-category log channels (split mod/member/voice/message)
 - ⬜ Member deletion forensics (full history in ban embed)
 - ⬜ Mod performance dashboard
