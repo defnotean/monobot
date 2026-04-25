@@ -3,6 +3,7 @@ import { successEmbed, errorEmbed, primaryEmbed } from "../../utils/embeds.js";
 import { requirePermission } from "../../utils/permissions.js";
 import { log } from "../../utils/logger.js";
 import { saveGiveawayDb } from "../../database.js";
+import { checkEligibility, formatRejection, describeRequirements } from "../../utils/giveawayEligibility.js";
 
 // ─── Active giveaways Map ────────────────────────────────────────────────────
 // messageId → { channelId, guildId, prize, hostId, endsAt, winnerCount, entries: Set }
@@ -44,6 +45,8 @@ export const data = new SlashCommandBuilder()
       )
       .addIntegerOption((o) => o.setName("winners").setDescription("Number of winners (default: 1)").setMinValue(1).setMaxValue(10))
       .addChannelOption((o) => o.setName("channel").setDescription("Channel to post in (default: current)"))
+      .addIntegerOption((o) => o.setName("min_account_age_days").setDescription("Reject entries from accounts younger than N days").setMinValue(0).setMaxValue(3650))
+      .addIntegerOption((o) => o.setName("min_tenure_days").setDescription("Reject entries from members with less than N days in this server").setMinValue(0).setMaxValue(3650))
   )
   .addSubcommand((sub) =>
     sub
@@ -78,6 +81,8 @@ async function handleStart(interaction) {
   const durationStr = interaction.options.getString("duration");
   const winnerCount = interaction.options.getInteger("winners") || 1;
   const targetChannel = interaction.options.getChannel("channel") || interaction.channel;
+  const minAccountAgeDays = interaction.options.getInteger("min_account_age_days") || 0;
+  const minTenureDays = interaction.options.getInteger("min_tenure_days") || 0;
 
   const duration = parseDuration(durationStr);
   if (!duration) {
@@ -90,15 +95,22 @@ async function handleStart(interaction) {
   const endsAt = Date.now() + duration;
   const startedAt = Date.now();
 
-  // Create embed
+  // Build embed fields. Add a "Requirements" field only if anti-alt gates are
+  // actually set — keeps the embed clean for normal giveaways.
+  const embedFields = [
+    { name: "Ends", value: `<t:${Math.floor(endsAt / 1000)}:R>`, inline: true },
+    { name: "Host", value: interaction.user.toString(), inline: true },
+    { name: "Winners", value: winnerCount.toString(), inline: true },
+  ];
+  const reqStr = describeRequirements({ minAccountAgeDays, minTenureDays });
+  if (reqStr) {
+    embedFields.push({ name: "Requirements", value: reqStr, inline: false });
+  }
+  embedFields.push({ name: "Entries", value: "0", inline: false });
+
   const embed = primaryEmbed("🎉 Giveaway", null)
     .setDescription(`**Prize:** ${prize}`)
-    .addFields(
-      { name: "Ends", value: `<t:${Math.floor(endsAt / 1000)}:R>`, inline: true },
-      { name: "Host", value: interaction.user.toString(), inline: true },
-      { name: "Winners", value: winnerCount.toString(), inline: true },
-      { name: "Entries", value: "0", inline: false }
-    );
+    .addFields(embedFields);
 
   // Create button
   const row = new ActionRowBuilder().addComponents(
@@ -127,6 +139,8 @@ async function handleStart(interaction) {
       startedAt,
       winnerCount,
       entries: new Set(),
+      minAccountAgeDays,
+      minTenureDays,
     });
 
     await interaction.reply({
@@ -276,6 +290,30 @@ export async function handleGiveawayButton(interaction) {
   const isEntering = !giveaway.entries.has(interaction.user.id);
 
   if (isEntering) {
+    // Anti-alt eligibility check. Skip silently if the giveaway has no gates
+    // (most giveaways won't). For gates set, fall back to a fetch if the
+    // member isn't cached so we don't reject regular members for missing data.
+    const minAccountAgeDays = giveaway.minAccountAgeDays || 0;
+    const minTenureDays = giveaway.minTenureDays || 0;
+    if (minAccountAgeDays > 0 || minTenureDays > 0) {
+      let member = interaction.member;
+      if (!member?.joinedTimestamp && minTenureDays > 0) {
+        member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+      }
+      const result = checkEligibility({
+        accountCreatedAtMs: interaction.user.createdTimestamp,
+        guildJoinedAtMs: member?.joinedTimestamp ?? null,
+        minAccountAgeDays,
+        minTenureDays,
+      });
+      if (!result.ok) {
+        return interaction.reply({
+          embeds: [errorEmbed("not eligible", formatRejection(result))],
+          flags: 64,
+        });
+      }
+    }
+
     giveaway.entries.add(interaction.user.id);
     await interaction.reply({
       embeds: [successEmbed("Entered!", "You've been entered into the giveaway!")],
@@ -291,12 +329,15 @@ export async function handleGiveawayButton(interaction) {
 
   // Update embed with entry count and button label with participants
   const embed = interaction.message.embeds[0];
-  const newEmbed = EmbedBuilder.from(embed).setFields(
+  const refreshedFields = [
     { name: "Ends", value: `<t:${Math.floor(giveaway.endsAt / 1000)}:R>`, inline: true },
     { name: "Host", value: `<@${giveaway.hostId}>`, inline: true },
     { name: "Winners", value: giveaway.winnerCount.toString(), inline: true },
-    { name: "Entries", value: giveaway.entries.size.toString(), inline: false }
-  );
+  ];
+  const reqStr = describeRequirements(giveaway);
+  if (reqStr) refreshedFields.push({ name: "Requirements", value: reqStr, inline: false });
+  refreshedFields.push({ name: "Entries", value: giveaway.entries.size.toString(), inline: false });
+  const newEmbed = EmbedBuilder.from(embed).setFields(refreshedFields);
 
   // Update button with participant count
   const row = new ActionRowBuilder().addComponents(
@@ -325,6 +366,8 @@ export function initGiveawayData(loaded) {
         startedAt: data.startedAt || data.endsAt,
         winnerCount: data.winnerCount,
         entries,
+        minAccountAgeDays: data.minAccountAgeDays || 0,
+        minTenureDays: data.minTenureDays || 0,
       });
     }
   }
@@ -343,6 +386,8 @@ export function getGiveawayData() {
       startedAt: giveaway.startedAt,
       winnerCount: giveaway.winnerCount,
       entries: Array.from(giveaway.entries),
+      minAccountAgeDays: giveaway.minAccountAgeDays || 0,
+      minTenureDays: giveaway.minTenureDays || 0,
     });
   }
   return data;
