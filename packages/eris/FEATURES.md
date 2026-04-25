@@ -15,6 +15,7 @@ Legend: ✅ shipped · 🚧 in progress · ⬜ planned · ⏭️ skipped (with r
   - `/connect4 @opponent` — 7×6 grid, 7 column buttons (drops to lowest empty), 4-axis win detection.
   - `/hangman` — solo, 50-word default list, StringSelect letter picker (already-guessed letters filtered), ASCII art rendering.
   - Pure logic modules in `ai/games/` (unit-testable, no Discord deps). 49 new tests.
+- ✅ **European roulette** `/roulette` — single-zero wheel, 13 bet types (straight 35:1, red/black/even/odd/low/high 1:1, dozens 2:1, columns 2:1). Atomic economy via `tryDeductBalance` (deducts at command time, no double-spend race). 1.5s "spinning…" delay → result embed. 29 new tests including a 100k-spin house-edge sanity check (must keep house edge under 5%).
 - ✅ **`fetchReply` deprecation fixed** — 5 call sites across Eris + Irene migrated from `{ fetchReply: true }` option form (deprecated in discord.js 14.17+) to `.fetchReply()` method form.
 
 ### Council execution round (2026-04-23 evening)
@@ -75,7 +76,7 @@ Legend: ✅ shipped · 🚧 in progress · ⬜ planned · ⏭️ skipped (with r
 - ⬜ Subscription / boost perks
 
 ### Gambling
-- ⬜ Roulette (European + American)
+- ✅ Roulette (European) — shipped 2026-04-25 · ⬜ American variant (double-zero) deferred
 - ⬜ Horse racing
 - ⬜ Prediction markets
 - ⬜ Progressive slots jackpot
