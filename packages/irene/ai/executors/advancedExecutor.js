@@ -6,6 +6,32 @@ import { armScheduledTask, scheduledTaskTimers, NON_SCHEDULABLE } from "../../ut
 import { log } from "../../utils/logger.js";
 import config from "../../config.js";
 import { GoogleGenAI } from "@google/genai";
+import { signTwinRequest } from "@defnotean/shared/twinSign";
+
+// Helper for ask_eris — POSTs to Eris's /api/twin/* are gated by HMAC headers
+// (or a legacy body.secret); GETs are ungated. We sign POSTs only.
+// Exported for unit testing — see tests/ai/executors/advancedExecutor.test.ts.
+export async function callEris(path, opts = {}) {
+  const baseUrl = config.twinApiUrl;
+  const secret  = config.twinApiSecret;
+  if (!baseUrl || !secret) throw new Error("twin API not configured (twinApiUrl/twinApiSecret missing)");
+
+  const method  = opts.method || "GET";
+  const url     = `${baseUrl}/api/twin${path}`;
+  const headers = { "Content-Type": "application/json" };
+  let body;
+  if (method === "POST") {
+    body = JSON.stringify(opts.body || {});
+    Object.assign(headers, signTwinRequest(body, secret));
+  }
+
+  return fetch(url, {
+    method,
+    headers,
+    body,
+    signal: AbortSignal.timeout(opts.timeoutMs ?? 5000),
+  });
+}
 
 // Reusable Gemini clients for web search grounding — one per API key, round-robin.
 // Cheap to keep around; instantiated once per process.
@@ -428,59 +454,55 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "ask_eris": {
-      const ERIS_API = "https://irene-bot.onrender.com/api/twin";
       const action = input.action;
 
       try {
         if (action === "remind") {
-          const delayMs = (input.delay_minutes ?? 60) * 60_000;
+          const delayMs  = (input.delay_minutes ?? 60) * 60_000;
           const remindAt = new Date(Date.now() + delayMs).toISOString();
-          const res = await fetch(`${ERIS_API}/remind`, {
+          const res = await callEris("/remind", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+            body: {
               user_id: input.user_id || message.author.id,
               channel_id: input.channel_id || message.channel.id,
               reminder_text: input.reminder_text || input.message || "reminder",
               remind_at: remindAt,
-            }),
+            },
           });
           const data = await res.json();
           return data.success ? `told my sister eris to set that reminder — she'll ping in ${input.delay_minutes || 60} minutes` : `eris couldn't set it up: ${data.error}`;
         }
 
         if (action === "note") {
-          const res = await fetch(`${ERIS_API}/note`, {
+          const res = await callEris("/note", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+            body: {
               user_id: input.user_id || message.author.id,
               title: input.title || "Note from Irene",
               content: input.content || "",
-            }),
+            },
           });
           const data = await res.json();
           return data.success ? "passed that note to eris — she's got it saved" : `eris couldn't save it: ${data.error || res.status}`;
         }
 
         if (action === "fact") {
-          const res = await fetch(`${ERIS_API}/fact`, {
+          const res = await callEris("/fact", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ user_id: input.user_id || message.author.id, fact: input.fact }),
+            body: { user_id: input.user_id || message.author.id, fact: input.fact },
           });
           const data = await res.json();
           return data.success ? "told eris to remember that" : "she couldn't save it";
         }
 
         if (action === "mood") {
-          const res = await fetch(`${ERIS_API}/mood`);
+          const res = await callEris("/mood");
           const data = await res.json();
           return `eris's mood: ${data.mood_score > 0 ? "good" : data.mood_score < 0 ? "bad" : "neutral"} (score: ${data.mood_score}, energy: ${data.energy})`;
         }
 
         if (action === "status") {
-          const res = await fetch(`${ERIS_API}/status`);
+          const res = await callEris("/status");
           const data = await res.json();
           return `eris is ${data.status} — uptime: ${data.uptime}s. she says: "${data.message}"`;
         }
