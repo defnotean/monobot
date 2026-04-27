@@ -56,10 +56,14 @@ export async function execute(interaction) {
   if (!member) return interaction.reply({ embeds: [errorEmbed("Not Found", "User not found in this server.")], ephemeral: true });
   if (!canModerate(interaction, member)) return;
 
+  // Defer once perm/hierarchy checks pass — sendModLog + Discord op can
+  // blow past the 3s initial-response window on slow API days.
+  await interaction.deferReply();
+
   try {
     await member.timeout(DURATIONS[duration], reason);
 
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [
         successEmbed("User Timed Out")
           .setDescription(`${user} has been timed out.`)
@@ -82,6 +86,6 @@ export async function execute(interaction) {
         )
     );
   } catch (error) {
-    await interaction.reply({ embeds: [errorEmbed("Timeout Failed", error.message)], ephemeral: true });
+    await interaction.editReply({ embeds: [errorEmbed("Timeout Failed", error.message)] });
   }
 }

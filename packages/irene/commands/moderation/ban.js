@@ -28,6 +28,11 @@ export async function execute(interaction) {
   const member = await interaction.guild.members.fetch(user.id).catch(() => null);
   if (member && !canModerate(interaction, member)) return;
 
+  // Defer once perm/hierarchy checks pass — DM round-trip + sendModLog can
+  // easily blow past Discord's 3s initial-response window when the target
+  // has DMs disabled and we wait for the rejection.
+  await interaction.deferReply();
+
   try {
     // ── Execute ban first — DM after so a failed ban doesn't confuse the user ──
     await interaction.guild.members.ban(user, { deleteMessageDays: days, reason });
@@ -37,7 +42,7 @@ export async function execute(interaction) {
       .then(() => true)
       .catch(() => false);
 
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [
         successEmbed("User Banned")
           .setDescription(`${user} has been banned from the server.${!dmSent ? "\n> ⚠️ Could not DM user — they may have DMs disabled." : ""}`)
@@ -61,6 +66,6 @@ export async function execute(interaction) {
         )
     );
   } catch (error) {
-    await interaction.reply({ embeds: [errorEmbed("Ban Failed", error.message)], ephemeral: true });
+    await interaction.editReply({ embeds: [errorEmbed("Ban Failed", error.message)] });
   }
 }

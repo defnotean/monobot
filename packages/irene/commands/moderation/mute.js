@@ -22,6 +22,11 @@ export async function execute(interaction) {
   if (!member) return interaction.reply({ content: "User not found.", ephemeral: true });
   if (!canModerate(interaction, member)) return;
 
+  // Defer once perm/hierarchy checks pass — first-time mute may iterate
+  // every text channel to deny SendMessages, which absolutely will blow
+  // past Discord's 3s initial-response window on a real server.
+  await interaction.deferReply();
+
   // Find or create Muted role
   let muteRole = interaction.guild.roles.cache.find((r) => r.name === "Muted");
   if (!muteRole) {
@@ -44,18 +49,18 @@ export async function execute(interaction) {
         }
       }
     } catch (error) {
-      return interaction.reply({ content: `Failed to create Muted role: ${error.message}`, ephemeral: true });
+      return interaction.editReply({ content: `Failed to create Muted role: ${error.message}` });
     }
   }
 
   if (member.roles.cache.has(muteRole.id)) {
-    return interaction.reply({ content: "That user is already muted.", ephemeral: true });
+    return interaction.editReply({ content: "That user is already muted." });
   }
 
   try {
     await member.roles.add(muteRole, reason);
 
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [successEmbed("User Muted", `**${user.tag}** has been muted.\nReason: ${reason}`)],
     });
 
@@ -64,6 +69,6 @@ export async function execute(interaction) {
       modEmbed("Member Muted", `**User:** ${user.tag} (${user.id})\n**Moderator:** ${interaction.user.tag}\n**Reason:** ${reason}`)
     );
   } catch (error) {
-    await interaction.reply({ content: `Failed to mute: ${error.message}`, ephemeral: true });
+    await interaction.editReply({ content: `Failed to mute: ${error.message}` });
   }
 }

@@ -28,6 +28,11 @@ export async function execute(interaction) {
 
   if (!canModerate(interaction, member)) return;
 
+  // Defer once perm/hierarchy checks pass — DM round-trip + sendModLog can
+  // easily blow past Discord's 3s initial-response window when the target
+  // has DMs disabled and we wait for the rejection.
+  await interaction.deferReply();
+
   try {
     // ── Execute kick first — DM after so a failed kick doesn't confuse the user ──
     await member.kick(reason);
@@ -37,7 +42,7 @@ export async function execute(interaction) {
       .then(() => true)
       .catch(() => false);
 
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [
         successEmbed("User Kicked")
           .setDescription(`${user} has been kicked from the server.${!dmSent ? "\n> ⚠️ Could not DM user — they may have DMs disabled." : ""}`)
@@ -59,6 +64,6 @@ export async function execute(interaction) {
         )
     );
   } catch (error) {
-    await interaction.reply({ embeds: [errorEmbed("Kick Failed", error.message)], ephemeral: true });
+    await interaction.editReply({ embeds: [errorEmbed("Kick Failed", error.message)] });
   }
 }

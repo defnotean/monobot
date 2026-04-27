@@ -15,6 +15,19 @@ export function isAdminOrOwner(interaction) {
   return false;
 }
 
+// Same admin check as `isAdminOrOwner`, but takes a raw GuildMember instead
+// of an interaction. Used by AI executors as a defense-in-depth gate so a
+// regression in dual.js's ADMIN_TOOLS gate can't bypass authentication.
+// Mirrors the `memberIsAdmin` helper in events/messageCreate.js that drives
+// the upstream `isAdmin` flag passed into runGeminiChat.
+export function isAdminMember(member) {
+  if (!member) return false;
+  if (member.id === member.guild.ownerId) return true;
+  if (member.permissions?.has?.(PermissionFlagsBits.Administrator) || member.permissions?.has?.(PermissionFlagsBits.ManageGuild)) return true;
+  if (getTrustedUsers(member.guild.id).includes(member.id)) return true;
+  return false;
+}
+
 export function requirePermission(interaction, permission, permName) {
   // Server owner bypasses all permission checks
   if (interaction.member.id === interaction.guild.ownerId) return true;

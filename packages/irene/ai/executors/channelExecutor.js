@@ -4,6 +4,7 @@ import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { logAudit } from "../../database.js";
 import { sendModLog } from "../../utils/logger.js";
 import { modEmbed } from "../../utils/embeds.js";
+import { isAdminMember } from "../../utils/permissions.js";
 
 const HANDLED = new Set([
   "create_channel", "delete_channel", "nuke_channel", "rename_channel",
@@ -13,6 +14,13 @@ const HANDLED = new Set([
 
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
+
+  // Defense-in-depth: every tool routed through this executor is destructive.
+  // The primary ADMIN_TOOLS gate runs in dual.js; this is a backup so a
+  // regression in the gate logic can't bypass authentication.
+  if (!isAdminMember(message.member)) {
+    return "permission denied";
+  }
 
   const { guild, by, findChannel, findMember, findRole } = ctx;
 

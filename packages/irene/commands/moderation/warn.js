@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
 import { successEmbed, errorEmbed, modEmbed } from "../../utils/embeds.js";
-import { requirePermission, requireAdminOrOwner } from "../../utils/permissions.js";
+import { requirePermission, requireAdminOrOwner, canModerate } from "../../utils/permissions.js";
 import { addWarning, getWarnings, getEscalation, deleteWarning } from "../../database.js";
 import { sendModLog } from "../../utils/logger.js";
 import { paginate, formatDuration } from "../../utils/pagination.js";
@@ -47,7 +47,9 @@ export async function execute(interaction) {
 
 async function handleAdd(interaction) {
   const user   = interaction.options.getUser("user");
-  const reason = interaction.options.getString("reason");
+  // Discord audit-log reason cap is 512 chars; truncate so auto-escalation
+  // calls (members.ban/kick/timeout) don't get rejected by Discord.
+  const reason = String(interaction.options.getString("reason") || "").slice(0, 500);
 
   // Guard: can't warn the bot itself
   if (user.id === interaction.client.user.id) {
@@ -56,6 +58,14 @@ async function handleAdd(interaction) {
       ephemeral: true,
     });
   }
+
+  // Hierarchy check — same role-position guard as /ban, /kick, /timeout. If
+  // the warn auto-escalates, the bot will attempt the action and Discord
+  // would reject it; better to block here so we don't leave a stray warning.
+  const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+  if (member && !canModerate(interaction, member)) return;
+
+  await interaction.deferReply();
 
   addWarning(interaction.guild.id, user.id, interaction.user.id, reason);
   const warnings = getWarnings(interaction.guild.id, user.id);
@@ -74,7 +84,6 @@ async function handleAdd(interaction) {
   // ── Auto-escalation ────────────────────────────────────────────────────────
   const escalation    = getEscalation(interaction.guild.id);
   let escalationNote  = null;
-  const member        = await interaction.guild.members.fetch(user.id).catch(() => null);
 
   if (member) {
     if (escalation.ban_at !== null && count >= escalation.ban_at) {
@@ -106,7 +115,7 @@ async function handleAdd(interaction) {
   if (!dmSent)        notes.push("> ⚠️ Could not DM the user — they may have DMs disabled.");
   if (escalationNote) notes.push(`> ${escalationNote}`);
 
-  await interaction.reply({
+  await interaction.editReply({
     embeds: [
       successEmbed("Warning Issued")
         .setDescription(`${user} has been warned.${notes.length ? "\n\n" + notes.join("\n") : ""}`)

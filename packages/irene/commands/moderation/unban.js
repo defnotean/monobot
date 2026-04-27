@@ -21,11 +21,15 @@ export async function execute(interaction) {
   }
   const reason = interaction.options.getString("reason") || "No reason provided";
 
+  // Defer once basic validation passes — bans.fetch + unban + sendModLog
+  // can blow past Discord's 3s initial-response window.
+  await interaction.deferReply();
+
   try {
     const ban = await interaction.guild.bans.fetch(userId);
     await interaction.guild.members.unban(userId, reason);
 
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [successEmbed("User Unbanned", `**${ban.user.tag}** has been unbanned.\nReason: ${reason}`)],
     });
 
@@ -35,11 +39,10 @@ export async function execute(interaction) {
     );
   } catch (err) {
     if (err.code === 10026) {
-      return interaction.reply({ embeds: [errorEmbed("Not Banned", "That user isn't banned.")], ephemeral: true });
+      return interaction.editReply({ embeds: [errorEmbed("Not Banned", "That user isn't banned.")] });
     }
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [errorEmbed("Error", `Failed to unban: ${err.message}`)],
-      ephemeral: true,
     });
   }
 }
