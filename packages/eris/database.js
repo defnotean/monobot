@@ -1259,12 +1259,29 @@ export async function createDailyChallenge(guildId, type, target, reward, date) 
 
 export async function completeDailyChallenge(challengeId, userId) {
   if (!supabase) return;
-  try {
-    const { data } = await supabase.from("eris_daily_challenges").select("completed_by").eq("id", challengeId).single();
-    const completed = data?.completed_by || [];
-    completed.push(userId);
-    await supabase.from("eris_daily_challenges").update({ completed_by: completed }).eq("id", challengeId);
-  } catch (e) { log(`[DB] ${e.message}`); }
+  // Wrap the read-modify-write in a per-challenge lock so two concurrent
+  // completions on the same challenge can't both read the same completed_by
+  // array, both push their id, and the second write clobber the first
+  // (silently dropping the first user's id from the completion list).
+  // withUserLock is just a string-keyed mutex — challengeId works fine as the
+  // key. Also do an optimistic post-write verification as defense-in-depth
+  // for the multi-instance case where the in-process lock can't help.
+  return withUserLock(challengeId, async () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { data } = await supabase.from("eris_daily_challenges").select("completed_by").eq("id", challengeId).single();
+        const completed = data?.completed_by || [];
+        if (completed.includes(userId)) return; // already completed — no-op
+        const next = [...completed, userId];
+        await supabase.from("eris_daily_challenges").update({ completed_by: next }).eq("id", challengeId);
+        // Defense-in-depth: re-read and confirm our id landed. If a racing
+        // writer overwrote us (only possible across instances since the
+        // lock above serializes within a process), retry once.
+        const { data: verify } = await supabase.from("eris_daily_challenges").select("completed_by").eq("id", challengeId).single();
+        if ((verify?.completed_by || []).includes(userId)) return;
+      } catch (e) { log(`[DB] ${e.message}`); return; }
+    }
+  });
 }
 
 // The OLD eris_stocks / eris_portfolios table accessors used to live here
@@ -1515,14 +1532,48 @@ export async function getActiveAuctions(guildId) {
   return data || [];
 }
 
+// Per-auction in-memory locks — prevents two parallel /bid calls from both
+// reading the same current_bid, both passing amount > current_bid, and the
+// second update silently clobbering the first (losing-bidder coins debited
+// or the higher bid silently lost). Mirrors _withHeistLock above.
+const _auctionLocks = new Map();
+async function _withAuctionLock(auctionId, fn) {
+  const prev = _auctionLocks.get(auctionId) ?? Promise.resolve();
+  const current = prev.catch(() => {}).then(fn);
+  _auctionLocks.set(auctionId, current);
+  try { return await current; } finally {
+    if (_auctionLocks.get(auctionId) === current) _auctionLocks.delete(auctionId);
+  }
+}
+
 export async function bidOnAuction(auctionId, bidderId, amount) {
   if (!supabase) return false;
-  try {
-    const { data } = await supabase.from("eris_auctions").select("*").eq("id", auctionId).single();
-    if (!data || data.status !== "active" || amount <= data.current_bid) return false;
-    await supabase.from("eris_auctions").update({ current_bid: amount, current_bidder_id: bidderId }).eq("id", auctionId);
-    return true;
-  } catch { return false; }
+  return _withAuctionLock(auctionId, async () => {
+    // Up to 2 attempts: if the optimistic-concurrency .eq("current_bid", ...)
+    // matches zero rows (some other writer slipped in between read and write,
+    // e.g. across instances where the in-process lock can't help), re-read
+    // and try once more.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { data } = await supabase.from("eris_auctions").select("*").eq("id", auctionId).single();
+        if (!data || data.status !== "active" || amount <= data.current_bid) return false;
+        const lastSeen = data.current_bid;
+        // Defensive optimistic-concurrency: only update if current_bid is
+        // still what we just read. If a concurrent writer changed it, the
+        // .eq() filter matches zero rows and the update is a no-op — we
+        // retry the read instead of silently overwriting.
+        const { data: updated } = await supabase
+          .from("eris_auctions")
+          .update({ current_bid: amount, current_bidder_id: bidderId })
+          .eq("id", auctionId)
+          .eq("current_bid", lastSeen)
+          .select();
+        if (updated && updated.length > 0) return true;
+        // Optimistic check failed — loop to re-read and retry once.
+      } catch { return false; }
+    }
+    return false;
+  });
 }
 
 export async function closeExpiredAuctions() {
