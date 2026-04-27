@@ -84,8 +84,8 @@ const config = {
   // ═══════════════════════════════════════════════════════════════════════════
   // AI Provider — back on Gemini (NVIDIA models had inconsistent tool calling)
   // To switch: "gemini" | "nvidia". The nvidia config below is preserved
-  // so you can flip back any time by changing this single string.
-  aiProvider: "gemini",
+  // so you can flip back any time by setting AI_PROVIDER in .env.
+  aiProvider: env("AI_PROVIDER", "gemini"),
 
   // Voyage AI (embeddings for semantic memory search)
   voyageApiKey: env("VOYAGE_API_KEY"),

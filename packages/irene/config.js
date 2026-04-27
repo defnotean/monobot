@@ -6,7 +6,7 @@
 //  3. Discord identity & Twin API ......... ~line 56
 //  4. Lavalink (music) .................... ~line 76
 //  5. AI providers (NVIDIA + Gemini keys) . ~line 82
-//  6. External APIs (Twitch) .............. ~line 115
+//  6. External APIs (Supabase, Twitch) .... ~line 115
 //  7. Bot personality (prompt loader) ..... ~line 121
 //  8. Rate limits & misc tunables ......... ~line 234
 //  9. Embed colors palette ................ ~line 260
@@ -80,9 +80,9 @@ const config = {
     secure:   env("LAVALINK_SECURE", "false") === "true",
   },
   // ─── AI Provider — Irene runs on Gemini (Eris runs on NVIDIA Kimi) ────────
-  // The bot's "brain" plugs into ai/providers/<name>.js. To switch:
-  //   "gemini" → Google Gemini   |   "nvidia" → Kimi K2.5
-  aiProvider: "gemini",
+  // The bot's "brain" plugs into ai/providers/<name>.js. To switch, set
+  // AI_PROVIDER in .env: "gemini" → Google Gemini | "nvidia" → Kimi K2.5
+  aiProvider: env("AI_PROVIDER", "gemini"),
 
   // ─── NVIDIA AI (Qwen 3.5 122B A10B — MoE with strong tool calling) ────────
   nvidia: {
@@ -113,8 +113,15 @@ const config = {
   ].filter(Boolean),
 
   // ═══════════════════════════════════════════════════════════════════════
-  // EXTERNAL APIs — Twitch (for live stream notifications)
+  // EXTERNAL APIs — Supabase (persistence) + Twitch (live stream notifications)
   // ═══════════════════════════════════════════════════════════════════════
+  supabaseUrl: env("SUPABASE_URL"),
+  supabaseKey: env("SUPABASE_KEY"),
+  supabaseAnonKey: env("SUPABASE_ANON_KEY"),
+  get supabaseEnabled() {
+    return !!(this.supabaseUrl && this.supabaseKey && !this.supabaseUrl.includes("your-"));
+  },
+
   twitchClientId: env("TWITCH_CLIENT_ID"),
   twitchClientSecret: env("TWITCH_CLIENT_SECRET"),
 
@@ -240,9 +247,6 @@ RELATIONSHIPS:
 
   // Voyage AI (embeddings for semantic memory search)
   voyageApiKey: env("VOYAGE_API_KEY"),
-
-  // AI Provider — Gemini only
-  aiProvider: "gemini",
 
   // Gemini model names
   geminiModel: env("GEMINI_MODEL", "gemini-3.1-pro-preview"),
