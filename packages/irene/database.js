@@ -30,6 +30,14 @@
 
 import { createClient } from "@supabase/supabase-js";
 import config from "./config.js";
+// Dual-write target — only invoked when config.dualWritePersistence is true.
+// Imported lazily inside _flushSave to avoid a circular module load at boot
+// (perEntity.js imports getSupabase from this file).
+let _perEntityModule = null;
+async function _getPerEntity() {
+  if (!_perEntityModule) _perEntityModule = await import("./database/perEntity.js");
+  return _perEntityModule;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // IN-MEMORY CACHE — single source of truth for all reads (synchronous)
@@ -176,6 +184,66 @@ export async function flushNow() {
   _saveTimer = null;
   if (!supabase) return;
   await _flushSave();
+  // Drain the per-entity coalesce queue too — only matters when dual-write
+  // is enabled but cheap to call unconditionally (no-op when nothing pending).
+  if (config.dualWritePersistence) {
+    try {
+      const pe = await _getPerEntity();
+      await pe.flushPerEntityNow();
+    } catch (err) {
+      console.error(`[DB] Per-entity flush failed: ${err.message}`);
+    }
+  }
+}
+
+// Dual-write fanout — splits the sanitized blob into per-entity writes when
+// config.dualWritePersistence is on. Iterates per-guild keyed objects so each
+// guild gets its own row in the per-entity tables; global state collapses
+// into a single row keyed on bot_name.
+async function _dualWriteFanout(snapshot) {
+  const pe = await _getPerEntity();
+  const writes = [];
+
+  // Per-guild fanout — one row per guild for tables keyed on guild_id.
+  for (const [gid, gs] of Object.entries(snapshot.guild_settings || {})) {
+    writes.push(pe.writeGuildSettings(gid, gs));
+  }
+  for (const [gid, cmds] of Object.entries(snapshot.custom_commands || {})) {
+    writes.push(pe.writeCustomCommands(gid, cmds));
+  }
+  for (const [gid, stats] of Object.entries(snapshot.scrim_stats || {})) {
+    writes.push(pe.writeScrimStats(gid, stats));
+  }
+  for (const [gid, entries] of Object.entries(snapshot.starboard_entries || {})) {
+    writes.push(pe.writeStarboardEntries(gid, entries));
+  }
+  for (const [gid, q] of Object.entries(snapshot.saved_queues || {})) {
+    writes.push(pe.writeSavedQueue(gid, q));
+  }
+
+  // Global state — single row each.
+  if (snapshot.mood) writes.push(pe.writeMoodState(snapshot.mood));
+  if (snapshot.relationships) writes.push(pe.writeRelationships(snapshot.relationships));
+
+  // Catch-all — counters and cross-guild flat collections in one row.
+  writes.push(pe.writeGlobalState({
+    _nextWarningId: snapshot._nextWarningId,
+    _nextReminderId: snapshot._nextReminderId,
+    _nextScheduledTaskId: snapshot._nextScheduledTaskId,
+    dm_optout: snapshot.dm_optout,
+    warnings: snapshot.warnings,
+    reminders: snapshot.reminders,
+    scheduled_tasks: snapshot.scheduled_tasks,
+    birthdays: snapshot.birthdays,
+    birthday_announced: snapshot.birthday_announced,
+    server_whitelist: snapshot.server_whitelist,
+    giveaways: snapshot.giveaways,
+    highlights: snapshot.highlights,
+    temp_vcs: snapshot.temp_vcs,
+    conversations: snapshot.conversations,
+  }));
+
+  await Promise.all(writes);
 }
 
 async function _flushSave() {
@@ -207,7 +275,18 @@ async function _flushSave() {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const { error } = await supabase.from("bot_data").upsert({ id: "irene", data: saveData });
-      if (!error) { _saveRetryCount = 0; return; }
+      if (!error) {
+        _saveRetryCount = 0;
+        // Dual-write fanout: when the flag is on, also write each entity to
+        // its dedicated per-entity table. Runs AFTER the legacy blob write
+        // succeeds so a per-entity bug can never break the existing path.
+        // Errors are swallowed at this layer — perEntity.js logs its own.
+        if (config.dualWritePersistence) {
+          try { await _dualWriteFanout(saveData); }
+          catch (dwErr) { console.error(`[DB] Dual-write fanout failed: ${dwErr.message}`); }
+        }
+        return;
+      }
       throw new Error(error.message);
     } catch (err) {
       console.error(`[DB] Save attempt ${attempt}/3 failed: ${err.message}`);

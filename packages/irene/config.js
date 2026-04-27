@@ -125,6 +125,13 @@ const config = {
   twitchClientId: env("TWITCH_CLIENT_ID"),
   twitchClientSecret: env("TWITCH_CLIENT_SECRET"),
 
+  // ─── Dual-write persistence (Phase 1 of database refactor) ────────────────
+  // When true, every write goes to BOTH the legacy single-row blob (bot_data)
+  // AND the new per-entity tables in packages/irene/database/perEntity.js.
+  // OFF by default — flip to true to validate the new layer in production
+  // before later PRs migrate read paths over and drop the old blob.
+  dualWritePersistence: env("DUAL_WRITE_PERSISTENCE", "false") === "true",
+
   // ═══════════════════════════════════════════════════════════════════════
   // BOT PERSONALITY — loaded from prompts/*.md, with hard-coded fallback
   // ═══════════════════════════════════════════════════════════════════════
