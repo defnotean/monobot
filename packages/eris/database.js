@@ -22,6 +22,7 @@
 // initDatabase() loader (with retry), and the debounced bucket-flush writer.
 // ═══════════════════════════════════════════════════════════════════════════
 import { createClient } from "@supabase/supabase-js";
+import { LRUCache } from "@defnotean/shared/LRUCache";
 import config from "./config.js";
 import { log } from "./utils/logger.js";
 
@@ -1615,14 +1616,18 @@ export async function updateRoastBattle(roastId, updates) {
 // ═══════════════════════════════════════════════════════════════════════════
 // ─── BANKING ───────────────────────────────────────────────────────────────
 
-const _bankCache = {}; // userId → {balance, last_interest}
+// LRU + 5min TTL: caps memory (1000 distinct users) and lets out-of-band
+// Supabase edits propagate within a bounded window instead of being silently
+// shadowed by a permanent in-memory copy.
+const _bankCache = new LRUCache(1000, 5 * 60_000);
 
 export async function getBankBalance(userId) {
-  if (_bankCache[userId]) return { ..._bankCache[userId] };
+  const cached = _bankCache.get(userId);
+  if (cached) return { ...cached };
   if (!supabase) return { balance: 0, last_interest: null };
   try {
     const { data } = await supabase.from("eris_bank").select("*").eq("user_id", userId).single();
-    if (data) { _bankCache[userId] = data; return { ...data }; }
+    if (data) { _bankCache.set(userId, data); return { ...data }; }
   } catch (e) { log(`[DB] ${e.message}`); }
   return { balance: 0, last_interest: null };
 }
@@ -1634,7 +1639,7 @@ export async function updateBankBalance(userId, delta) {
   if (supabase) {
     try { await supabase.from("eris_bank").upsert(row); } catch (e) { log(`[DB] ${e.message}`); }
   }
-  _bankCache[userId] = row;
+  _bankCache.set(userId, row);
   return newBal;
 }
 
@@ -1718,7 +1723,7 @@ export async function applyBankInterest(userId) {
   if (supabase) {
     try { await supabase.from("eris_bank").update({ last_interest: new Date().toISOString() }).eq("user_id", userId); } catch (e) { log(`[DB] ${e.message}`); }
   }
-  _bankCache[userId] = { ...updated, last_interest: new Date().toISOString() };
+  _bankCache.set(userId, { ...updated, last_interest: new Date().toISOString() });
   return actualInterest;
 }
 
@@ -1762,7 +1767,10 @@ export async function getMultipliers(userId) {
 
 // ─── MARRIAGE ──────────────────────────────────────────────────────────────
 
-const _marriageCache = new Map(); // userId → partner data or null
+// LRU + 5min TTL — bounds memory and prevents stale state lingering forever
+// after out-of-band DB edits. Writes (createMarriage/deleteMarriage) refresh
+// the entry so concurrent readers see the new state immediately.
+const _marriageCache = new LRUCache(500, 5 * 60_000);
 
 export async function getMarriage(userId) {
   if (_marriageCache.has(userId)) return _marriageCache.get(userId);
@@ -1781,6 +1789,10 @@ export async function createMarriage(user1Id, user2Id) {
   if (!supabase) return null;
   try {
     const { data } = await supabase.from("eris_marriages").insert({ user1_id: user1Id, user2_id: user2Id, married_at: new Date().toISOString() }).select().single();
+    // Invalidate-then-refresh both partners so any stale "null" cached during
+    // a getMarriage() that ran before the insert is replaced.
+    _marriageCache.delete(user1Id);
+    _marriageCache.delete(user2Id);
     _marriageCache.set(user1Id, data);
     _marriageCache.set(user2Id, data);
     return data;
@@ -1793,6 +1805,10 @@ export async function deleteMarriage(userId) {
   if (!marriage) return false;
   try {
     await supabase.from("eris_marriages").delete().eq("id", marriage.id);
+    // Invalidate-then-refresh — same rationale as createMarriage. Set to null
+    // so subsequent reads short-circuit without hitting Supabase.
+    _marriageCache.delete(marriage.user1_id);
+    _marriageCache.delete(marriage.user2_id);
     _marriageCache.set(marriage.user1_id, null);
     _marriageCache.set(marriage.user2_id, null);
     return true;

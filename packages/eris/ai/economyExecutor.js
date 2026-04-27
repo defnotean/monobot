@@ -185,16 +185,23 @@ export async function executeEconomyTool(toolName, input, message) {
     }
 
     case "loan_repay": {
-      const loan = await db.getActiveLoan(message.author.id);
-      if (!loan) return "you don't have any active loans";
-      const hoursOverdue = Math.max(0, (Date.now() - new Date(loan.due_at)) / 3600_000);
-      const total = calculateLoanTotal(loan.amount, loan.interest_rate, Math.floor(hoursOverdue));
-      const econ = await db.getBalance(message.author.id);
-      if (econ.balance < total) return `you owe ${total} coins but only have ${econ.balance}. get gambling`;
-      await db.updateBalance(message.author.id, -total, "loan_repay", `paid ${total}`);
-      await db.closeLoan(loan.id, "paid");
-      if (hoursOverdue <= 0) await db.unlockAchievement(message.author.id, "loan_paid");
-      return `paid back **${total}** coins. ${hoursOverdue > 0 ? "you were late but at least you paid" : "on time too, nice"} — balance: **${econ.balance - total}**`;
+      // Serialize the entire flow so two parallel repay calls can't both pass
+      // the affordability check and both deduct. Re-read loan + balance INSIDE
+      // the lock — values read before the lock may be stale by the time we
+      // get our turn.
+      return db.withUserLock(message.author.id, async () => {
+        const loan = await db.getActiveLoan(message.author.id);
+        if (!loan) return "you don't have any active loans";
+        const hoursOverdue = Math.max(0, (Date.now() - new Date(loan.due_at)) / 3600_000);
+        const total = calculateLoanTotal(loan.amount, loan.interest_rate, Math.floor(hoursOverdue));
+        const econ = await db.getBalance(message.author.id);
+        if (econ.balance < total) return `you owe ${total} coins but only have ${econ.balance}. get gambling`;
+        // Use the unsafe variant — outer withUserLock is non-reentrant.
+        await db.updateBalanceUnsafe(message.author.id, -total, "loan_repay", `paid ${total}`);
+        await db.closeLoan(loan.id, "paid");
+        if (hoursOverdue <= 0) await db.unlockAchievement(message.author.id, "loan_paid");
+        return `paid back **${total}** coins. ${hoursOverdue > 0 ? "you were late but at least you paid" : "on time too, nice"} — balance: **${econ.balance - total}**`;
+      });
     }
 
     // ─── BOUNTIES ──────────────────────────────────────────────────────

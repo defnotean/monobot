@@ -632,7 +632,10 @@ export async function executeSocialTool(toolName, input, message) {
       const stat = (input.stat || "").toLowerCase();
       if (!["attack", "defense", "speed"].includes(stat)) return "train what? options: attack, defense, speed";
 
-      const cd = db.checkCooldown(userId, "pet_train", 3600_000);
+      // Atomic check-and-set — closes the race where two parallel pet_train
+      // calls (e.g. AI re-firing within Promise.all) both pass the cooldown
+      // check and both deduct 100 coins.
+      const cd = db.tryAcquireCooldown(userId, "pet_train", 3600_000);
       if (cd.onCooldown) return `pet training on cooldown. ${Math.ceil(cd.remainingSec / 60)}min left`;
 
       const bal = await db.getBalance(userId);
@@ -642,7 +645,6 @@ export async function executeSocialTool(toolName, input, message) {
       if (!result) return "you don't have a pet! use pet_adopt first";
 
       await db.updateBalance(userId, -100, "pet_train", stat);
-      db.setCooldown(userId, "pet_train");
 
       return `trained your pet's ${stat}! +${result.gain} (now ${result.newValue})`;
     }
