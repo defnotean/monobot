@@ -281,6 +281,10 @@ export async function runGeminiChat({
   const currentModel = useFastModel ? GEMINI_FAST_MODEL : GEMINI_MODEL;
   const currentThinkBudget = useFastModel ? 256 : 4096;
   const currentTimeoutMs = useFastModel ? 35_000 : 60_000;
+  // maxOutputTokens MUST exceed thinkingBudget — thinking tokens count
+  // toward this cap, so a 2048 cap with a 4096 thinking budget left zero
+  // tokens for visible text and silently truncated mid-word.
+  const currentMaxOutputTokens = useFastModel ? 2048 : 8192;
 
   while (iterations < 15) {
     iterations++;
@@ -295,7 +299,7 @@ export async function runGeminiChat({
         config: {
           tools: geminiTools,
           systemInstruction,
-          maxOutputTokens: 2048,
+          maxOutputTokens: currentMaxOutputTokens,
           thinkingConfig: { thinkingBudget: currentThinkBudget },
         },
       });
@@ -320,7 +324,7 @@ export async function runGeminiChat({
           response = await geminiClient.models.generateContent({
             model: GEMINI_FALLBACK_MODEL,
             contents,
-            config: { tools: geminiTools, systemInstruction, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 4096 } },
+            config: { tools: geminiTools, systemInstruction, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 4096 } },
           });
           log(`[Gemini] Fallback to ${GEMINI_FALLBACK_MODEL} succeeded`);
           // Fallback succeeded — drop through to the normal response-handling
@@ -346,7 +350,7 @@ export async function runGeminiChat({
           response = await geminiClient.models.generateContent({
             model: GEMINI_FALLBACK_MODEL,
             contents,
-            config: { systemInstruction, tools: geminiTools, maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 4096 } },
+            config: { systemInstruction, tools: geminiTools, maxOutputTokens: 6144, thinkingConfig: { thinkingBudget: 4096 } },
           });
         } catch {}
         // If still empty, try once more without tools for a text response
@@ -384,6 +388,12 @@ export async function runGeminiChat({
 
     const parts = response.candidates[0].content.parts;
     const funcCalls = parts.filter((p) => p.functionCall);
+
+    // Surface MAX_TOKENS truncation — if this fires, raise maxOutputTokens
+    // for the call that produced this response (thinking budget eats into it).
+    if (response.candidates[0].finishReason === "MAX_TOKENS") {
+      log(`[Gemini] finishReason=MAX_TOKENS (iter ${iterations}) — visible reply may be truncated mid-sentence`);
+    }
 
     // Capture her ACTUAL internal thoughts from the model's reasoning process
     const thinkingParts = parts.filter((p) => p.thought && p.text).map((p) => p.text);
