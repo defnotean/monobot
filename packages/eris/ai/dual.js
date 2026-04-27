@@ -76,8 +76,13 @@ export async function quickReply(client, systemInstruction, userText, context) {
         contents: [{ role: "user", parts: [{ text: contextParts }] }],
         config: {
           systemInstruction,
-          maxOutputTokens: 150,
-          thinkingConfig: { thinkingBudget: 128 },
+          // 512 tokens visible budget — quickReply produces a short ack
+          // ("on it, creating that channel"), but the previous 150 cap
+          // collided with the 128-token thinking budget and frequently
+          // truncated the ack mid-word. Disable thinking entirely here:
+          // these are deterministic acknowledgements, not reasoning.
+          maxOutputTokens: 512,
+          thinkingConfig: { thinkingBudget: 0 },
         },
       }),
       new Promise((_, reject) => setTimeout(() => reject(new Error("quickReply timeout")), 5000)),
@@ -213,6 +218,11 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
 
   const currentModel = useFastModel ? config.geminiFastModel : config.geminiModel;
   const currentThinkBudget = useFastModel ? 256 : 4096;
+  // maxOutputTokens MUST exceed thinkingBudget — thinking tokens count
+  // toward this cap, so a 2048 cap with a 4096 thinking budget left zero
+  // tokens for visible text and silently truncated mid-word. Mirrors the
+  // fix landed in irene/ai/dual.js.
+  const currentMaxOutputTokens = useFastModel ? 2048 : 8192;
 
   const run = async () => {
     for (let i = 0; i < MAX_ITERATIONS; i++) {
@@ -224,10 +234,15 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
           config: {
             systemInstruction,
             tools: geminiTools,
-            maxOutputTokens: 2048,
+            maxOutputTokens: currentMaxOutputTokens,
             thinkingConfig: { thinkingBudget: currentThinkBudget },
           },
         });
+        // Surface MAX_TOKENS truncation so future regressions are visible
+        // instead of silent. If this fires, raise currentMaxOutputTokens.
+        if (response?.candidates?.[0]?.finishReason === "MAX_TOKENS") {
+          log(`[Eris] finishReason=MAX_TOKENS (iter ${i}) — visible reply may be truncated`);
+        }
       } catch (apiErr) {
         const errMsg = apiErr?.message || String(apiErr);
         // Detect 429 rate limit

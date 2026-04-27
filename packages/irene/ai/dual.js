@@ -55,8 +55,12 @@ export async function quickReply(geminiClient, systemInstruction, userText, cont
 Do NOT say "I'll use X tool" or describe your process. Just acknowledge naturally like a person would.
 CRITICAL: Check the PERMISSION level in the system prompt above. If this user is a MEMBER asking for admin/mod actions (ban, kick, create channel, manage roles, purge, lock, etc), do NOT acknowledge — instead mock them for not having perms ("lol you wish" or "cute that you think you can do that"). Only say "on it" if they actually have the perms for what they asked.
 If this is just a casual conversation (greeting, question, chitchat) and NOT a task/command, respond normally as a full conversational reply instead.`,
-        maxOutputTokens: 150,
-        thinkingConfig: { thinkingBudget: 128 },
+        // 512 tokens visible budget — quickReply produces a short ack but
+        // the previous 150 cap collided with the 128-token thinking budget
+        // and frequently truncated mid-word. Disable thinking entirely
+        // here: these are deterministic acknowledgements, not reasoning.
+        maxOutputTokens: 512,
+        thinkingConfig: { thinkingBudget: 0 },
       },
     });
     const timeout = new Promise((_, rej) => { timeoutId = setTimeout(() => rej(new Error("timeout")), 5000); });
@@ -580,8 +584,30 @@ export async function runGeminiChat({
     contents.push({ role: "user", parts: funcResponses });
   }
 
-  // Hit max iterations — let the user know instead of silently stopping
-  log(`[Gemini] Hit ${iterations} iteration limit for tool loop`);
+  // Hit max iterations — give the model one final no-tools turn so it can
+  // summarize what it did using the tool results in history. Without this,
+  // the user gets a canned message even when iter 15's tool results are
+  // perfectly usable for a final answer.
+  log(`[Gemini] Hit ${iterations} iteration limit — final summary turn`);
+  try {
+    const summaryResp = await geminiClient.models.generateContent({
+      model: GEMINI_FALLBACK_MODEL,
+      contents,
+      config: {
+        systemInstruction: systemInstruction + "\n\n[NOTE] You hit the tool iteration limit. Summarize what you accomplished using the tool results above. Do not call any more tools — just respond in text.",
+        maxOutputTokens: 2048,
+      },
+    });
+    const summaryParts = summaryResp.candidates?.[0]?.content?.parts || [];
+    const summaryText = summaryParts.filter(p => p.text && !p.thought).map(p => p.text).join("").trim();
+    if (summaryText) {
+      const trimmed = summaryText.slice(0, 1900);
+      history.push({ role: "assistant", content: trimmed });
+      return { text: trimmed, toolsUsed, history };
+    }
+  } catch (err) {
+    log(`[Gemini] Final summary turn failed: ${err.message}`);
+  }
   return { text: "done — that was a complex task so i hit my action limit, let me know if anything's still missing", toolsUsed, history };
 }
 
