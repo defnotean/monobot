@@ -266,6 +266,14 @@ async function main() {
 
   // Start feature timers after bot is ready
   client.once("clientReady", async () => {
+    // Boot-time firewall seeding — kept off the hot-path so the first message
+    // from a user doesn't pay the 10-15s pgvector reseed cost. Fire-and-forget.
+    import("./ai/firewall.js").then(async ({ seedPatternsAtBoot }) => {
+      const { getSupabase } = await import("./database.js");
+      const supabase = getSupabase?.();
+      if (supabase) await seedPatternsAtBoot(supabase);
+    }).catch(e => log(`[FIREWALL] seed failed: ${e?.message ?? e}`));
+
     try {
       const { startGiveawayTimers } = await import("./commands/fun/giveaway.js");
       startGiveawayTimers(client);

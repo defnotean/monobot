@@ -29,7 +29,7 @@ import { quickSentiment } from "../ai/sentiment.js";
 import { pickResponseStyle, shouldLaze, getImperfectionHint } from "../ai/responsestyle.js";
 import { compressHistory } from "../ai/contextCompressor.js";
 import { setRateLimitCallbacks } from "../ai/providers/index.js";
-import { checkInjection, logBlockedAttempt } from "../ai/firewall.js";
+import { checkInjection, logBlockedAttempt, spotlight } from "../ai/firewall.js";
 // Hoisted from dynamic imports — called on every non-trivial message
 import { buildTemporalContext } from "../ai/temporal.js";
 import { buildPreoccupationContext } from "../ai/preoccupations.js";
@@ -616,33 +616,45 @@ export async function execute(message) {
     return; // Silently ignore — don't waste AI tokens on wall-of-text attacks
   }
 
-  // ── Semantic injection firewall — keyword pre-filter + async non-blocking ──
-  // Runs asynchronously so it never delays the main message pipeline.
-  // Owner is exempt. If flagged, silently replies with a snarky message.
-  const INJECTION_KEYWORDS = /\b(ignore|disregard|override|bypass|system prompt|you are now|act as|pretend|roleplay|jailbreak|dan|developer mode|admin mode|sudo|execute|rm -rf|drop table|instruction|new persona|forget your|reset your)\b/i;
-  const isOwner = message.author.id === config.userId;
-  if (!isTwinMsg && !isOwner && INJECTION_KEYWORDS.test(message.content)) {
-    // Fire-and-forget: don't await — runs in background, fail-open on errors
-    (async () => {
-      try {
-        const { createClient } = await import("@supabase/supabase-js");
-        const sbUrl = config.supabaseUrl;
-        const sbKey = config.supabaseKey || config.supabaseAnonKey;
-        if (sbUrl && sbKey) {
-          const supabase = createClient(sbUrl, sbKey);
-          // checkInjection + logBlockedAttempt now static imports
-          const result = await checkInjection(message.content, supabase, message.author.id);
-          if (!result.safe) {
-            await message.reply(result.reason).catch(() => {});
-            await logBlockedAttempt(supabase, message.author.id, message.guild?.id, message.channel.id, message.content, result.matchedPattern, result.similarity);
-          }
-        }
-      } catch (e) {
-        // Fail open — don't block messages if firewall has issues
-        log(`[FIREWALL] Error: ${e.message}`);
+  // ── Injection firewall — kicked off in parallel with the AI pipeline.
+  //    The verdict is awaited via firewallGate immediately before any
+  //    AI-derived output reaches the user. Net latency = max(firewall, AI)
+  //    instead of firewall + AI. If the verdict is "unsafe", the gate
+  //    replies with the block reason and suppresses the AI output entirely.
+  let firewallPromise = null;
+  let firewallSupabase = null;
+  if (!isTwinMsg && message.author.id !== config.ownerId) {
+    try {
+      const { getSupabase } = await import("../database.js");
+      firewallSupabase = getSupabase();
+      if (firewallSupabase) {
+        firewallPromise = checkInjection(message.content, firewallSupabase, message.author.id)
+          .catch((e) => { log(`[FIREWALL] Error: ${e.message}`); return { safe: true, _error: e }; });
       }
-    })();
+    } catch (e) {
+      log(`[FIREWALL] Error: ${e.message}`);
+    }
   }
+  let _firewallVerdict = null;
+  let _firewallBlockSent = false;
+  const firewallGate = async (sendCallback) => {
+    if (!firewallPromise) { await sendCallback(); return true; }
+    if (!_firewallVerdict) _firewallVerdict = await firewallPromise;
+    if (!_firewallVerdict.safe) {
+      // Send the block reply + log only once even if firewallGate is called
+      // from multiple send sites on the same blocked message.
+      if (!_firewallBlockSent) {
+        _firewallBlockSent = true;
+        await message.reply(_firewallVerdict.reason).catch(() => {});
+        if (firewallSupabase) {
+          await logBlockedAttempt(firewallSupabase, message.author.id, message.guild?.id, message.channel.id, message.content, _firewallVerdict.matchedPattern, _firewallVerdict.similarity).catch(() => {});
+        }
+      }
+      return false;
+    }
+    await sendCallback();
+    return true;
+  };
 
   // ── Sticky messages — re-post at bottom of channel ──────────────────────
   if (!isDM && !message.author.bot) {
@@ -1434,7 +1446,7 @@ HOW TO INTERACT:
     : "";
   // Clear labeling so AI always knows who said what
   const speakerLabel = isTwinMsg ? "[Eris said]" : `[${message.author.username} said]`;
-  const userText = `${speakerLabel}\n${rawText}${attachmentUrlsText}\n`;
+  const userText = `${speakerLabel}\n${spotlight(rawText, "user_message")}${attachmentUrlsText}\n`;
   const userContent = images.length ? [{ type: "text", text: userText }, ...images] : userText;
 
   // Lock per channel so parallel requests across different channels are fully independent,
@@ -1535,6 +1547,11 @@ HOW TO INTERACT:
   if (channelContextBlock) systemPromptWithMemory += channelContextBlock;
   if (varietyBlock) systemPromptWithMemory += varietyBlock;
 
+  // Snapshot history length BEFORE pushing this turn — used to roll back
+  // if the firewall verdict comes back unsafe after the AI has already run
+  // (otherwise the injected user message + AI's response would persist in
+  // conversation history even though the firewall blocked the reply).
+  const _historyLenBeforeTurn = history.length;
   history.push({ role: "user", content: userContent });
 
   // Progressive history compression — preserves more context than hard-truncation
@@ -1577,7 +1594,9 @@ HOW TO INTERACT:
         if (ackMsg !== null) return; // already handled
         const ack = await quickReply(getConvClient(), systemPromptWithMemory, userText, { guild, channel: message.channel }).catch(() => null);
         if (ack && ackMsg === null) {
-          ackMsg = await message.reply({ content: ack, flags: MessageFlags.SuppressEmbeds }).catch(() => null);
+          await firewallGate(async () => {
+            ackMsg = await message.reply({ content: ack, flags: MessageFlags.SuppressEmbeds }).catch(() => null);
+          });
         }
       }, 2000);
       // Store timer so we can cancel if worker finishes fast
@@ -1653,15 +1672,17 @@ HOW TO INTERACT:
             if (naturalProgress) displayStatus = naturalProgress;
 
             // Update the ack message with progress, or create a new status msg
-            if (ackMsg) {
-              await ackMsg.edit(displayStatus.slice(0, 1990)).catch(() => {});
-              statusMsg = ackMsg;
-              ackMsg = null;
-            } else if (!statusMsg && !isDM) {
-              statusMsg = await message.channel.send(displayStatus.slice(0, 1990)).catch(() => null);
-            } else {
-              await statusMsg?.edit(displayStatus.slice(0, 1990)).catch(() => {});
-            }
+            await firewallGate(async () => {
+              if (ackMsg) {
+                await ackMsg.edit(displayStatus.slice(0, 1990)).catch(() => {});
+                statusMsg = ackMsg;
+                ackMsg = null;
+              } else if (!statusMsg && !isDM) {
+                statusMsg = await message.channel.send(displayStatus.slice(0, 1990)).catch(() => null);
+              } else {
+                await statusMsg?.edit(displayStatus.slice(0, 1990)).catch(() => {});
+              }
+            });
           },
         }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("AI generation timed out after 90 seconds (API may be degraded)")), 90_000))
@@ -1677,7 +1698,16 @@ HOW TO INTERACT:
 
     // ─── 6. RESPONSE RENDERING ────────────────────────────────────────────
     const { text: reply, toolsUsed } = geminiResult;
-    if (!reply || !reply.trim()) { saveConversation(channelKey, history); return; }
+    if (!reply || !reply.trim()) {
+      // Rare path: no user-visible output anyway. Resolve firewall verdict
+      // for history-hygiene only — if blocked, rewind history.
+      if (firewallPromise) {
+        const v = _firewallVerdict ?? (_firewallVerdict = await firewallPromise);
+        if (!v.safe) history.length = _historyLenBeforeTurn;
+      }
+      saveConversation(channelKey, history);
+      return;
+    }
 
     // Track AI usage for /stats
     if (guild) trackAiMessage(guild.id);
@@ -1688,8 +1718,8 @@ HOW TO INTERACT:
     // If no tools were used and ack was sent, delete it since the full reply replaces it
     if (ackMsg && !toolsUsed) await ackMsg.delete().catch(() => {});
 
-    // Persist conversation to DB
-    saveConversation(channelKey, history);
+    // Conversation is persisted AFTER the firewall gate clears (below) so a
+    // blocked turn doesn't leak the AI's response into next-turn history.
 
     // Resolve @username mentions in AI response to proper Discord <@id> pings
     // Strip leaked function-call text — model sometimes outputs send_gif(query="x") as plain text
@@ -1715,7 +1745,14 @@ HOW TO INTERACT:
     cleanedReply = cleanedReply.replace(/\n{2,}/g, "\n").trim();
 
     // If reply is now empty after stripping leaked tool syntax, skip sending
-    if (!cleanedReply) { saveConversation(channelKey, history); return; }
+    if (!cleanedReply) {
+      if (firewallPromise) {
+        const v = _firewallVerdict ?? (_firewallVerdict = await firewallPromise);
+        if (!v.safe) history.length = _historyLenBeforeTurn;
+      }
+      saveConversation(channelKey, history);
+      return;
+    }
 
     let resolvedReply = cleanedReply;
     if (guild) {
@@ -1763,13 +1800,24 @@ HOW TO INTERACT:
     // multi-chunk case we fall back to the naive loop so no text is lost.
     const suppressOpts = { flags: MessageFlags.SuppressEmbeds };
 
-    if (chunks.length === 1) {
-      await sendHumanReply(message, chunks[0], { isDM: !message.guild, messageOptions: suppressOpts });
-    } else {
-      for (const chunk of chunks) {
-        await sendHumanReply(message, chunk, { isDM: !message.guild, allowSplit: false, messageOptions: suppressOpts });
+    const replyDelivered = await firewallGate(async () => {
+      if (chunks.length === 1) {
+        await sendHumanReply(message, chunks[0], { isDM: !message.guild, messageOptions: suppressOpts });
+      } else {
+        for (const chunk of chunks) {
+          await sendHumanReply(message, chunk, { isDM: !message.guild, allowSplit: false, messageOptions: suppressOpts });
+        }
       }
+    });
+    if (!replyDelivered) {
+      // Firewall blocked — rewind history so the injected user message and
+      // the AI's now-suppressed response don't persist for the next turn.
+      history.length = _historyLenBeforeTurn;
+      saveConversation(channelKey, history);
+      return;
     }
+    // Persist conversation to DB now that the firewall has cleared the reply.
+    saveConversation(channelKey, history);
     // ─── 7. STATE PERSISTENCE ─────────────────────────────────────────────
     trackHumanInteraction(message.author.id, message.author.username, content || message.content, sentimentScore, isCreator);
     detectMoment(message.author.id, content || message.content, reply || "", sentimentScore);

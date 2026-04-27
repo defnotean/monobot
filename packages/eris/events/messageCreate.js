@@ -22,7 +22,7 @@ import { detectBumpService, handleBumpConfirm } from "../ai/bumpReminder.js";
 // AI provider routing — dispatches to the active provider (NVIDIA Kimi by
 // default, Gemini available via AI_PROVIDER=gemini). See ai/providers/index.js
 import { isRateLimited, runGeminiChat, toGeminiTools, looksLikeTask, quickReply, setRateLimitCallbacks } from "../ai/providers/index.js";
-import { checkInjection, logBlockedAttempt } from "../ai/firewall.js";
+import { checkInjection, logBlockedAttempt, spotlight } from "../ai/firewall.js";
 import { buildTemporalContext } from "../ai/temporal.js";
 import { buildPersonalityContext, trackInteraction as trackPersonality, _getData as getPersonalityData } from "../ai/personality.js";
 import { buildPreoccupationContext, tickPreoccupation } from "../ai/preoccupations.js";
@@ -557,22 +557,32 @@ export default async function messageCreate(message) {
     log(`[GUARD] Blocked long message (${message.content.length} chars) from ${message.author?.tag}`);
     return;
   }
-  // ── Injection firewall — keyword pre-filter, only runs on suspicious messages ──
-  const INJECTION_KEYWORDS = /\b(ignore|disregard|override|bypass|system prompt|you are now|act as|pretend|jailbreak|dan|developer mode|admin mode|sudo|execute|rm -rf|drop table|instruction|new persona|forget your|reset your)\b/i;
-  if (!isTwin && message.author.id !== config.ownerId && INJECTION_KEYWORDS.test(message.content)) {
-    try {
-      const supabase = db.getSupabase();
-      if (supabase) {
-        // checkInjection + logBlockedAttempt now static imports
-        const result = await checkInjection(message.content, supabase, message.author.id);
-        if (!result.safe) {
-          await message.reply(result.reason).catch(() => {});
-          logBlockedAttempt(supabase, message.author.id, message.guildId, message.channel.id, message.content, result.matchedPattern, result.similarity).catch(() => {});
-          return;
-        }
-      }
-    } catch (e) { log(`[MSG] ${e.message}`); } // Firewall failure should never block normal operation
+  // ── Injection firewall — speculative: kick off non-awaited so AI runs in parallel.
+  // Verdict is awaited via `firewallGate` immediately before any user-visible send.
+  // Net latency: max(firewall, AI) instead of firewall + AI.
+  let firewallPromise = null;
+  if (!isTwin && message.author.id !== config.ownerId) {
+    const supabase = db.getSupabase();
+    if (supabase) {
+      firewallPromise = checkInjection(message.content, supabase, message.author.id)
+        .catch(e => { log(`[FIREWALL] Error: ${e.message}`); return { safe: true, _error: e }; });
+    }
   }
+  // firewallGate: memoized verdict check. Either runs `sendCallback` (safe) or
+  // sends the block reason (unsafe) and logs. Returns true iff the safe path ran.
+  let _firewallVerdict = null;
+  const firewallGate = async (sendCallback) => {
+    if (!firewallPromise) { await sendCallback(); return true; }
+    if (!_firewallVerdict) _firewallVerdict = await firewallPromise;
+    if (!_firewallVerdict.safe) {
+      await message.reply(_firewallVerdict.reason).catch(() => {});
+      const sb = db.getSupabase();
+      if (sb) logBlockedAttempt(sb, message.author.id, message.guildId, message.channel.id, message.content, _firewallVerdict.matchedPattern, _firewallVerdict.similarity).catch(() => {});
+      return false;
+    }
+    await sendCallback();
+    return true;
+  };
 
   markActivity();
   log(`[MSG] ${isDM ? "DM" : `#${message.channel.name}`} from ${message.author.username}`);
@@ -628,7 +638,7 @@ export default async function messageCreate(message) {
       let crossChannelCtx = "";
       if (crossChannelData?.data?.length) {
         const summaries = crossChannelData.data.filter(m => !m.is_bot).map(m => m.content).slice(0, 3);
-        crossChannelCtx = `\n[CONTEXT: this user also recently said in other channels: ${summaries.join(" | ")}]`;
+        crossChannelCtx = `\n[CONTEXT: this user also recently said in other channels: ${spotlight(summaries.join(" | "), "cross_channel_snippet")}]`;
       }
 
       // Resolve per-server name and personality
@@ -643,7 +653,7 @@ export default async function messageCreate(message) {
 
       // Tell the AI who is currently speaking — critical for owner recognition
       const isCreatorSpeaking = message.author.id === config.ownerId;
-      systemInstruction += `\n\n[Currently speaking: ${displayName} (User ID: ${message.author.id})${isCreatorSpeaking ? " — THIS IS YOUR CREATOR defnotean (boss). recognize him." : ""}]`;
+      systemInstruction += `\n\n[Currently speaking: ${spotlight(displayName, "user_displayname")} (User ID: ${message.author.id})${isCreatorSpeaking ? " — THIS IS YOUR CREATOR defnotean (boss). recognize him." : ""}]`;
       if (message.guild) systemInstruction += `\n[Server: ${message.guild.name} | Channel: #${message.channel.name}]`;
 
       if (memoryCtx) systemInstruction += `\n\n[SYSTEM: ${memoryCtx}]`;
@@ -904,7 +914,7 @@ export default async function messageCreate(message) {
       // Earlier channel messages live in the system-prompt context block, not
       // in history, so the model knows exactly who it's replying to.
       const speakerLabel = isTwinMsg ? "[Irene said]" : `[${displayName} said]`;
-      const userMsg = `${speakerLabel}\n${cleanMessage}`;
+      const userMsg = `${speakerLabel}\n${spotlight(cleanMessage, "user_message")}`;
       history.push({ role: "user", parts: [{ text: userMsg }] });
 
       // Progressive history compression — preserves context while fitting budget
@@ -1143,22 +1153,28 @@ HOW TO INTERACT:
         // into 2-3 messages at natural breakpoints.
         // sendHumanReply now static import
 
+        // Speculative-firewall gate: await verdict, send AI reply only if safe.
+        let _replyDelivered = false;
         if (isDM) {
-          await sendHumanReply(message, reply, { isDM: true });
+          _replyDelivered = await firewallGate(() => sendHumanReply(message, reply, { isDM: true }));
         } else {
-          trackHumanInteraction(message.author.id, displayName, cleanMessage, sentimentScore, message.author.id === config.ownerId);
-          detectMoment(message.author.id, cleanMessage, reply || "", sentimentScore);
-          markBotResponded(message.guildId || "dm", message.author.id);
-          await sendHumanReply(message, reply, { isDM: false });
-          // If we asked a question, track this user for a follow-up without needing @mention
-          if (!isTwinMsg) {
-            if (reply.includes("?")) {
-              _awaitingReply.set(message.channel.id, { userId: message.author.id, until: Date.now() + AWAIT_REPLY_MS });
-            } else {
-              _awaitingReply.delete(message.channel.id);
+          _replyDelivered = await firewallGate(async () => {
+            trackHumanInteraction(message.author.id, displayName, cleanMessage, sentimentScore, message.author.id === config.ownerId);
+            detectMoment(message.author.id, cleanMessage, reply || "", sentimentScore);
+            markBotResponded(message.guildId || "dm", message.author.id);
+            await sendHumanReply(message, reply, { isDM: false });
+            // If we asked a question, track this user for a follow-up without needing @mention
+            if (!isTwinMsg) {
+              if (reply.includes("?")) {
+                _awaitingReply.set(message.channel.id, { userId: message.author.id, until: Date.now() + AWAIT_REPLY_MS });
+              } else {
+                _awaitingReply.delete(message.channel.id);
+              }
             }
-          }
+          });
         }
+        // If firewall blocked, skip post-reply work that depends on the reply being sent.
+        if (!_replyDelivered) { clearInterval(_typingInterval); return; }
 
         await db.saveInteraction(client.user.id, botName, message.channel.id, reply, true);
 
@@ -1189,7 +1205,8 @@ HOW TO INTERACT:
                 const replyWords = new Set(reply.toLowerCase().split(/\s+/));
                 const overlap = [...afterWords].filter(w => replyWords.has(w) && w.length > 2).length;
                 if (overlap / afterWords.size < 0.4) {
-                  await message.channel.send(afterText);
+                  // Defensive: re-check firewall verdict (verdict is cached at this point).
+                  await firewallGate(() => message.channel.send(afterText));
                 }
               }
             } catch (e) { log(`[MSG] ${e.message}`); }
@@ -1289,7 +1306,8 @@ HOW TO INTERACT:
       if (currentMood.energy <= 15 && !isSleeping()) {
         log(`[AUTO-SLEEP] Eris energy critically low (${currentMood.energy}), auto-napping`);
         try {
-          await message.channel.send("im so tired... gonna take a quick nap, wake me up later 💤");
+          // Defensive: re-check firewall verdict (verdict is cached at this point).
+          await firewallGate(() => message.channel.send("im so tired... gonna take a quick nap, wake me up later 💤"));
         } catch (e) { log(`[MSG] ${e.message}`); }
         triggerSleep(true); // auto-nap, not full sleep
       }
@@ -1311,7 +1329,8 @@ HOW TO INTERACT:
       } else {
         friendlyMsg = "something broke, try again in a sec";
       }
-      await message.reply(friendlyMsg).catch(() => {});
+      // Gate: if firewall flagged the input, send block reason instead of error reply.
+      await firewallGate(() => message.reply(friendlyMsg).catch(() => {})).catch(() => {});
     }
   });
 }

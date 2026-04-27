@@ -1,6 +1,6 @@
 {
   "name": "@defnotean/shared",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Shared core utilities for the Eris + Irene twin-bot system",
   "type": "module",
@@ -10,10 +10,23 @@
     "./roleCategorizer": "./src/roleCategorizer.js",
     "./twinSign": "./src/twinSign.js",
     "./LRUCache": "./src/LRUCache.js",
-    "./safeFetch": "./src/safeFetch.js"
+    "./safeFetch": "./src/safeFetch.js",
+    "./firewall": "./src/ai/firewall.js",
+    "./firewallPatterns": "./src/ai/firewallPatterns.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "discord.js": "14.26.3"
+  },
+  "optionalDependencies": {
+    "@xenova/transformers": "^2.17.2",
+    "onnxruntime-node": "^1.20.1"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.9"
   },
   "author": "defnotean",
   "license": "ISC"
