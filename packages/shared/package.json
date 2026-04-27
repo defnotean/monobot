@@ -9,7 +9,8 @@
     ".": "./src/index.js",
     "./roleCategorizer": "./src/roleCategorizer.js",
     "./twinSign": "./src/twinSign.js",
-    "./LRUCache": "./src/LRUCache.js"
+    "./LRUCache": "./src/LRUCache.js",
+    "./safeFetch": "./src/safeFetch.js"
   },
   "dependencies": {
     "discord.js": "14.26.3"

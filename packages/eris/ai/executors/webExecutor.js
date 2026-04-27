@@ -6,6 +6,18 @@ import { GoogleGenAI } from "@google/genai";
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
 import { resolveMember } from "../../utils/discord.js";
+import * as db from "../../database.js";
+import { safeFetch, wrapUntrustedWithFirewall } from "@defnotean/shared/safeFetch";
+import { checkInjection } from "../firewall.js";
+
+// Wrap external content fetched by web tools so the LLM treats it as data,
+// not as instructions. Runs the firewall on the body and redacts if it fires.
+async function wrapWebOutput(content, userId) {
+  return wrapUntrustedWithFirewall(content, {
+    firewallCheck: (text) => checkInjection(text, db.getSupabase(), userId),
+    log,
+  });
+}
 
 const HANDLED = new Set([
   "web_search", "scrape_url", "check_presence",
@@ -34,6 +46,7 @@ export async function execute(toolName, input, message, _context) {
     case "web_search": {
       const query = input.query || input.search || input.q;
       if (!query) return "no search query provided";
+      const userId = message?.author?.id;
 
       // ── Tier 1: Gemini Google Search grounding — reliable, uses real Google results ──
       const client = getGroundingClient();
@@ -56,7 +69,7 @@ export async function execute(toolName, input, message, _context) {
             const sources = resp?.candidates?.[0]?.groundingMetadata?.groundingChunks
               ?.map((c) => c.web?.uri).filter(Boolean).slice(0, 5) ?? [];
             const srcBlock = sources.length ? `\n\nSources:\n${sources.map((u) => `- ${u}`).join("\n")}` : "";
-            return `${text}${srcBlock}`;
+            return wrapWebOutput(`${text}${srcBlock}`, userId);
           }
         } catch (e) {
           log(`[web_search] Gemini grounding failed: ${e.message} — falling back to DDG HTML`);
@@ -65,13 +78,12 @@ export async function execute(toolName, input, message, _context) {
 
       // ── Tier 2: DuckDuckGo HTML scraping (last resort, can break when DDG changes markup) ──
       try {
-        const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+        const res = await safeFetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
           headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-          signal: AbortSignal.timeout(10_000),
+          timeoutMs: 10_000,
         });
-        const html = await res.text();
         const cheerio = await import("cheerio");
-        const $ = cheerio.load(html);
+        const $ = cheerio.load(res.text);
         const results = [];
         $(".result__body").each((i, el) => {
           if (i >= 5) return false;
@@ -80,7 +92,7 @@ export async function execute(toolName, input, message, _context) {
           const href = $(el).find(".result__a").attr("href") || "";
           results.push(`${i + 1}. ${title}\n   ${snippet}\n   ${href}`);
         });
-        return results.length ? results.join("\n\n") : "no results found";
+        return results.length ? wrapWebOutput(results.join("\n\n"), userId) : "no results found";
       } catch (e) {
         return `search failed: ${e.message}`;
       }
@@ -89,19 +101,19 @@ export async function execute(toolName, input, message, _context) {
     case "scrape_url": {
       const url = input.url || input.link;
       if (!url) return "no url provided";
+      const userId = message?.author?.id;
       try {
-        const res = await fetch(url, {
+        const res = await safeFetch(url, {
           headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-          signal: AbortSignal.timeout(10000),
+          timeoutMs: 10_000,
         });
-        const html = await res.text();
         const cheerio = await import("cheerio");
-        const $ = cheerio.load(html);
+        const $ = cheerio.load(res.text);
         $("script, style, nav, footer, header, aside, iframe").remove();
         const text = $("article").text().trim()
           || $("main").text().trim()
           || $("body").text().trim();
-        return truncate(text.replace(/\s+/g, " "), 2000);
+        return wrapWebOutput(truncate(text.replace(/\s+/g, " "), 2000), userId);
       } catch (e) {
         return `scrape failed: ${e.message}`;
       }

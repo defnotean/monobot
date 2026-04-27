@@ -1,12 +1,23 @@
 // ─── Advanced / Misc Executor ───────────────────────────────────────────────
 
 import { Parser as ExprParser } from "expr-eval";
-import { addReminder, removeReminder, addScheduledTask, getScheduledTasks, getScheduledTask, removeScheduledTask } from "../../database.js";
+import { addReminder, removeReminder, addScheduledTask, getScheduledTasks, getScheduledTask, removeScheduledTask, getSupabase } from "../../database.js";
 import { armScheduledTask, scheduledTaskTimers, NON_SCHEDULABLE } from "../../utils/scheduler.js";
 import { log } from "../../utils/logger.js";
 import config from "../../config.js";
 import { GoogleGenAI } from "@google/genai";
 import { signTwinRequest } from "@defnotean/shared/twinSign";
+import { safeFetch, wrapUntrustedWithFirewall } from "@defnotean/shared/safeFetch";
+import { checkInjection } from "../firewall.js";
+
+// Wrap external content fetched by web tools so the LLM treats it as data,
+// not as instructions. Runs the firewall on the body and redacts if it fires.
+async function wrapWebOutput(content, userId) {
+  return wrapUntrustedWithFirewall(content, {
+    firewallCheck: (text) => checkInjection(text, getSupabase(), userId),
+    log,
+  });
+}
 
 // Helper for ask_eris — POSTs to Eris's /api/twin/* are gated by HMAC headers
 // (or a legacy body.secret); GETs are ungated. We sign POSTs only.
@@ -329,6 +340,7 @@ export async function execute(toolName, input, message, ctx) {
       const rateErr = checkWebRateLimit(message.author.id, webRateLimitPerMin);
       if (rateErr) return rateErr;
       if (!input.query) return "No search query provided.";
+      const userId = message.author.id;
 
       const encoded = encodeURIComponent(input.query);
 
@@ -339,14 +351,14 @@ export async function execute(toolName, input, message, ctx) {
         try {
           // Custom Search API takes the key as a query parameter, NOT x-goog-api-key header.
           const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(googleKey)}&cx=${encodeURIComponent(googleCx)}&q=${encoded}&num=5`;
-          const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-          if (res.ok) {
-            const data = await res.json();
+          const res = await safeFetch(url, { timeoutMs: 10_000 });
+          if (res.status >= 200 && res.status < 300) {
+            const data = JSON.parse(res.text);
             if (data.items?.length) {
               const results = data.items.slice(0, 5).map((item, i) =>
                 `${i + 1}. **${item.title}**\n   ${item.link}\n   ${item.snippet ?? ""}`
               );
-              return `🔍 Search results for "${input.query}":\n\n${results.join("\n\n")}`;
+              return wrapWebOutput(`🔍 Search results for "${input.query}":\n\n${results.join("\n\n")}`, userId);
             }
           } else {
             log(`[web_search] Google CSE ${res.status} — falling back to Gemini grounding`);
@@ -378,7 +390,7 @@ export async function execute(toolName, input, message, ctx) {
             const sources = resp?.candidates?.[0]?.groundingMetadata?.groundingChunks
               ?.map((c) => c.web?.uri).filter(Boolean).slice(0, 5) ?? [];
             const srcBlock = sources.length ? `\n\nSources:\n${sources.map((u) => `- ${u}`).join("\n")}` : "";
-            return `🔍 "${input.query}":\n\n${text}${srcBlock}`;
+            return wrapWebOutput(`🔍 "${input.query}":\n\n${text}${srcBlock}`, userId);
           }
         } catch (err) {
           log(`[web_search] Gemini grounding failed: ${err.message} — falling back to DDG`);
@@ -388,8 +400,8 @@ export async function execute(toolName, input, message, ctx) {
       // ── Tier 3: DuckDuckGo instant answer (last resort) ──
       try {
         const ddgUrl = `https://api.duckduckgo.com/?q=${encoded}&format=json&no_html=1&skip_disambig=1`;
-        const res = await fetch(ddgUrl, { signal: AbortSignal.timeout(8_000) });
-        const data = await res.json();
+        const res = await safeFetch(ddgUrl, { timeoutMs: 8_000 });
+        const data = JSON.parse(res.text);
 
         const parts = [];
         if (data.AbstractText) parts.push(`**${data.AbstractSource}**: ${data.AbstractText}`);
@@ -400,7 +412,7 @@ export async function execute(toolName, input, message, ctx) {
             .map((t, i) => `${i + 1}. ${t.Text}${t.FirstURL ? ` — ${t.FirstURL}` : ""}`);
           if (topics.length) parts.push(`**Related**:\n${topics.join("\n")}`);
         }
-        if (parts.length) return `🔍 "${input.query}":\n\n${parts.join("\n\n")}`;
+        if (parts.length) return wrapWebOutput(`🔍 "${input.query}":\n\n${parts.join("\n\n")}`, userId);
 
         const liteUrl = `https://lite.duckduckgo.com/lite/?q=${encoded}`;
         return `No results found. Try searching directly: ${liteUrl}`;
@@ -413,24 +425,14 @@ export async function execute(toolName, input, message, ctx) {
       const rateErr = checkWebRateLimit(message.author.id, webRateLimitPerMin);
       if (rateErr) return rateErr;
       if (!input.url) return "No URL provided.";
+      const userId = message.author.id;
       try {
-        const parsed = new URL(input.url);
-        if (!["http:", "https:"].includes(parsed.protocol)) return "Only HTTP/HTTPS URLs allowed";
-        const host = parsed.hostname.toLowerCase();
-        if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" ||
-            host === "::1" || host === "::" || host === "169.254.169.254" ||
-            host.startsWith("10.") || host.startsWith("172.16.") || host.startsWith("192.168.") ||
-            host.endsWith(".internal") || host.endsWith(".local")) {
-          return "Can't access private/internal networks";
-        }
-      } catch { return "Invalid URL"; }
-      try {
-        const res = await fetch(input.url, {
+        const res = await safeFetch(input.url, {
           headers: { "User-Agent": "Mozilla/5.0 (compatible; DiscordBot/1.0)" },
-          signal: AbortSignal.timeout(10_000),
+          timeoutMs: 10_000,
         });
-        if (!res.ok) return `Failed to fetch: HTTP ${res.status}`;
-        const html = await res.text();
+        if (res.status < 200 || res.status >= 300) return `Failed to fetch: HTTP ${res.status}`;
+        const html = res.text;
 
         const text = html
           .replace(/<script[\s\S]*?<\/script>/gi, "")
@@ -447,7 +449,7 @@ export async function execute(toolName, input, message, ctx) {
 
         const truncated = text.slice(0, 3000);
         const note = text.length > 3000 ? "\n\n*(truncated — page has more content)*" : "";
-        return `📄 Content from ${input.url}:\n\n${truncated}${note}`;
+        return wrapWebOutput(`📄 Content from ${input.url}:\n\n${truncated}${note}`, userId);
       } catch (err) {
         return `Failed to read page: ${err.message}`;
       }
