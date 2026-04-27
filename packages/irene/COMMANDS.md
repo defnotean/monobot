@@ -36,9 +36,9 @@ To register changes with Discord: `npm run deploy --workspace=@defnotean/irene`.
 | `/giveaway reroll` | Pick new winners for a giveaway | commands/fun/giveaway.js |
 | `/leaderboard` | View the server's XP leaderboard | commands/fun/leaderboard.js |
 | `/meme` | Get a random meme | commands/fun/meme.js |
-| `/poll` | Create a poll | commands/fun/poll.js |
-| `/poll create` | Create a new poll (advanced, with buttons) | commands/fun/polladvanced.js |
-| `/poll close` | Close a poll early | commands/fun/polladvanced.js |
+| `/poll` | Create an advanced poll with buttons | commands/fun/polladvanced.js |
+| `/poll create` | Create a new poll (buttons, anonymous mode, auto-close duration) | commands/fun/polladvanced.js |
+| `/poll close` | Close a poll early (host or Manage Messages) | commands/fun/polladvanced.js |
 | `/rank` | Check your or someone else's XP rank | commands/fun/rank.js |
 | `/roll` | Roll a dice | commands/fun/roll.js |
 | `/rps` | Play Rock Paper Scissors | commands/fun/rps.js |
@@ -47,8 +47,6 @@ To register changes with Discord: `npm run deploy --workspace=@defnotean/irene`.
 | `/scrim leaderboard` | View the ELO leaderboard for a specific game | commands/fun/scrim.js |
 | `/scrim stats` | View someone's ELO and match history | commands/fun/scrim.js |
 | `/trivia` | Answer a random trivia question | commands/fun/trivia.js |
-
-> Note: both `fun/poll.js` and `fun/polladvanced.js` register the top-level name `poll`. Discord will only accept one — `polladvanced.js` (with subcommands) wins at registration time. The simple `/poll` builder is effectively dead code.
 
 ## Moderation
 

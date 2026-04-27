@@ -75,7 +75,7 @@ REST endpoint at `/presence` — drop-in Lanyard replacement. Real-time Discord 
 | **AI** | `/chat` `/listen` `/memory` `/persona` |
 | **Music** | `/play` `/queue` `/nowplaying` `/filters` `/loop` `/shuffle` `/skip` `/pause` `/resume` `/stop` `/volume` `/dj` `/soundboard` `/karaoke` |
 | **Mod** | `/warn` `/warnings` `/ban` `/unban` `/kick` `/timeout` `/mute` `/purge` `/rep` |
-| **Fun** | `/rank` `/leaderboard` `/giveaway` `/poll` `/polladvanced` `/trivia` `/8ball` `/coinflip` `/roll` `/rps` `/meme` `/scrim` |
+| **Fun** | `/rank` `/leaderboard` `/giveaway` `/poll` `/trivia` `/8ball` `/coinflip` `/roll` `/rps` `/meme` `/scrim` |
 | **Utility** | `/afk` `/highlight` `/tag` `/suggest` `/embed` `/stats` `/serverinfo` `/birthday` `/remind` `/avatar` `/userinfo` `/digest` `/bumps` `/bumpathon` `/bumpconfig` `/schedulemsg` |
 | **Voice** | `/vc` |
 | **Setup** | `/setup-server` `/setup-wizard` `/welcome` `/logging` `/ticket` `/autorole` |
