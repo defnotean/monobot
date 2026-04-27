@@ -55,8 +55,10 @@ describe("bumpApplause.pickApplauseLine", () => {
       name: "@ean",
       rng: () => GOOD_BOY_CHANCE / 2,
     });
-    // Any of the good-boy phrases contains "good" or a dog-themed motif.
-    expect(line.toLowerCase()).toMatch(/good boy|atta boy|pets|treat|pat|sweetie|good bumper/);
+    // Any of the good-boy phrases contains "good", a dog-themed motif,
+    // or the word "bumper" (covers "good bumper" / "good lil bumper" /
+    // future variations without re-tightening the regex each time).
+    expect(line.toLowerCase()).toMatch(/good boy|atta boy|pets|treat|pat|sweetie|bumper/);
   });
 
   it("prefers default pool when no context flags are set and rng is high", () => {
@@ -101,7 +103,15 @@ describe("bumpApplause.pickApplauseLine", () => {
 
   it("falls back to default when bumperName is missing", () => {
     const line = applause.pickApplauseLine({ rng: () => 0.999 });
-    expect(line).toContain("bumper");
+    // When name is missing, the picker substitutes "bumper" as the default.
+    // Many default templates don't have {name} at all (e.g. "logged in the
+    // ledger 📓"), so we verify the line came from the default pool — not
+    // that it literally contains the substitution.
+    const found = ERIS_APPLAUSE.default.some(tpl => {
+      const rendered = tpl.replace(/\{name\}/g, "bumper").replace(/\{streak\}/g, "0");
+      return rendered === line;
+    });
+    expect(found).toBe(true);
   });
 });
 
