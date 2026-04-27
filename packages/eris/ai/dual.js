@@ -5,6 +5,38 @@ import { GoogleGenAI } from "@google/genai";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
 
+// ─── Internal helpers (exported for unit tests) ─────────────────────────────
+
+// Order-stable signature for the duplicate-call guard. The model can emit the
+// same args object with keys in different order across iterations, and the
+// raw JSON.stringify is key-order sensitive — defeating dedup. Sort top-level
+// keys so {a:1,b:2} and {b:2,a:1} produce the same signature.
+export function stableSig(name, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return `${name}::${JSON.stringify(args)}`;
+  }
+  const keys = Object.keys(args).sort();
+  const sorted = {};
+  for (const k of keys) sorted[k] = args[k];
+  return `${name}::${JSON.stringify(sorted)}`;
+}
+
+// UTF-16 surrogate-safe slice. JSON.stringify on a string with an unpaired
+// high-surrogate (0xD800-0xDBFF without a following low-surrogate) escapes
+// oddly or produces invalid UTF-8 when sent over the wire as a Gemini
+// functionResponse. Trim back if our cut landed mid-emoji.
+export function safeSlice(str, max) {
+  if (typeof str !== "string" || str.length <= max) return str;
+  let end = max - 1; // room for ellipsis suffix
+  // If the last code unit is a high surrogate without a low surrogate after,
+  // it's unpaired — drop it.
+  const last = str.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) {
+    end -= 1;
+  }
+  return str.slice(0, end) + "…(truncated)";
+}
+
 // ─── Schema Sanitization ────────────────────────────────────────────────────
 
 function sanitizeSchema(schema) {
@@ -258,7 +290,10 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
             response = await client.models.generateContent({
               model: config.geminiFallbackModel,
               contents,
-              config: { systemInstruction, tools: geminiTools, thinkingConfig: { thinkingBudget: 4096 } },
+              // maxOutputTokens MUST exceed thinkingBudget — otherwise thinking
+              // eats the entire budget and visible text is silently truncated.
+              // Match the primary call's headroom (thinkingBudget + 2048+).
+              config: { systemInstruction, tools: geminiTools, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 4096 } },
             });
             log(`[AI] Fallback to ${config.geminiFallbackModel} succeeded`);
           } catch {
@@ -318,7 +353,13 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
           textParts.push(part.text);
         }
         if (part.functionCall) {
-          calls.push(part.functionCall);
+          // Defensive — drop malformed functionCalls (no name string). Without
+          // this, signature becomes "undefined::..." and executor(undefined) throws.
+          if (typeof part.functionCall.name === "string" && part.functionCall.name.length > 0) {
+            calls.push(part.functionCall);
+          } else {
+            log("[Gemini] dropped malformed functionCall (no name)");
+          }
         }
       }
 
@@ -363,8 +404,9 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
       const skippedGameTools = new Set();
       const skippedDuplicates = new Set(); // exact signature already executed
       for (const call of calls) {
-        // Hard dedup — same tool with same args = skip silently
-        const signature = `${call.name}::${JSON.stringify(call.args || {})}`;
+        // Hard dedup — same tool with same args = skip silently. stableSig
+        // sorts arg keys so {a:1,b:2} and {b:2,a:1} hash identically.
+        const signature = stableSig(call.name, call.args || {});
         if (calledSignatures.has(signature)) {
           skippedDuplicates.add(signature);
           log(`[AI] Skipping duplicate ${call.name} call (already executed this turn)`);
@@ -385,7 +427,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
 
       const responseParts = await Promise.all(calls.map(async (call) => {
         // Skip duplicate (same name + args) calls — already executed
-        const signature = `${call.name}::${JSON.stringify(call.args || {})}`;
+        const signature = stableSig(call.name, call.args || {});
         if (skippedDuplicates.has(signature)) {
           return { functionResponse: { name: call.name, response: { result: "already executed earlier this turn — don't call again, move on or finish" } } };
         }

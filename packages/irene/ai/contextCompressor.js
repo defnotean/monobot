@@ -36,10 +36,14 @@ export function compressHistory(history, budget = 8000) {
     // Tier A: no compression
   }
 
-  // Final size check
+  // Final size check — drop oldest entries while keeping history[0] intact.
+  // The first user turn is "what the user originally asked for" — losing it
+  // under heavy context makes the model forget the task entirely. Splice from
+  // index 1 instead of shift()ing index 0.
   let totalSize = history.reduce((sum, e) => sum + getEntrySize(e), 0);
   while (history.length > 2 && totalSize > budget) {
-    const removed = history.shift();
+    const removed = history.splice(1, 1)[0];
+    if (!removed) break;
     totalSize -= getEntrySize(removed);
   }
 

@@ -12,6 +12,38 @@ const GEMINI_MODEL = config.geminiModel;               // worker AI — most cap
 const GEMINI_FALLBACK_MODEL = config.geminiFallbackModel; // fallback on rate limit — still thinking-capable
 const GEMINI_FAST_MODEL = config.geminiFastModel;    // conversation AI — fast replies, smart enough for chat
 
+// ─── Internal helpers (exported for unit tests) ─────────────────────────────
+
+// Order-stable signature for the duplicate-call guard. The model can emit the
+// same args object with keys in different order across iterations, and the
+// raw JSON.stringify is key-order sensitive — defeating dedup. Sort top-level
+// keys so {a:1,b:2} and {b:2,a:1} produce the same signature.
+export function stableSig(name, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return `${name}::${JSON.stringify(args)}`;
+  }
+  const keys = Object.keys(args).sort();
+  const sorted = {};
+  for (const k of keys) sorted[k] = args[k];
+  return `${name}::${JSON.stringify(sorted)}`;
+}
+
+// UTF-16 surrogate-safe slice. JSON.stringify on a string with an unpaired
+// high-surrogate (0xD800-0xDBFF without a following low-surrogate) escapes
+// oddly or produces invalid UTF-8 when sent over the wire as a Gemini
+// functionResponse. Trim back if our cut landed mid-emoji.
+export function safeSlice(str, max) {
+  if (typeof str !== "string" || str.length <= max) return str;
+  let end = max - 1; // room for ellipsis suffix
+  // If the last code unit is a high surrogate without a low surrogate after,
+  // it's unpaired — drop it.
+  const last = str.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) {
+    end -= 1;
+  }
+  return str.slice(0, end) + "…(truncated)";
+}
+
 // Denial messages for admin-tool attempts by non-admins. Kept module-scoped
 // so adding/removing entries doesn't require updating a hardcoded length
 // anywhere. Old code hardcoded `Math.random() * 8` — if someone edited the
@@ -391,7 +423,15 @@ export async function runGeminiChat({
     }
 
     const parts = response.candidates[0].content.parts;
-    const funcCalls = parts.filter((p) => p.functionCall);
+    // Defensive filter — drop malformed functionCalls (no name string). Without
+    // this, the dedup signature becomes "undefined::..." and executeTool(undefined)
+    // throws downstream.
+    const funcCalls = parts.filter((p) => {
+      if (!p.functionCall) return false;
+      if (typeof p.functionCall.name === "string" && p.functionCall.name.length > 0) return true;
+      log("[Gemini] dropped malformed functionCall (no name)");
+      return false;
+    });
 
     // Surface MAX_TOKENS truncation — if this fires, raise maxOutputTokens
     // for the call that produced this response (thinking budget eats into it).
@@ -488,8 +528,10 @@ export async function runGeminiChat({
       funcCalls.map(async (part, idx) => {
         const { name, args } = part.functionCall;
 
-        // Loop guard — skip if we've already executed this exact call this turn
-        const signature = `${name}::${JSON.stringify(args || {})}`;
+        // Loop guard — skip if we've already executed this exact call this turn.
+        // stableSig sorts arg keys so the model emitting {a:1,b:2} on iter 1 and
+        // {b:2,a:1} on iter 2 still hashes to the same signature.
+        const signature = stableSig(name, args || {});
         const isDuplicate = calledSignatures.has(signature);
         if (isDuplicate) {
           log(`[Gemini] Skipping duplicate ${name} call (already executed)`);
@@ -561,10 +603,13 @@ export async function runGeminiChat({
           }
         }
 
-        // Truncate long results to keep context window manageable
+        // Truncate long results to keep context window manageable.
         // 1500 chars gives enough room for role lists, channel lists, etc.
-        const truncResult = typeof result === "string" && result.length > 1500
-          ? result.slice(0, 1487) + "…(truncated)"
+        // safeSlice prevents an unpaired surrogate at the cut point — a
+        // 4-byte emoji crossing offset 1487 would otherwise produce invalid
+        // UTF-8 when serialized to Gemini's functionResponse.
+        const truncResult = typeof result === "string"
+          ? safeSlice(result, 1500)
           : result;
 
         funcResponses.push({ functionResponse: { name, response: { result: truncResult } } });
@@ -634,7 +679,10 @@ export async function runGeminiToolLoop({
       response = await geminiClient.models.generateContent({
         model: GEMINI_MODEL,
         contents,
-        config: { tools: geminiTools, systemInstruction, thinkingConfig: { thinkingBudget: 2048 } },
+        // maxOutputTokens MUST exceed thinkingBudget — thinking eats the budget,
+        // so without an explicit cap visible text gets silently truncated.
+        // 4096 = thinkingBudget(2048) + 2048 minimum visible-text headroom.
+        config: { tools: geminiTools, systemInstruction, maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 2048 } },
       });
     } catch (err) {
       log(`[Gemini loop] API error: ${err.message}`);
