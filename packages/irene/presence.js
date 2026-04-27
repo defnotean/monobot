@@ -577,6 +577,29 @@ export function startPresenceAPI(client) {
             const { executeTool } = await import("./ai/executor.js");
             const result = await executeTool(resolvedCommand, args || {}, fakeMessage);
             log(`[Twin] Executed ${command}${resolvedCommand !== command ? ` (→ ${resolvedCommand})` : ""}: ${String(result).slice(0, 100)}`);
+
+            // 8. Push a synthetic history note so Irene's next AI turn in this
+            // channel knows the twin action happened. Without it she'll claim
+            // "i can't do that" right after she just did, because the twin
+            // path executes a tool without ever touching messageCreate's
+            // conversation tracking.
+            try {
+              const channelKey = `ch-${channel_id}`;
+              const argsStr = args && Object.keys(args).length
+                ? ` ${JSON.stringify(args).slice(0, 150)}`
+                : "";
+              const note = `[TWIN ACTION] eris asked me to ${command}${argsStr} — done: ${String(result).slice(0, 200)}`;
+              const { getConversations } = await import("./events/messageCreate.js");
+              const convMap = getConversations();
+              const history = convMap.get(channelKey) || [];
+              history.push({ role: "user", content: note });
+              if (history.length > 30) history.splice(0, history.length - 30);
+              convMap.set(channelKey, history);
+              db.saveConversation(channelKey, history);
+            } catch (twinHistoryErr) {
+              log(`[Twin] Could not inject history note: ${twinHistoryErr.message}`);
+            }
+
             return j(200, { success: true, result: String(result).substring(0, 500) });
           } catch (e) {
             log(`[Twin] Command error for "${JSON.parse(body).command}": ${e.message}`);
