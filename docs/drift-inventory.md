@@ -11,24 +11,40 @@ This is the new-dev summary. The full reconciliation plan is in [packages/eris/E
 | `ai/personality.js` | yes | yes | INTENTIONALLY DIFFERENT | Eris has stock/game/pet trait axes; Irene omits them. Need union schema before sharing. |
 | `ai/longmemory.js` | yes | yes | INTENTIONALLY DIFFERENT | Schema diverged — table prefix is `{botName}_*`. Convergence planned in extraction Phase 0. |
 | `ai/firewall.js` | yes | yes | ACCIDENTAL DRIFT | Eris uses `config.ownerId`; Irene aliases via `config.userId`. Eris's version is canonical. |
-| `ai/semantic.js` | yes | yes | UNCONFIRMED DRIFT | Likely diverged — diff before editing either. |
-| `ai/humanity.js` | yes | yes | UNCONFIRMED DRIFT | Likely diverged — diff before editing either. |
-| `ai/memory.js` | yes | yes | UNCONFIRMED DRIFT | Likely diverged — diff before editing either. |
+| `ai/keyPool.js` | yes | yes | IDENTICAL | Byte-equal modulo line endings (CRLF vs LF). Drop-in shared candidate. |
+| `ai/regexWorker.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
+| `ai/temporal.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
+| `ai/memoryQuirks.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
+| `ai/selfCanon.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
+| `ai/responsestyle.js` | yes | yes | ACCIDENTAL DRIFT | One-line comment + redundant parens differ; logic identical. Trivially extractable. |
+| `ai/humanity.js` | yes | yes | ACCIDENTAL DRIFT | Eris is canonical (UTC-day streak, time-based grudge decay, dedup-before-push, defensive `_lastDay` persistence). Irene needs port. |
+| `ai/semantic.js` | yes | yes | ACCIDENTAL DRIFT | Eris has FIFO cache cap, length-aware hash, split store/search rate trackers, smart "human-like forgetting" cleanup. Irene's only structural difference is the `eris_*`/`irene_*` table prefix — parametrize for shared. |
+| `ai/preoccupations.js` | yes | yes | ACCIDENTAL DRIFT | Logic identical; only differences are `eris_*`/`irene_*` table prefix and minor fallback-topic flavor wording. |
+| `ai/opinions.js` | yes | yes | ACCIDENTAL DRIFT | Eris adds defensive `Number.isFinite(Date.parse(...))` checks for malformed timestamps; otherwise identical. Earlier doc claim of "Eris-only" was wrong — file exists in both. |
+| `ai/memory.js` | yes | yes | INTENTIONALLY DIFFERENT | Different storage and API. Eris: Supabase-backed facts table with sensitivity levels (normal/sensitive/secret), tied to economy/prefs. Irene: in-memory `Map<guildId, Map<userId, []>>` with 90-day cleanup, no sensitivity tiers. Belongs per-bot. |
+| `ai/sentiment.js` | yes | yes | INTENTIONALLY DIFFERENT | Same 4-pass shape (bigram → word → emoji → sarcasm) but the lexicons are bot-flavored: Eris focuses on negation handling ("not bad", "ngl good"); Irene encodes Discord-speak ("no cap", "big w", "cope harder"). Sarcasm patterns + emoji sets also differ. |
+| `ai/contextCompressor.js` | yes | yes | INTENTIONALLY DIFFERENT | Different LLM message formats. Eris compresses Gemini-style entries (`parts: [{ text }]`); Irene compresses Anthropic-style entries (`content: string \| [blocks]`) with `tool_use`/`tool_result` block handling and orphan sanitization. |
+| `ai/dual.js` | yes | yes | INTENTIONALLY DIFFERENT | Eris is a thin generic dual-model wrapper (sanitizeSchema, toGeminiTools, quickReply, looksLikeTask). Irene is a full bot orchestrator with admin-tool denials, hardcoded "irene"/mod-action keywords, music-bot keywords (tts/voice/vc), and an inline tool-call loop. |
+| `ai/karaoke.js` | yes | yes | INTENTIONALLY DIFFERENT | Irene has the real implementation (Lavalink integration, dual message/nickname display modes, queue polling, title cleanup). Eris's copy is vestigial — comment even says "Irene-only feature" and it imports lastfm. Should be removed from Eris. |
 | `ai/bump{Reminder,Celebrations,Correlation,Applause,Analytics,UserPrefs}.js` | yes | yes | ACCIDENTAL DRIFT | ~150KB family; bot-agnostic, prime sharing candidate. |
-| `ai/dual.js` | yes | yes | ACCIDENTAL DRIFT | LLM call wrapper; differences mostly cosmetic. |
-| `ai/contextCompressor.js` | yes | yes | ACCIDENTAL DRIFT | Diff before editing. |
-| `ai/{keyPool,regexWorker,temporal,tools,toolRegistry,sentiment,responsestyle,preoccupations,memoryQuirks,selfCanon,karaoke,opinions}.js` | yes | yes | UNCONFIRMED DRIFT | Same filename in both; diff before editing. |
 | `ai/executor.js` + `ai/executors/*` | yes | yes | INTENTIONALLY DIFFERENT | Dispatch fans out into bot-specific executors (Eris: economy/gambling/games; Irene: moderation/voice/leveling). |
-| `ai/providers/{gemini,nvidia,index}.js` | yes | yes | UNCONFIRMED DRIFT | Same three files in both. |
-| `utils/twinSign.js` | yes | yes | ACCIDENTAL DRIFT | Already extracted to `packages/shared/src/twinSign.js`; per-bot copies still exist and may be stale. |
-| `utils/LRUCache.js` | yes | yes | EXTRACTED | Identical, also lives in `packages/shared/src/LRUCache.js`. |
-| `utils/roleCategorizer.js` | yes | yes | EXTRACTED | Byte-identical, also in shared. |
-| `utils/{logger,cooldown,permissions,twinState,humanDelay,toolRateLimit}.js` | yes | yes | UNCONFIRMED DRIFT | Same filename in both `utils/` dirs. |
+| `ai/providers/index.js` | yes | yes | ACCIDENTAL DRIFT | Eris is canonical — adds NVIDIA→Gemini fallback router with circuit-open detection. Irene is single-provider. Port Eris's wrapper. |
+| `ai/providers/gemini.js` | yes | yes | INTENTIONALLY DIFFERENT | Re-exports the bot's local `dual.js`. Since `dual.js` itself is bot-specific (see above), the adapter is too — Irene stubs missing exports (`toGeminiTools` passthrough, `isRateLimited` returns false) that Eris's `dual.js` does export. |
+| `ai/providers/nvidia.js` | yes | yes | INTENTIONALLY DIFFERENT | Both call NVIDIA OpenAI-format endpoint, but the system-prompt tool examples are bot-specific (Eris embeds `fish/hunt/dig/gamble/flip/slots/blackjack/balance` keywords; Irene embeds `skip/stop/pause/lyrics/karaoke/purge`). Eris also has a circuit breaker; Irene has a positional/object call-style adapter. |
+| `utils/twinSign.js` | no | no | EXTRACTED | Lives in `packages/shared/src/twinSign.js`. Per-bot copies have been removed. |
+| `utils/LRUCache.js` | no | no | EXTRACTED | Lives in `packages/shared/src/LRUCache.js`. Per-bot copies have been removed. |
+| `utils/roleCategorizer.js` | no | no | EXTRACTED | Lives in `packages/shared/src/roleCategorizer.js`. Per-bot copies have been removed. |
+| `utils/twinState.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
+| `utils/humanDelay.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
+| `utils/toolRateLimit.js` | yes | yes | IDENTICAL | Logic byte-equal — only differences are whitespace/JSDoc presence. Drop-in shared candidate. |
+| `utils/cooldown.js` | yes | yes | ACCIDENTAL DRIFT | Same core, but Irene adds `resetCooldown()` (refund on failure) and a deferred `startCooldownCleanup()` (vs Eris's import-time `setInterval`). Irene's API is the better target. |
+| `utils/logger.js` | yes | yes | INTENTIONALLY DIFFERENT | Core `log()` + console formatting could be shared, but Irene also exports `sendModLog()` (auto-detects mod-log channels by name, persists to `getGuildSettings`) which only makes sense for the moderation bot. Split: shared core + per-bot extensions. |
+| `utils/permissions.js` | yes | yes | INTENTIONALLY DIFFERENT | Different domains. Eris exports owner/trusted-user gating (`isOwner`/`isTrusted`/`canCustomize`/`denyMessage`) for the creator-only command surface. Irene exports Discord moderation gating (`isAdminOrOwner`/`requirePermission`/`canModerate`) with role-hierarchy checks. Belongs per-bot. |
 
 ## Eris-only modules (don't expect to find these in Irene)
 
 - Economy/gambling/games: `ai/{economy,economyExecutor,stocks,stockMarket,gambling,poker,lottery,gameVisuals,gameWatcher}.js`, `ai/{games,gambling}/`
-- Pets/activities/social: `ai/{minions,activityExecutor,socialExecutor,randomEvents,opinions}.js`
+- Pets/activities/social: `ai/{minions,activityExecutor,socialExecutor,randomEvents}.js`
 - Executors: `ai/executors/{admin,casino,gambling,game,github,media,misc,notes,system,twin,web}Executor.js`
 - Top-level: `agent-ui/`, `api/`, `lastfm/`, `migrations/`, `run.bat`
 - Utils: `autoDeploy`, `discord`, `mememaker`, `pcAgent`, `unicode.ts`
@@ -51,7 +67,7 @@ Lives in `packages/shared/src/` (workspace package `@defnotean/shared`):
 - `LRUCache.js` — bounded LRU for both bots
 - `roleCategorizer.js` — Discord role classification
 
-Per-bot copies still exist in each `utils/` dir and may be stale — prefer the shared package when adding new imports.
+Per-bot copies have been removed — both bots now import from `@defnotean/shared` for these three modules.
 
 ## When your change touches drifted code
 
@@ -65,9 +81,9 @@ Per [CONTRIBUTING.md](../CONTRIBUTING.md) "Before you start", talk to the mainta
 ## Status of the extraction plan
 
 EXTRACTION_PLAN.md was **drafted 2026-04-23, not yet executed**. Phase progress:
-- **Phase 0 (reconcile drifts):** not started — `firewall`, `personality`, `longmemory`, `twinSign` still differ between bots.
+- **Phase 0 (reconcile drifts):** not started — `firewall`, `personality`, `longmemory` still differ between bots. (`twinSign` already reconciled — see Phase 2.)
 - **Phase 1 (workspace structure):** done — already a monorepo with `packages/{eris,irene,shared}`.
-- **Phase 2 (move files):** partial — `LRUCache`, `roleCategorizer`, `twinSign` live in shared but per-bot duplicates remain; the other ~7 modules untouched.
+- **Phase 2 (move files):** partial — `LRUCache`, `roleCategorizer`, `twinSign` already extracted (per-bot copies removed). Eight more files now confirmed IDENTICAL or near-identical and ready to extract: `ai/{keyPool,regexWorker,temporal,memoryQuirks,selfCanon,responsestyle}.js` + `utils/{twinState,humanDelay,toolRateLimit}.js`. ACCIDENTAL DRIFT files (`humanity`, `semantic`, `preoccupations`, `opinions`, `cooldown`, `providers/index`) need a brief reconcile pass before extraction.
 - **Phase 3 (deploy):** done — Render runs from this monorepo (see [DEPLOY_MIGRATION.md](../DEPLOY_MIGRATION.md)).
 - **Phase 4 (retire old repos):** blocked on Phase 0/2.
 
