@@ -617,8 +617,8 @@ export async function execute(message) {
     (async () => {
       try {
         const { createClient } = await import("@supabase/supabase-js");
-        const sbUrl = process.env.SUPABASE_URL;
-        const sbKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
+        const sbUrl = config.supabaseUrl;
+        const sbKey = config.supabaseKey || config.supabaseAnonKey;
         if (sbUrl && sbKey) {
           const supabase = createClient(sbUrl, sbKey);
           // checkInjection + logBlockedAttempt now static imports

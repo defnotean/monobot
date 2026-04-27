@@ -29,6 +29,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from "@supabase/supabase-js";
+import config from "./config.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // IN-MEMORY CACHE — single source of truth for all reads (synchronous)
@@ -86,15 +87,13 @@ let supabase = null;
 export function getSupabase() { return supabase; }
 
 export async function initDatabase() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_KEY;
-  if (!url || !key) {
+  if (!config.supabaseEnabled) {
     console.warn("[DB] No SUPABASE_URL/SUPABASE_KEY set — settings won't persist across deploys");
     return;
   }
 
   try {
-    supabase = createClient(url, key);
+    supabase = createClient(config.supabaseUrl, config.supabaseKey);
   } catch (err) {
     console.error("[DB] Invalid Supabase config:", err.message);
     return;
