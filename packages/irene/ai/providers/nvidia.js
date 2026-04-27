@@ -219,11 +219,21 @@ Output format: tool calls go in tool_calls field, NOT in text content.]`;
       });
       if (!res.ok) {
         const errText = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+        const httpErr = new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+        httpErr.status = res.status;
+        throw httpErr;
       }
       data = await res.json();
     } catch (e) {
       log(`[NVIDIA] chat call failed: ${e.message}`);
+      const cls = _classifyError(e);
+      if (cls.shouldFallback) {
+        const fb = await _fallbackToGemini({
+          systemInstruction, history, tools, msgCtx, isAdmin, onToolStatus,
+          errorLabel: cls.label,
+        });
+        if (fb) return fb;
+      }
       return { text: "i'm having trouble thinking rn, try again in a sec", toolsUsed };
     }
 
@@ -305,4 +315,68 @@ Output format: tool calls go in tool_calls field, NOT in text content.]`;
   }
 
   return { text: finalText, toolsUsed };
+}
+
+// ─── Gemini Fallback ────────────────────────────────────────────────────────
+// On NVIDIA outage (5xx, network, timeout, rate limit), reroute the call to
+// Gemini if it's configured. Stateless per call — no circuit breaker. Auth
+// failures (401/403) and user-error 4xx do NOT trigger fallback.
+
+function _classifyError(err) {
+  const status = err?.status;
+  const msg = (err?.message || "").toLowerCase();
+
+  if (status === 401 || status === 403) {
+    log(`[NVIDIA] auth error (${status}) — check NVIDIA_API_KEY, not falling back`);
+    return { shouldFallback: false, label: `auth-${status}` };
+  }
+  if (status === 429) return { shouldFallback: true, label: "rate-limit-429" };
+  if (typeof status === "number" && status >= 500) return { shouldFallback: true, label: `server-${status}` };
+  if (typeof status === "number" && status >= 400) {
+    return { shouldFallback: false, label: `client-${status}` };
+  }
+  // No status → network/timeout/abort error
+  if (msg.includes("timeout") || msg.includes("aborted") || err?.name === "AbortError" || err?.name === "TimeoutError") {
+    return { shouldFallback: true, label: "timeout" };
+  }
+  return { shouldFallback: true, label: "network" };
+}
+
+let _geminiFallbackClient = null;
+async function _getGeminiClient() {
+  if (_geminiFallbackClient) return _geminiFallbackClient;
+  if (!config.geminiKeys?.length) return null;
+  const { GoogleGenAI } = await import("@google/genai");
+  _geminiFallbackClient = new GoogleGenAI({ apiKey: config.geminiKeys[0] });
+  return _geminiFallbackClient;
+}
+
+async function _fallbackToGemini({ systemInstruction, history, tools, msgCtx, isAdmin, onToolStatus, errorLabel }) {
+  if (!config.geminiKeys?.length) {
+    log(`[NVIDIA→Gemini] fallback skipped — no GEMINI_API_KEY configured`);
+    return null;
+  }
+  const geminiClient = await _getGeminiClient();
+  if (!geminiClient) return null;
+
+  // Tools present → use the worker model (Gemini Pro). Chat-only → fast model.
+  const fbUseFastModel = !(tools && tools.length);
+  log(`[NVIDIA→Gemini] fallback after ${errorLabel} (model: ${fbUseFastModel ? "fast" : "worker"})`);
+
+  try {
+    const dual = await import("../dual.js");
+    return await dual.runGeminiChat({
+      geminiClient,
+      systemInstruction,
+      history,
+      tools,
+      message: msgCtx,
+      isAdmin,
+      useFastModel: fbUseFastModel,
+      onToolStatus,
+    });
+  } catch (e) {
+    log(`[NVIDIA→Gemini] fallback also failed: ${e.message}`);
+    return null;
+  }
 }
