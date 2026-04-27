@@ -1,7 +1,7 @@
 import * as db from "../database.js";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
-import { verifyTwinRequest } from "@defnotean/shared/twinSign";
+import { verifyTwinRequest, safeStringEqual } from "@defnotean/shared/twinSign";
 
 function moodLabel(score) {
   if (score >= 60) return "ecstatic";
@@ -272,7 +272,7 @@ export async function handleApiRequest(req, res) {
       const hasHmacHeaders = !!(req.headers["x-twin-timestamp"] && req.headers["x-twin-signature"]);
       if (!hasHmacHeaders) {
         const twinSecret = process.env.TWIN_API_SECRET;
-        if (twinSecret && body?.secret !== twinSecret) {
+        if (twinSecret && !safeStringEqual(body?.secret, twinSecret)) {
           json(res, 403, { error: "invalid twin secret" }); return;
         }
       }
@@ -328,7 +328,7 @@ export async function handleApiRequest(req, res) {
       if (hasHmacHeaders) {
         const v = verifyTwinRequest(req.headers, rawBody, twinSecret);
         if (!v.ok) { json(res, 403, { error: `twin auth: ${v.reason}` }); return; }
-      } else if (body?.secret !== twinSecret) {
+      } else if (!safeStringEqual(body?.secret, twinSecret)) {
         json(res, 403, { error: "missing twin auth (hmac headers or body.secret)" });
         return;
       }
@@ -350,8 +350,23 @@ export async function handleApiRequest(req, res) {
           json(res, 200, { applied: false, reason: "guild has not opted in" });
           return;
         }
+        // ── Punish action vocabulary ────────────────────────────────────
+        // Irene can send any of these; Eris treats them all as "the user got
+        // moderated, apply economy consequences." We don't distinguish ban
+        // vs tempban vs timeout for confiscation purposes — any of them
+        // counts as a punish event. New sub-types (mute, etc.) should be
+        // added here so Irene's caller doesn't silently no-op.
+        //
+        // Irene's recommended vocabulary (see moderationExecutor.js):
+        //   ban     — permanent ban (also sent for tempban — sub-type
+        //             distinction isn't economically meaningful)
+        //   kick    — kick from server
+        //   tempban — temporary ban (currently re-mapped to "ban" on Irene's
+        //             side, but accepted here for forward-compat / older
+        //             Irene builds)
+        //   timeout — Discord timeout / mute
         const action = String(body.action);
-        if (!["ban", "kick"].includes(action)) {
+        if (!["ban", "kick", "tempban", "timeout"].includes(action)) {
           json(res, 200, { applied: false, reason: "action not punishable" });
           return;
         }
@@ -393,7 +408,7 @@ export async function handleApiRequest(req, res) {
     if (path === "/api/twin/state" && req.method === "GET") {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace("Bearer ", "");
-      if (!token || token !== config.twinApiSecret) {
+      if (!token || !safeStringEqual(token, config.twinApiSecret)) {
         json(res, 403, { error: "twin state requires Bearer TWIN_API_SECRET" });
         return;
       }

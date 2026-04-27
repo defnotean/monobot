@@ -32,21 +32,25 @@ export function signTwinRequest(body, secret, now = Date.now()) {
 }
 
 // Replay cache: signature → firstSeenAt. Pruned opportunistically.
+//
+// Eviction is STRICTLY time-based — we never drop an entry that's still inside
+// the skew window, because doing so would let a flooder churn the Map, evict
+// a captured legit signature, then replay it. If the cache exceeds the
+// pressure threshold AND nothing has aged out, we fail-loud (refuse new
+// requests) rather than fail-silent (evict legit sigs).
 const _seen = new Map();
-const _REPLAY_CACHE_MAX = 2048;
+// Pressure threshold: refuse new requests once the cache holds this many
+// entries that are all still inside the skew window. Picked well above any
+// realistic legitimate traffic over a single TWIN_MAX_SKEW_MS window so
+// healthy operation never trips it; sustained traffic above this rate means
+// either misconfiguration or attack, both of which warrant fail-loud.
+export const _REPLAY_CACHE_PRESSURE = 10_000;
+let _lastPressureWarnAt = 0;
+
 function _pruneReplay(now) {
-  // Always drop aged-out entries, regardless of size.
+  // Always drop aged-out entries (older than 2× skew window).
   for (const [sig, ts] of _seen) {
     if (now - ts > TWIN_MAX_SKEW_MS * 2) _seen.delete(sig);
-  }
-  // Hard cap — if load is abusive, drop oldest inserted first (Map preserves insertion order).
-  if (_seen.size > _REPLAY_CACHE_MAX) {
-    const excess = _seen.size - _REPLAY_CACHE_MAX;
-    let i = 0;
-    for (const sig of _seen.keys()) {
-      if (i++ >= excess) break;
-      _seen.delete(sig);
-    }
   }
 }
 
@@ -91,7 +95,49 @@ export function verifyTwinRequest(headers, body, secret, now = Date.now()) {
   // seeing the same signature twice inside the skew window means replay.
   _pruneReplay(now);
   if (_seen.has(sig)) return { ok: false, reason: "replay detected" };
+
+  // Pressure check — if the cache is overflowing AND every entry is still
+  // inside the skew window, we refuse the new request rather than evict a
+  // legit prior signature (which would open a replay window for an attacker
+  // who flooded us). Fail-loud over fail-silent.
+  if (_seen.size >= _REPLAY_CACHE_PRESSURE) {
+    // Throttle the warning to once per minute so a sustained flood doesn't
+    // also flood the log.
+    if (now - _lastPressureWarnAt > 60_000) {
+      _lastPressureWarnAt = now;
+      try { console.warn(`[twinSign] replay cache pressure: ${_seen.size} entries in-window — refusing new requests`); } catch {}
+    }
+    return { ok: false, reason: "replay-cache-pressure" };
+  }
+
   _seen.set(sig, now);
 
   return { ok: true };
+}
+
+/**
+ * Constant-time string equality for secrets/tokens. Length is checked first
+ * (which itself is a tiny side-channel, but unavoidable without padding) and
+ * then the bytes are compared via Node's timingSafeEqual so an attacker can't
+ * learn the secret one byte at a time from response-time differences.
+ *
+ * Returns false for non-strings or length mismatch — it's safe to call on
+ * untrusted header values.
+ *
+ * @param {unknown} a
+ * @param {unknown} b
+ * @returns {boolean}
+ */
+export function safeStringEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+// Test-only: reset the replay cache between tests. Not part of the public
+// surface — but exporting it keeps tests from having to reach into module
+// internals via dynamic import + eval.
+export function _resetReplayCacheForTests() {
+  _seen.clear();
+  _lastPressureWarnAt = 0;
 }

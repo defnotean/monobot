@@ -52,8 +52,17 @@ export async function firePunishSignal({ guildId, userId, action, reason }) {
       return;
     }
     const result = await res.json().catch(() => null);
-    if (result?.applied) {
-      log(`[TwinPunish] Eris applied ${action} consequence for ${userId} — confiscated ${result.confiscated}`);
+    // Log every response — applied OR not — so operators can debug why a
+    // punish signal didn't translate into economy enforcement. The two
+    // common "not applied" reasons (guild not opted in vs action not in
+    // Eris's allowlist) look identical in the wire response, so logging
+    // the reason verbatim is the only way to tell them apart in the field.
+    if (!result || typeof result !== "object") {
+      log(`[TwinPunish] ${action} signal for ${userId} returned no parseable body`);
+    } else if (result.applied) {
+      log(`[TwinPunish] Eris applied ${action} consequence for ${userId} — confiscated ${result.confiscated ?? 0}`);
+    } else {
+      log(`[TwinPunish] Eris declined ${action} for ${userId} — reason: ${result.reason ?? "(none given)"}`);
     }
   } catch (err) {
     log(`[TwinPunish] signal failed: ${err.message}`);

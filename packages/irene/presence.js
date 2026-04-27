@@ -3,7 +3,7 @@
 import http from "http";
 import config from "./config.js";
 import { log } from "./utils/logger.js";
-import { verifyTwinRequest } from "@defnotean/shared/twinSign";
+import { verifyTwinRequest, safeStringEqual } from "@defnotean/shared/twinSign";
 
 // TTS audio cache — stores generated WAV buffers keyed by random ID, served via /tts/:id
 // Bounded to TTS_MAX_CACHE entries; oldest entries evicted on insert. Entries expire after 5 min.
@@ -197,12 +197,17 @@ export function startPresenceAPI(client) {
       }
 
       // ── Auth check — accept DASHBOARD_API_KEY or TWIN_API_SECRET
+      // Comparison goes through safeStringEqual so a network attacker can't
+      // learn either secret one byte at a time from response-time deltas.
+      // (Array.includes uses === under the hood, which short-circuits on
+      // first mismatched byte.)
       const isTwinPath = path.startsWith("/api/twin/");
       if (!isTwinPath && path !== "/api/health") {
         const authHeader = req.headers.authorization;
         const token = authHeader?.replace("Bearer ", "");
         const validKeys = [process.env.DASHBOARD_API_KEY, process.env.TWIN_API_SECRET].filter(Boolean);
-        if (!token || !validKeys.includes(token)) {
+        const tokenOk = !!token && validKeys.some((k) => safeStringEqual(token, k));
+        if (!tokenOk) {
           j(401, { error: "unauthorized" });
           return;
         }
@@ -441,7 +446,7 @@ export function startPresenceAPI(client) {
       } else if (path === "/api/twin/state" && req.method === "GET") {
         const authHeader = req.headers.authorization;
         const token = authHeader?.replace("Bearer ", "");
-        if (!token || token !== config.twinApiSecret) {
+        if (!token || !safeStringEqual(token, config.twinApiSecret)) {
           return j(403, { error: "twin state requires Bearer TWIN_API_SECRET" });
         }
         try {

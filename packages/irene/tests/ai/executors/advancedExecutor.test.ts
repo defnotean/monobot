@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // @ts-expect-error - importing JS module without types
-import { callEris } from "../../../ai/executors/advancedExecutor.js";
+import { callEris, erisErrorText } from "../../../ai/executors/advancedExecutor.js";
 // @ts-expect-error - importing JS module without types
 import { verifyTwinRequest } from "@defnotean/shared/twinSign";
 // @ts-expect-error - importing JS module without types
@@ -80,5 +80,54 @@ describe("callEris (ask_eris twin client)", () => {
     // And the body actually contains what we passed in.
     const parsed = JSON.parse(captured!.init.body);
     expect(parsed).toEqual(payload);
+  });
+});
+
+// erisErrorText extracts a user-facing error string from whatever shape
+// Eris returned. Before this helper, ask_eris would emit
+// "eris couldn't set it up: undefined" when the response had no `error`
+// field — confusing for the user and embarrassing for the bot. The helper
+// also falls back to res.status when even that's missing.
+describe("erisErrorText", () => {
+  it("prefers data.error when present and non-empty", () => {
+    expect(erisErrorText({ error: "permission denied" }, { status: 500 })).toBe("permission denied");
+  });
+
+  it("falls back to data.message when error is missing", () => {
+    expect(erisErrorText({ message: "rate limited" }, { status: 429 })).toBe("rate limited");
+  });
+
+  it("falls back to data.reason when error and message are missing", () => {
+    expect(erisErrorText({ reason: "guild has not opted in" }, { status: 200 })).toBe("guild has not opted in");
+  });
+
+  it("falls back to HTTP status when data has no useful field", () => {
+    expect(erisErrorText({ success: false }, { status: 502 })).toBe("HTTP 502");
+  });
+
+  it("falls back to HTTP status when data is null (parse failure handled upstream)", () => {
+    expect(erisErrorText(null, { status: 500 })).toBe("HTTP 500");
+  });
+
+  it("returns 'unknown error' as a last resort with no status either", () => {
+    expect(erisErrorText(null, null as unknown as Response)).toBe("unknown error");
+  });
+
+  it("treats whitespace-only error fields as missing (avoids 'eris said: \"   \"')", () => {
+    expect(erisErrorText({ error: "   " }, { status: 500 })).toBe("HTTP 500");
+  });
+
+  it("never returns the literal string 'undefined' (the original bug)", () => {
+    const cases: Array<{ data: any; res: any }> = [
+      { data: { error: undefined }, res: { status: 500 } },
+      { data: { success: false }, res: { status: 500 } },
+      { data: undefined, res: { status: 500 } },
+      { data: {}, res: { status: 500 } },
+    ];
+    for (const c of cases) {
+      const out = erisErrorText(c.data, c.res);
+      expect(out).not.toContain("undefined");
+      expect(out.length).toBeGreaterThan(0);
+    }
   });
 });

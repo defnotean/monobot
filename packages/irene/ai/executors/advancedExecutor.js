@@ -44,6 +44,31 @@ export async function callEris(path, opts = {}) {
   });
 }
 
+// Build a user-facing error string from whatever shape Eris returned. Avoids
+// the "undefined" leak when an error response has no `error`/`message` field
+// — the previous code would emit "eris couldn't set it up: undefined" which
+// is both useless to the user and embarrassing.
+//
+// Exported for unit testing — see tests/ai/executors/advancedExecutor.test.ts.
+export function erisErrorText(data, res) {
+  if (data && typeof data === "object") {
+    if (typeof data.error === "string"   && data.error.trim())   return data.error.trim();
+    if (typeof data.message === "string" && data.message.trim()) return data.message.trim();
+    if (typeof data.reason === "string"  && data.reason.trim())  return data.reason.trim();
+  }
+  if (res && Number.isFinite(res.status)) return `HTTP ${res.status}`;
+  return "unknown error";
+}
+
+// Parse Eris's response body as JSON, but return null if it fails (e.g. a
+// proxy returned an HTML 502 page). The outer try/catch in ask_eris would
+// otherwise surface the JSON parse error to the user as if Eris were down,
+// which is misleading — she might be up, just routing through a flaky proxy.
+async function safeErisJson(res) {
+  try { return await res.json(); }
+  catch { return null; }
+}
+
 // Reusable Gemini clients for web search grounding — one per API key, round-robin.
 // Cheap to keep around; instantiated once per process.
 const _groundingClients = (config.geminiKeys ?? []).filter(Boolean).map((k) => new GoogleGenAI({ apiKey: k }));
@@ -471,8 +496,9 @@ export async function execute(toolName, input, message, ctx) {
               remind_at: remindAt,
             },
           });
-          const data = await res.json();
-          return data.success ? `told my sister eris to set that reminder — she'll ping in ${input.delay_minutes || 60} minutes` : `eris couldn't set it up: ${data.error}`;
+          const data = await safeErisJson(res);
+          if (!data) return "eris responded weird, try again";
+          return data.success ? `told my sister eris to set that reminder — she'll ping in ${input.delay_minutes || 60} minutes` : `eris couldn't set it up: ${erisErrorText(data, res)}`;
         }
 
         if (action === "note") {
@@ -484,8 +510,9 @@ export async function execute(toolName, input, message, ctx) {
               content: input.content || "",
             },
           });
-          const data = await res.json();
-          return data.success ? "passed that note to eris — she's got it saved" : `eris couldn't save it: ${data.error || res.status}`;
+          const data = await safeErisJson(res);
+          if (!data) return "eris responded weird, try again";
+          return data.success ? "passed that note to eris — she's got it saved" : `eris couldn't save it: ${erisErrorText(data, res)}`;
         }
 
         if (action === "fact") {
@@ -493,19 +520,22 @@ export async function execute(toolName, input, message, ctx) {
             method: "POST",
             body: { user_id: input.user_id || message.author.id, fact: input.fact },
           });
-          const data = await res.json();
-          return data.success ? "told eris to remember that" : "she couldn't save it";
+          const data = await safeErisJson(res);
+          if (!data) return "eris responded weird, try again";
+          return data.success ? "told eris to remember that" : `she couldn't save it: ${erisErrorText(data, res)}`;
         }
 
         if (action === "mood") {
           const res = await callEris("/mood");
-          const data = await res.json();
+          const data = await safeErisJson(res);
+          if (!data) return "eris responded weird, try again";
           return `eris's mood: ${data.mood_score > 0 ? "good" : data.mood_score < 0 ? "bad" : "neutral"} (score: ${data.mood_score}, energy: ${data.energy})`;
         }
 
         if (action === "status") {
           const res = await callEris("/status");
-          const data = await res.json();
+          const data = await safeErisJson(res);
+          if (!data) return "eris responded weird, try again";
           return `eris is ${data.status} — uptime: ${data.uptime}s. she says: "${data.message}"`;
         }
 

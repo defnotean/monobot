@@ -651,7 +651,11 @@ export async function execute(toolName, input, message, ctx) {
       addTempBan(guild.id, target.id, target.user.tag, durationMs, reason, message.author.id);
 
       await target.ban({ reason: _attributedReason(message.author, `[TEMP ${durationStr}] ${reason}`) });
-      firePunishSignal({ guildId: guild.id, userId: target.id, action: "tempban", reason }).catch(() => {});
+      // Send "ban" to Eris rather than "tempban" — Eris doesn't distinguish
+      // sub-types of ban for economy enforcement, only that the user was
+      // banned. Keeping tempban as a separate signal would silently no-op on
+      // Eris's side. See dashboard.js for the punish action vocabulary.
+      firePunishSignal({ guildId: guild.id, userId: target.id, action: "ban", reason }).catch(() => {});
       return `Temp-banned ${target.user.tag} for ${durationStr} — reason: ${reason}. They'll be automatically unbanned.`;
     }
   }
