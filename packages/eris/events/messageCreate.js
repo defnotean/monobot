@@ -65,7 +65,10 @@ const EXPLOIT_PATTERNS = [
 const ACTIVITY_TOOLS_SET = new Set(["fish", "hunt", "dig", "work", "beg", "search_location", "coinflip_bet", "dice_roll_bet", "slots_spin", "blackjack_start", "russian_roulette", "rps_play", "rob_user", "scratch_card", "open_lootbox"]);
 const ACTIVITY_KEYWORDS_RX = /\b(fish|hunt|dig|work|beg|search|flip|roll|slots?|spin|blackjack|roulette|rps|rob|scratch|loot|daily|weekly|monthly)\b/i;
 
-// Pre-sanitized tool sets — avoids re-sanitizing 46+ schemas per message
+// Pre-sanitized tool sets — avoids re-sanitizing 46+ schemas per message.
+// Cache is intentionally never invalidated: EVERYONE_TOOLS / OWNER_TOOLS are
+// static module imports, so the tool list is pinned at module load. If tools
+// ever become dynamic at runtime, this cache must be reset accordingly.
 let _cachedGeminiTools = null;
 let _twinTools, _chatTools, _chatToolsOwner, _allTools, _allToolsOwner;
 
@@ -908,10 +911,11 @@ export default async function messageCreate(message) {
       // built lazily on first use and cached forever (tool list never changes).
       const isOwner = message.author.id === config.ownerId;
 
-      // Build cached profiles on first hit
+      // Build cached profiles on first hit.
+      // Twin profile membership is metadata-driven — tools opt in by adding
+      // "fun" to their `tags` array in ai/tools.js. No hardcoded name list.
       if (!_cachedGeminiTools) {
-        const FUN_NAMES = new Set(["send_gif", "create_meme", "search_meme_templates", "get_mood", "get_relationship", "remember_fact", "web_search"]);
-        _twinTools = EVERYONE_TOOLS.filter(t => FUN_NAMES.has(t.name));
+        _twinTools = EVERYONE_TOOLS.filter(t => t.tags?.includes("fun"));
         _chatTools = EVERYONE_TOOLS.filter(t => !ACTIVITY_TOOLS_SET.has(t.name));
         _chatToolsOwner = [...EVERYONE_TOOLS, ...OWNER_TOOLS].filter(t => !ACTIVITY_TOOLS_SET.has(t.name));
         _allTools = [...EVERYONE_TOOLS];

@@ -24,6 +24,7 @@
 export const EVERYONE_TOOLS = [
   {
     name: "remember_fact",
+    tags: ["fun"],
     description:
       "Store a fact about a user for future reference. Use when someone shares personal info, preferences, or anything worth remembering. Set sensitivity based on how personal/vulnerable the info is: 'normal' for general facts (favorite game, timezone), 'sensitive' for personal things only they should know you remember (insecurities, crushes, personal struggles), 'secret' for things they explicitly trust you with or things that could embarrass/hurt them if revealed (deep confessions, 'you're my most prized possession', private feelings). Default to 'normal' — only escalate when the info genuinely warrants protection.",
     input_schema: {
@@ -106,6 +107,7 @@ export const EVERYONE_TOOLS = [
   // ═══════════════════════════════════════════════════════════════════════════
   {
     name: "send_gif",
+    tags: ["fun"],
     description:
       "Send a GIF in response to the conversation. Use when the vibe calls for a reaction GIF, someone asks for one, or a visual response would be funnier than text. Searches Tenor/Giphy by query.",
     input_schema: {
@@ -145,6 +147,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "search_meme_templates",
+    tags: ["fun"],
     description: "Search for meme templates by keyword. You MUST call this BEFORE create_meme — ALWAYS search first, then create. This finds the right template name to use. If a user asks for a specific meme format (e.g. 'compressed avatar', 'drake', 'distracted boyfriend'), search for it here first to get the exact template name.",
     input_schema: {
       type: "object",
@@ -156,6 +159,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "create_meme",
+    tags: ["fun"],
     description:
       "Generate a unique, context-aware meme. You MUST think creatively about what would be genuinely funny and pick the perfect template. Use search_meme_templates first if you're not sure which template fits best or want to find something fresh. Match the template to the joke like a real meme lord would. Examples: 'drake' = preferring one thing over another, 'distracted-boyfriend' or 'db' = being tempted by something new, 'cmm' or 'change-my-mind' = hot takes, 'gru' = plan backfiring, 'fine' = this is fine/everything burning, 'stonks' = bad financial decisions, 'panik-kalm-panik' = panic-calm-panic cycle, 'fry' = not sure if X or Y, 'pigeon' = is this a X?, 'mordor' = one does not simply, 'slap' = batman slapping robin, 'drake' = yes/no preference, 'exit' = left exit 12 off ramp, 'buzz' = X everywhere, 'doge' = wow such X, 'harold' = hide the pain, 'rollsafe' = clever thinking, 'kombucha' = side-eyeing, 'leo' = pointing at screen, 'woman-cat' = woman yelling at cat, 'astronaut' = always has been, 'keanu' = breathtaking, 'spongebob' = mocking, 'michael-scott' = the office reactions, 'dwight' = false!, 'elmo' = elmo fire, 'kermit' = but that's none of my business, 'pooh' = fancy pooh, 'cheems' = sad cheems, 'khaby-lame' = obvious solution. If making a meme about a specific person, use their user_id to grab their avatar as the background. Full template list: aag, ackbar, afraid, agnes, aint-got-time, ams, ants, apcr, astronaut, atis, away, awesome, awesome-awkward, awkward, awkward-awesome, bad, badchoice, balloon, bd, because, bender, bihw, bilbo, biw, blb, boat, bongo, both, box, bs, bus, buzz, cake, captain, captain-america, cb, cbb, cbg, center, ch, chair, cheems, chosen, cmm, country, crazypills, crow, cryingfloor, db, dbg, dg, disastergirl, dodgson, doge, dragon, drake, drowning, drunk, ds, dsm, dwight, elf, elmo, ermg, exit, fa, facepalm, fbf, feelsgood, fetch, fine, firsttry, fmr, friends, fry, fwp, gandalf, gb, gears, genie, ggg, glasses, gone, grave, gru, grumpycat, hagrid, handshake, happening, harold, headaches, hipster, home, icanhas, imsorry, inigo, interesting, ive, iw, jd, jetpack, jim, joker, jw, keanu, kermit, khaby-lame, kk, kombucha, kramer, leo, light, live, ll, lrv, made, mb, michael-scott, midwit, millers, mini-keanu, mmm, money, mordor, morpheus, mouth, mw, nails, nice, noah, noidea, ntot, oag, officespace, older, oprah, panik-kalm-panik, patrick, perfection, persian, philosoraptor, pigeon, pooh, pool, ptj, puffin, red, regret, remembers, reveal, right, rollsafe, sad-biden, sad-boehner, sad-bush, sad-clinton, sad-obama, sadfrog, saltbae, same, sarcasticbear, say, sb, scc, seagull, sf, sk, ski, slap, snek, soa, sohappy, sohot, soup-nazi, sparta, spiderman, spirit, spongebob, ss, stew, stonks, stop, stop-it, success, tenguy, toohigh, touch, tried, trump, ugandanknuck, vince, wallet, waygd, wddth, whatyear, winter, wishes, wkh, woman-cat, wonka, worst, xy, yallgot, yodawg, yuno, zero-wing.",
     input_schema: {
@@ -172,6 +176,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "web_search",
+    tags: ["fun"],
     description:
       "Search the web for current information. Use when someone asks a question you don't know the answer to, needs up-to-date info, or wants to look something up (news, docs, trivia, etc.).",
     input_schema: {
@@ -425,6 +430,7 @@ export const EVERYONE_TOOLS = [
   // ─── REFERENCE TOOL ─── This is a canonical example. New contributors: copy this pattern when adding a tool. See packages/eris/ai/executors/miscExecutor.js:63 for the matching handler and packages/eris/tests/ai/getMoodTool.test.ts:1 for the spec. ───
   {
     name: "get_mood",
+    tags: ["fun"],
     description:
       "Check Irene's current mood/attitude level. Use for introspection when someone asks how you're feeling or to calibrate your sass level.",
     input_schema: {
@@ -435,6 +441,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "get_relationship",
+    tags: ["fun"],
     description:
       "Check the relationship status and history with a specific user or the server in general. Use to recall how you feel about someone or review past interactions.",
     input_schema: {
