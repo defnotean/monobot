@@ -296,8 +296,30 @@ RELATIONSHIPS:
 // ═══════════════════════════════════════════════════════════════════════════
 
 if (!config.token) {
-  console.error("DISCORD_BOT_TOKEN is required");
+  console.error("[FATAL] DISCORD_BOT_TOKEN is required in .env");
   process.exit(1);
+}
+if (!config.clientId) {
+  console.error("[FATAL] DISCORD_CLIENT_ID is required in .env (needed for slash command registration)");
+  process.exit(1);
+}
+// Validate matching API key for the chosen AI provider so a misconfig
+// fails at startup, not at the first user message. Mirrors Eris's block.
+if (config.aiProvider === "gemini" && !config.geminiKeys.length) {
+  console.error("[FATAL] At least one GEMINI_API_KEY is required when AI_PROVIDER=gemini");
+  process.exit(1);
+}
+if (config.aiProvider === "nvidia" && !config.nvidia.apiKey) {
+  console.error("[FATAL] NVIDIA_API_KEY is required when AI_PROVIDER=nvidia");
+  process.exit(1);
+}
+if (!["gemini", "nvidia"].includes(config.aiProvider)) {
+  console.error(`[FATAL] AI_PROVIDER="${config.aiProvider}" is not a recognized value. Expected "gemini" or "nvidia".`);
+  process.exit(1);
+}
+// Non-fatal warnings for degraded functionality
+if (!config.supabaseEnabled) {
+  console.warn("[WARN] SUPABASE_URL / SUPABASE_KEY missing or invalid — running without persistence. Most Irene features will not work.");
 }
 
 export default config;

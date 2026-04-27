@@ -17,7 +17,9 @@
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
 
-const PROVIDER = (config.aiProvider || "nvidia").toLowerCase();
+// Default to "gemini" to match config.js's documented default. The previous
+// "|| nvidia" silently flipped to NVIDIA if config.aiProvider was ever empty.
+const PROVIDER = (config.aiProvider || "gemini").toLowerCase();
 const FALLBACK_ENABLED = config.aiProviderFallback !== false; // opt-out via config
 
 let primary;
@@ -46,8 +48,10 @@ switch (PROVIDER) {
     log("[AI] Provider: Google Gemini");
     break;
   default:
-    log(`[AI] Unknown provider "${PROVIDER}" — falling back to NVIDIA`);
-    primary = await import("./nvidia.js");
+    // Should be unreachable thanks to config.js validation; kept as a
+    // last-resort guard so we never silently load the wrong provider.
+    log(`[AI] Unknown provider "${PROVIDER}" — falling back to Gemini`);
+    primary = await import("./gemini.js");
 }
 
 // ─── Fallback-wrapped runGeminiChat ─────────────────────────────────────────
