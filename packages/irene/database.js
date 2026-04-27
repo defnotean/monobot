@@ -2,8 +2,37 @@
 // All reads are synchronous (from cache). Writes update cache immediately then
 // flush to Supabase in the background. On startup, loads from Supabase so data
 // survives Render deploys and restarts.
+//
+// ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────
+//  1. In-memory cache + scrim stats ........................... ~line 34
+//  2. Supabase client & initial load .......................... ~line 79
+//  3. Save (debounced + retry) & flushNow ..................... ~line 157
+//  4. Moderation — warnings ................................... ~line 230
+//  5. Guild settings & directives ............................. ~line 273
+//  6. Server rules + auto-mod (rules/exemptions/violations) ... ~line 319
+//  7. Misc guild settings (welcome, log, ghost-ping, autorole)  ~line 496
+//  8. Ticket system (config, roles, panel, types, resolution)   ~line 553
+//  9. AFK / temp-VC / color roles / seasonal palettes ......... ~line 798
+// 10. Access role / verification / trusted users / DM opt-out . ~line 886
+// 11. Custom commands ........................................ ~line 963
+// 12. Welcome embed, DM welcome, leave messages .............. ~line 1005
+// 13. Conversations, channel/server personas, bad words, stats ~line 1063
+// 14. Reaction roles, reminders, scheduled tasks, starboard .. ~line 1183
+// 15. Birthdays & server whitelist ........................... ~line 1314
+// 16. Emotional state — mood, energy, relationships .......... ~line 1425
+// 17. Personality (Supabase-synced) .......................... ~line 1474
+// 18. Persistent runtime — music queues, temp VC, lockdown ... ~line 1492
+// 19. External feeds — RSS / Twitch / TTS / YouTube / GitHub . ~line 1589
+// 20. Giveaways, highlights, voice stats, auto-responders .... ~line 1675
+// 21. Feature toggles & audit log ............................ ~line 1756
+// 22. Invite tracking / temp bans / invite filter / sticky msg ~line 1790
+// ────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from "@supabase/supabase-js";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IN-MEMORY CACHE — single source of truth for all reads (synchronous)
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ─── In-memory cache ─────────────────────────────────────────────────────────
 
@@ -45,6 +74,10 @@ export function updateScrimStats(guildId, game, stats) {
   data.scrim_stats[guildId][game] = stats;
   save();
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUPABASE CLIENT & INITIAL LOAD — restores cache from prior process
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Supabase client ─────────────────────────────────────────────────────────
 
@@ -120,6 +153,10 @@ export async function initDatabase() {
   console.error("[DB] All Supabase init attempts failed — running without persistence");
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SAVE PIPELINE — debounced writes, retry/backoff, immediate flush on shutdown
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ─── Save — debounced + retry ─────────────────────────────────────────────────
 // Coalesces rapid back-to-back writes into one Supabase call (2 s window).
 // Retries up to 3 times on failure, then reschedules after 30 s.
@@ -189,6 +226,10 @@ async function _flushSave() {
   _saveTimer = setTimeout(_flushSave, 30_000);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// MODERATION — warnings (add/get/delete/clear)
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ─── Warnings ────────────────────────────────────────────────────────────────
 
 export function addWarning(guildId, userId, moderatorId, reason) {
@@ -227,6 +268,10 @@ export function clearWarnings(guildId, userId) {
   save();
   return { changes: before - data.warnings.length };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GUILD SETTINGS & DIRECTIVES — per-server key/value store + admin directives
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Guild Settings ───────────────────────────────────────────────────────────
 
@@ -269,6 +314,10 @@ export function removeDirective(guildId, indexOrKeyword) {
   save();
   return { success: true, removed: removed.text };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SERVER RULES & AUTO-MOD — numbered rules, exemptions, violation tracking
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Server Rules: structured rules Irene enforces ────────────────────────────
 // Mirrors the `directives` pattern but with rule numbers (1, 2, 3 …) and
@@ -443,6 +492,11 @@ export function getRecentViolations(guildId, userId, withinMs = 30 * 86_400_000,
   return list.filter(v => v.userId === userId && v.ts >= cutoff);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// MISC GUILD SETTINGS — GIF style, DM results, welcome channel, ghost-pings,
+// log channel, autorole, ticket category root
+// ═══════════════════════════════════════════════════════════════════════════
+
 export function setGifEmbed(guildId, enabled) {
   ensureGuild(guildId).gif_embed = enabled;
   save();
@@ -494,6 +548,10 @@ function _cleanRoleIds(roleIds) {
     ? roleIds.map(String).filter((id) => /^\d{17,20}$/.test(id))
     : [];
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TICKET SYSTEM — roles, welcome/panel embeds, types, auto-category resolution
+// ═══════════════════════════════════════════════════════════════════════════
 
 // Legacy: both pings AND grants view access in one call. Kept as a shorthand.
 // New code should prefer setTicketViewRoles / setTicketPingRoles separately.
@@ -736,6 +794,10 @@ export async function resolveTicketRoles(guild) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// AFK / TEMP-VC / COLOR ROLES / SEASONAL PALETTES — voice & cosmetic config
+// ═══════════════════════════════════════════════════════════════════════════
+
 export function setAfkSettings(guildId, channelId, timeoutMinutes) {
   const s = ensureGuild(guildId);
   s.afk_channel_id = channelId;
@@ -820,6 +882,11 @@ export function getLastSeasonalPalette(guildId) {
   return data.guild_settings[guildId]?.last_seasonal_palette ?? null;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ACCESS CONTROL — Irene access role, verification gating, trusted users,
+// per-user DM opt-out
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ─── Irene Access Role ───────────────────────────────────────────────────────
 
 export function setAccessRole(guildId, roleId) {
@@ -892,6 +959,10 @@ export function setDmOptout(userId, optout) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CUSTOM COMMANDS — user-defined !triggers per guild
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ─── Custom Commands ─────────────────────────────────────────────────────────
 
 export function getCustomCommands(guildId) {
@@ -929,6 +1000,10 @@ export function deleteCustomCommand(guildId, trigger) {
 export function listCustomCommands(guildId) {
   return Object.values(getCustomCommands(guildId));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WELCOME / DM-WELCOME / LEAVE — embed customization & message templates
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Welcome Embed Customization ─────────────────────────────────────────────
 
@@ -983,6 +1058,10 @@ export function getLeaveSettings(guildId) {
     message: s?.leave_message ?? "Goodbye, {username}. We hope to see you again!",
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONVERSATIONS, PERSONALITIES, BAD WORDS, ESCALATION & STATS CHANNELS
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Conversation Memory ──────────────────────────────────────────────────────
 
@@ -1099,6 +1178,10 @@ export function setStatsChannels(guildId, config) {
 export function getStatsChannels(guildId) {
   return data.guild_settings[guildId]?.stats_channels ?? null;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REACTION ROLES, REMINDERS, SCHEDULED TASKS & STARBOARD
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Reaction Roles ───────────────────────────────────────────────────────────
 
@@ -1227,6 +1310,10 @@ export function getStarboardEntry(guildId, messageId) {
   return data.starboard_entries?.[guildId]?.[messageId] ?? null;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BIRTHDAYS & SERVER WHITELIST — birthday roster + bot-owner allowlisting
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ─── Birthdays ─────────────────────────────────────────────────────────────────
 
 export function setBirthday(userId, guildId, month, day, year) {
@@ -1334,6 +1421,10 @@ export function addToWhitelist(guildId, info) {
   save();
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// EMOTIONAL STATE — global mood/energy + per-user relationship affinity
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ─── Mood & Energy (shared emotional state) ──────────────────────────────────
 
 export function getMood() {
@@ -1379,6 +1470,10 @@ export function getAllRelationships() {
   return Object.entries(data.relationships).map(([uid, r]) => ({ user_id: uid, ...r }));
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PERSONALITY (Supabase-synced) — editable from the dashboard
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ─── Personality (Supabase-synced for dashboard editor) ─────────────────────
 
 export async function getPersonality() {
@@ -1392,6 +1487,10 @@ export async function updatePersonality(instructions) {
   const { error } = await supabase.from("irene_personality").upsert({ id: "irene", instructions });
   return !error;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PERSISTENT RUNTIME STATE — music queues, temp VCs, lockdown, auto-slowmode
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Saved Music Queues (persist across restarts) ────────────────────────────
 
@@ -1486,6 +1585,10 @@ export function getAutoSlowmodes(guildId) {
   return data.guild_settings[guildId]?.auto_slowmode ?? {};
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTERNAL FEEDS — RSS patch news, Twitch live, TTS, YouTube, GitHub
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ─── Patch Feeds (RSS Game News) ─────────────────────────────────────────────
 
 export function getPatchFeeds(guildId) {
@@ -1568,6 +1671,10 @@ export function setGithubConfig(guildId, config) {
   save();
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GIVEAWAYS, HIGHLIGHTS, VOICE STATS & AUTO-RESPONDERS
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ─── Audit Log ──────────────────────────────────────────────────────────────
 
 // ─── Giveaway Persistence ───────────────────────────────────────────────────
@@ -1645,6 +1752,10 @@ export function removeAutoResponder(guildId, trigger) {
   return s.auto_responders.length < before;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FEATURE TOGGLES & AUDIT LOG
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ─── Feature Toggles ────────────────────────────────────────────────────────
 
 export function isFeatureEnabled(guildId, feature) {
@@ -1674,6 +1785,10 @@ export function logAudit(guildId, action, userId, details) {
   if (s.audit_log.length > 100) s.audit_log = s.audit_log.slice(-100);
   save();
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INVITE TRACKING, TEMP BANS, INVITE FILTER & STICKY MESSAGES
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ─── INVITE TRACKING ───────────────────────────────────────────────────────
 

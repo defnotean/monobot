@@ -1,6 +1,26 @@
 // ai/tools.js — All 46 AI tool declarations for Eris
 // Anthropic schema format, ESM exports
+//
+// ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────
+//   1. EVERYONE — Memory, directives, self-knowledge .......... ~line 19
+//   2. EVERYONE — Media, web, memes, presence ................. ~line 102
+//   3. EVERYONE — Notes, reminders, code helpers .............. ~line 275
+//   4. EVERYONE — Mood, game tracking, channel config ......... ~line 417
+//   5. EVERYONE — Economy core, gambling, mini-games .......... ~line 574
+//   6. EVERYONE — Combat (heists/boss/duels), pets, territories ~line 991
+//   7. EVERYONE — Income, banking, rewards, progression ....... ~line 1134
+//   8. OWNER — System access, terminal, personality ........... ~line 1289
+//   9. OWNER — Email, GitHub, deploy, database, host ops ...... ~line 1383
+//  10. OWNER — Whitelist, trust, persona, twin delegation ..... ~line 1599
+//  11. OWNER — Relationship & mood override (appended) ........ ~line 1734
+//  12. Combined export + tool-registry wiring ................. ~line 1771
+// ────────────────────────────────────────────────────────────────────────────
 
+// ═══════════════════════════════════════════════════════════════════════════
+// EVERYONE TOOLS — MEMORY, DIRECTIVES, SELF-KNOWLEDGE
+// remember_fact / forget_fact / forget_all / recall_memories — per-user facts
+// save_directive / list_directives / remove_directive — server behavior rules
+// ═══════════════════════════════════════════════════════════════════════════
 export const EVERYONE_TOOLS = [
   {
     name: "remember_fact",
@@ -78,6 +98,12 @@ export const EVERYONE_TOOLS = [
       required: ["keyword"],
     },
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EVERYONE TOOLS — MEDIA, WEB, MEMES & PRESENCE
+  // GIFs, image analysis & search, meme template lookup + generation,
+  // web search & URL scraping, and Discord presence / availability check.
+  // ═══════════════════════════════════════════════════════════════════════════
   {
     name: "send_gif",
     description:
@@ -245,6 +271,12 @@ export const EVERYONE_TOOLS = [
       required: [],
     },
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EVERYONE TOOLS — NOTES, REMINDERS & CODE HELPERS
+  // Per-user named notes (CRUD + search), timed reminders (set/list/cancel),
+  // code review and saved code snippets (named scratchpad).
+  // ═══════════════════════════════════════════════════════════════════════════
   {
     name: "save_note",
     description:
@@ -381,6 +413,16 @@ export const EVERYONE_TOOLS = [
       required: [],
     },
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EVERYONE TOOLS — MOOD, GAME TRACKING, KARAOKE, CHANNEL CONFIG, PRICES
+  // get_mood / get_relationship — introspection
+  // track_game / untrack_game / list_game_watches — Steam patch-note watcher
+  // start_karaoke / stop_karaoke — synced lyrics in nickname (Irene only)
+  // set_event_channels / set_chat_channels / test_fire_event — server config
+  // watch_price / check_prices / unwatch_price — product price monitoring
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ─── REFERENCE TOOL ─── This is a canonical example. New contributors: copy this pattern when adding a tool. See packages/eris/ai/executors/miscExecutor.js:63 for the matching handler and packages/eris/tests/ai/getMoodTool.test.ts:1 for the spec. ───
   {
     name: "get_mood",
     description:
@@ -529,6 +571,15 @@ export const EVERYONE_TOOLS = [
       required: ["watch_id"],
     },
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EVERYONE TOOLS — ECONOMY CORE, GAMBLING, MINI-GAMES & EXPANSION
+  // The big sub-block: balance/daily, all gambling games (coinflip, dice,
+  // slots, blackjack, roulette, poker, rob), stocks, lottery, leaderboards,
+  // chaos & fun (fortune, duels, confessions, curses), mini-games (trivia,
+  // scramble, RPS, number guess), and economy expansion (shop, loans,
+  // bounties, daily challenges, achievements).
+  // ═══════════════════════════════════════════════════════════════════════════
 
   // ─── Economy & Gambling ──────────────────────────────────────────────────
 
@@ -938,6 +989,13 @@ export const EVERYONE_TOOLS = [
     input_schema: { type: "object", properties: {} },
   },
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EVERYONE TOOLS — COMBAT, PETS, TERRITORIES & SOCIAL CHAOS
+  // Group activities: heists (3+ participants), boss battles (server-wide HP),
+  // territory claims (passive income per channel), pet adoption / care, and
+  // social chaos (roast battles, hot takes) plus per-server feature toggles.
+  // ═══════════════════════════════════════════════════════════════════════════
+
   // ─── Heists ──────────────────────────────────────────────────────────
 
   {
@@ -1073,6 +1131,15 @@ export const EVERYONE_TOOLS = [
       required: ["action"],
     },
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EVERYONE TOOLS — INCOME, BANKING, REWARDS, GAMES, PROGRESSION, MARRIAGE
+  // The grind half: fish/hunt/dig/work/beg/search income tools, weekly/monthly
+  // rewards, bank deposit/withdraw/info, give_coins transfer (taxed), scratch
+  // cards / lootboxes / adventures, prestige & multipliers, marriage flow,
+  // crafting/trading, pet battles & training, and consumable item activation.
+  // ═══════════════════════════════════════════════════════════════════════════
+
   // ─── Income & Activity Tools ───────────────────────────────────────────────
   {
     name: "fish",
@@ -1220,6 +1287,12 @@ export const EVERYONE_TOOLS = [
   },
 ];
 
+// ═══════════════════════════════════════════════════════════════════════════
+// OWNER TOOLS — SYSTEM ACCESS, TERMINAL, PERSONALITY & GAME RIGGING
+// Owner-only (defnotean) machine-level tools: shell exec, local exec with
+// audit description, live personality update, full game/slot odds rigging,
+// minion management.
+// ═══════════════════════════════════════════════════════════════════════════
 export const OWNER_TOOLS = [
   {
     name: "execute_terminal",
@@ -1307,6 +1380,13 @@ export const OWNER_TOOLS = [
       },
     },
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // OWNER TOOLS — EMAIL, GITHUB, DEPLOY, DATABASE & HOST OPS
+  // Productivity / ops tools: Gmail (read/search/draft/summarize), GitHub
+  // (repos/issues/PRs/create/stats), deploy status & live watch, database
+  // queries, system info, process listing, app launch, file browsing.
+  // ═══════════════════════════════════════════════════════════════════════════
   {
     name: "read_emails",
     description:
@@ -1516,6 +1596,13 @@ export const OWNER_TOOLS = [
       required: ["path"],
     },
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // OWNER TOOLS — WHITELIST, TRUST, PERSONA & TWIN DELEGATION
+  // Cross-twin server whitelist management, granting/revoking trusted-user
+  // status, customizing Eris's avatar/banner/name/nickname (and per-server
+  // persona), and ask_irene — delegate any server moderation to her sister.
+  // ═══════════════════════════════════════════════════════════════════════════
   {
     name: "whitelist_server",
     description: "Add a Discord server to the shared whitelist so both Irene and Eris can stay in it. Owner only. Accepts either a guild ID OR a discord invite link (discord.gg/xxx).",
@@ -1645,6 +1732,11 @@ export const OWNER_TOOLS = [
   },
 ];
 
+// ═══════════════════════════════════════════════════════════════════════════
+// OWNER TOOLS — RELATIONSHIP & MOOD OVERRIDE (appended via .push)
+// Natural-language-driven owner controls for nudging Eris's internal affinity
+// scores per user, and tweaking her mood/energy levels (e.g. "cheer up", "nap").
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── Relationship / Mood Management (owner-only, natural language driven) ────
 OWNER_TOOLS.push(
   {
@@ -1677,6 +1769,11 @@ OWNER_TOOLS.push(
   },
 );
 
+// ═══════════════════════════════════════════════════════════════════════════
+// COMBINED EXPORT + TOOL-REGISTRY WIRING
+// ALL_TOOLS = EVERYONE_TOOLS + OWNER_TOOLS, then we hand the two tiers to the
+// permission-aware registry so each tool dispatches with the correct gate.
+// ═══════════════════════════════════════════════════════════════════════════
 export const ALL_TOOLS = [...EVERYONE_TOOLS, ...OWNER_TOOLS];
 
 // ─── Register tools with the two-tier registry ───

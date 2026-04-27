@@ -1,5 +1,26 @@
 // ─── In-Memory Cache + Debounced Supabase Sync ──────────────────────────────
+//
+// ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────
+//   1. Setup, init, debounced save infrastructure ............. ~line 20
+//   2. Conversations, personality, per-server personas ........ ~line 145
+//   3. User content (facts, notes, reminders, snippets) ....... ~line 202
+//   4. Mood, relationships, analytics, dashboard stats ........ ~line 354
+//   5. Watches (price, news, dreams, deploys) + whitelist ..... ~line 433
+//   6. Economy core (balance, daily, transfer, leaderboards) .. ~line 546
+//   7. Game state (stats, active games, duels, trivia, prefs) . ~line 901
+//   8. Shop, inventory, achievements .......................... ~line 1056
+//   9. Loans, bounties, daily challenges ...................... ~line 1194
+//  10. Boss battles, pets, territories ....................... ~line 1277
+//  11. Heists, auctions, roast battles ....................... ~line 1447
+//  12. Banking, prestige, marriage, weekly/monthly rewards ... ~line 1559
+//  13. Crafting, cooldowns, activity streaks, career tiers ... ~line 1805
+//  14. Pet battles, guild settings, directives, shutdown ..... ~line 1904
+// ────────────────────────────────────────────────────────────────────────────
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SETUP, INIT, DEBOUNCED SAVE — Supabase client, in-memory cache shape, the
+// initDatabase() loader (with retry), and the debounced bucket-flush writer.
+// ═══════════════════════════════════════════════════════════════════════════
 import { createClient } from "@supabase/supabase-js";
 import config from "./config.js";
 import { log } from "./utils/logger.js";
@@ -121,6 +142,11 @@ async function _flushSave() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CONVERSATIONS, PERSONALITY, PER-SERVER PERSONAS — chat history (Supabase
+// direct), the editable system-prompt instructions, and per-guild name /
+// personality overrides loaded once at boot.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── CONVERSATIONS (Supabase direct — too large for memory) ───
 export async function saveInteraction(userId, username, channelId, content, isBot = false) {
   if (!supabase || !userId || !channelId) return;
@@ -173,6 +199,11 @@ export function getAllServerPersonas() { return Object.fromEntries(_serverPerson
   } catch (e) { log(`[DB] ${e.message}`); }
 })();
 
+// ═══════════════════════════════════════════════════════════════════════════
+// USER CONTENT — facts/memory (with sensitivity filtering for public vs
+// private context), local commands queue, notes, reminders, and code snippets.
+// All of these are per-user persistent stores backed by their own table.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── FACTS / MEMORY ───
 export async function saveFact(userId, factText, sensitivity = "normal", importance = "normal") {
   if (!supabase) return false;
@@ -320,6 +351,11 @@ export async function listSnippets(userId) {
   return rows || [];
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// MOOD, RELATIONSHIPS, ANALYTICS, DASHBOARD — the bot's emotional state and
+// per-user affinity scores (in-memory, debounced to Supabase) plus tool-usage
+// analytics and the aggregate dashboard counters.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── MOOD (in-memory + debounced sync) ───
 export function getMood() {
   return { ...data.mood };
@@ -394,6 +430,11 @@ export async function getDashboardStats() {
   } catch { return { messages: 0, users: 0, commands: 0, channels: 0 }; }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// WATCHES & SHARED WHITELIST — long-poll subscriptions for prices, news
+// topics, deploy status; recent dream log; and the cross-twin server
+// whitelist (read from Irene's bot_data row so both bots stay in sync).
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── PRICE WATCHES ───
 export async function addPriceWatch(userId, channelId, url, productName, targetPrice) {
   if (!supabase) return false;
@@ -502,6 +543,12 @@ export async function removeFromWhitelist(guildId) {
   } catch { return false; }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ECONOMY CORE — coin balances with per-user locks (withEconLock), atomic
+// transfers, daily reward / streak claim, message-earn cooldowns, and the
+// multi-axis leaderboard query helpers. All mutations go through versioned
+// optimistic updates with retry to prevent double-spend races.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── ECONOMY ───────────────────────────────────────────────────────────────
 
 const _economyCache = {}; // userId → {balance, daily_streak, last_daily, ...}
@@ -851,6 +898,11 @@ export async function earnMessageCoins(userId) {
   return coins;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GAME STATE — per-user game stats (W/L, streaks, totals), in-memory active
+// game sessions (auto-expiring), pending duels, anonymous confessions queue,
+// trivia stats, and per-user AI preferences.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── GAME STATS ─────────────────────────────────────────────────────────────
 
 export async function getGameStats(userId, gameType) {
@@ -1001,6 +1053,11 @@ export async function updateUserPreferences(userId, updates) {
   try { await supabase.from("eris_user_preferences").upsert({ user_id: userId, ...updates, updated_at: new Date().toISOString() }); } catch (e) { log(`[DB] ${e.message}`); }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SHOP, INVENTORY, ACHIEVEMENTS — shop catalog with atomic stock decrement /
+// increment (optimistic locking handles concurrent buyers), per-user item
+// inventory, and the unique-key achievements table.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── SHOP ───────────────────────────────────────────────────────────────────
 
 export async function getShopItems(guildId) {
@@ -1134,6 +1191,11 @@ export async function hasAchievement(userId, key) {
   return data?.length > 0;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LOANS, BOUNTIES, DAILY CHALLENGES — short-term coin loans with overdue
+// sweep, per-guild bounties on users, and the daily server challenge with
+// per-user completion tracking.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── LOANS ──────────────────────────────────────────────────────────────────
 
 export async function createLoan(userId, amount, interestRate, dueAt) {
@@ -1212,6 +1274,11 @@ export async function completeDailyChallenge(challengeId, userId) {
 // bot_data.eris_stocks). Removed to prevent future code from accidentally
 // writing to the abandoned tables.
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BOSS BATTLES, PETS, TERRITORIES — server-wide boss fights with multi-phase
+// HP and shared loot, per-user pets with hunger/mood decay over time, and
+// channel-claimed territories that generate passive coin income.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── BOSS BATTLES ───────────────────────────────────────────────────────────
 
 export async function createBossBattle(guildId, bossName, hp, expiresAt) {
@@ -1377,6 +1444,11 @@ export async function collectTerritoryIncome(territoryId, amount) {
   try { await supabase.from("eris_territories").update({ last_collected: new Date().toISOString() }).eq("id", territoryId); } catch (e) { log(`[DB] ${e.message}`); }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// HEISTS, AUCTIONS, ROAST BATTLES — multi-participant heists (per-heist locks
+// prevent join races), timed item auctions with bid escalation, and 1v1 roast
+// battles with chat-vote resolution.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── HEISTS ─────────────────────────────────────────────────────────────────
 
 export async function createHeist(guildId, channelId, organizerId, targetId) {
@@ -1484,6 +1556,12 @@ export async function updateRoastBattle(roastId, updates) {
   try { await supabase.from("eris_roast_battles").update(updates).eq("id", roastId); } catch (e) { log(`[DB] ${e.message}`); }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BANKING, PRESTIGE, MARRIAGE, REWARDS — bank vault (capacity grows with
+// prestige, 1%/day interest), prestige ladder with capped earn multiplier,
+// marriage (cached) and weekly/monthly reward claims with streak bonuses.
+// All atomic deposits/withdrawals share the economy lock.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── BANKING ───────────────────────────────────────────────────────────────
 
 const _bankCache = {}; // userId → {balance, last_interest}
@@ -1724,6 +1802,11 @@ export async function claimMonthly(userId) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CRAFTING, COOLDOWNS, STREAKS, CAREERS — discovered crafting recipes,
+// generic per-tool cooldowns with atomic try-acquire, activity streak bonuses
+// (rapid same-action multiplier), and the work-tier promotion ladder.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── CRAFTING / RECIPES ────────────────────────────────────────────────────
 
 export async function getDiscoveredRecipes(userId) {
@@ -1818,6 +1901,11 @@ export function tryAcquireCooldown(userId, toolName, cooldownMs) {
   return { onCooldown: false };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PET BATTLES, GUILD SETTINGS, DIRECTIVES, SHUTDOWN — PvP pet stats and
+// training, per-server feature toggles + persistent admin directives, and
+// the graceful flushAll() shutdown hook that drains the debounced queue.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── PET BATTLES ───────────────────────────────────────────────────────────
 
 export async function getPetBattleStats(userId) {

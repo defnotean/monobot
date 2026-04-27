@@ -1,0 +1,109 @@
+# Getting Started
+
+This guide takes you from a fresh `git clone` to a running bot in roughly 15 minutes.
+
+## Prerequisites
+
+- **Node.js 18+** (`node -v` to check; 20+ recommended)
+- **npm 9+** (ships with Node)
+- A **Discord bot** for whichever bot you want to run — create one at [discord.com/developers/applications](https://discord.com/developers/applications). You need the bot's **token** and **application ID**.
+- A **Gemini API key** (free tier works) — get one at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+- Optional: **Supabase project** (persistence), **Voyage API key** (semantic memory), **Lavalink server** (Irene music features)
+
+## 1. Clone and install
+
+```bash
+git clone https://github.com/defnotean/bots-monorepo MonoBot
+cd MonoBot
+npm install
+```
+
+`npm install` hoists dependencies to the root via npm workspaces. It should complete cleanly on macOS, Linux, and Windows. The native `@discordjs/opus` package is `optionalDependencies` — failure to build it (common on Windows without C++ build tools) is harmless and only disables Irene's voice/music output.
+
+## 2. Pick a bot
+
+The monorepo holds two independent bots. Pick one to start with.
+
+| Bot | What it does | Folder |
+|---|---|---|
+| **Eris** | Chaotic-twin AI personality, economy, gambling, mini-games (~170 tools) | `packages/eris` |
+| **Irene** | Good-twin server moderation, music, auto-mod, giveaways, tickets (~200 tools) | `packages/irene` |
+
+## 3. Configure the environment
+
+Each bot has its own `.env.example` with every variable documented. Copy and fill in the required ones:
+
+```bash
+cp packages/eris/.env.example  packages/eris/.env
+cp packages/irene/.env.example packages/irene/.env
+```
+
+**Minimum to boot Eris:** `DISCORD_TOKEN`, `CLIENT_ID`, `GEMINI_API_KEY` (Supabase warns if missing but the bot still runs ephemerally).
+
+**Minimum to boot Irene:** `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_USER_ID`, `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `TWIN_API_SECRET`.
+
+The `.env.example` files mark every variable as required, conditional, or optional, and include a link or path to where you obtain each key.
+
+## 4. Invite the bot to your server
+
+In the Discord Developer Portal:
+
+1. Open your application → **Bot** tab → enable **Message Content Intent** (required) and **Server Members Intent** (required for moderation features)
+2. **OAuth2** → **URL Generator** → scopes: `bot` + `applications.commands` → permissions: `Administrator` for a dev guild (you can scope down later)
+3. Open the generated URL and pick your test guild
+
+Use a dedicated **dev guild** — never test against the production server. The bot has destructive moderation tools.
+
+## 5. Register slash commands (one-time)
+
+```bash
+npm run deploy --workspace=@defnotean/eris
+# or
+npm run deploy --workspace=@defnotean/irene
+```
+
+Re-run this only when you add or remove a slash command.
+
+## 6. Run the bot
+
+```bash
+npm run start:eris
+# or
+npm run start:irene
+```
+
+You should see logs like:
+```
+[REGISTRY] 194 tools registered across 18 categories
+[AI] Provider: Google Gemini
+[Discord] Logged in as eris#1234
+[Discord] Online in 1 guild(s)
+```
+
+For an auto-restart dev loop, use `npm run dev --workspace=@defnotean/eris` (uses `tsx --watch`).
+
+## 7. Run the tests
+
+```bash
+npm run test:eris
+npm run test:irene
+npm test          # both
+```
+
+Tests use `vitest` and don't touch Discord or Supabase — safe to run anywhere.
+
+## What's next
+
+- **[CONTRIBUTING.md](./CONTRIBUTING.md)** — workflow, conventions, your first PR
+- **[docs/ai-pipeline-eris.md](./docs/ai-pipeline-eris.md)** / **[docs/ai-pipeline-irene.md](./docs/ai-pipeline-irene.md)** — how a Discord message becomes a reply
+- **[docs/presence-api.md](./docs/presence-api.md)** — twin coordination layer (HMAC-signed REST between the two bots)
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `Cannot find module '@discordjs/opus'` warning | Harmless — voice features disabled. To enable, install Windows Build Tools / Xcode CLT and run `npm install --include=optional` |
+| `[WARN] SUPABASE_URL / SUPABASE_KEY missing` | Eris: bot runs without persistence (fine for local). Irene: required, get a free Supabase project |
+| Bot connects but doesn't respond to mentions | Check **Message Content Intent** is enabled in Developer Portal, and `BOT_OWNER_ID` matches your Discord user ID |
+| `[FATAL] DISCORD_TOKEN is required` | `.env` not found or token line malformed — check `packages/<bot>/.env` is in the right folder |
+| Slash commands missing in Discord | Re-run `npm run deploy --workspace=@defnotean/<bot>` |

@@ -1506,6 +1506,7 @@ async function _executeToolInner(toolName, input, message) {
       );
     }
 
+    // ─── REFERENCE TOOL ─── See ai/tools.js:1902 for the schema and tests/ai/executors/listEmojis.test.ts:43 for the spec. ───
     case "list_emojis": {
       const emojis = guild.emojis.cache;
       if (!emojis.size) return "No custom emojis";

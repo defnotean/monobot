@@ -10,6 +10,8 @@
   "scripts": {
     "start:eris": "npm start --workspace=@defnotean/eris",
     "start:irene": "npm start --workspace=@defnotean/irene",
+    "dev:eris": "npm run dev --workspace=@defnotean/eris",
+    "dev:irene": "npm run dev --workspace=@defnotean/irene",
     "test": "npm test --workspaces --if-present",
     "test:eris": "npm test --workspace=@defnotean/eris",
     "test:irene": "npm test --workspace=@defnotean/irene",

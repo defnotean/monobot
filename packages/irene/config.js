@@ -1,8 +1,26 @@
 // ─── Centralized Configuration ──────────────────────────────────────────────
+//
+// ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────
+//  1. Imports & .env loader ............... ~line 17
+//  2. env() helper ........................ ~line 48
+//  3. Discord identity & Twin API ......... ~line 56
+//  4. Lavalink (music) .................... ~line 76
+//  5. AI providers (NVIDIA + Gemini keys) . ~line 82
+//  6. External APIs (Twitch) .............. ~line 115
+//  7. Bot personality (prompt loader) ..... ~line 121
+//  8. Rate limits & misc tunables ......... ~line 234
+//  9. Embed colors palette ................ ~line 260
+// 10. Timeouts ............................ ~line 275
+// 11. Validation & export ................. ~line 290
+// ────────────────────────────────────────────────────────────────────────────
 
 import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// .ENV LOADER — manual parser, avoids system env conflicts
+// ═══════════════════════════════════════════════════════════════════════════
 
 // Read .env file manually to avoid system env conflicts
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,6 +48,10 @@ if (existsSync(envPath)) {
 function env(key, fallback) {
   return envVars[key] || process.env[key] || fallback;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONFIG OBJECT — Discord identity, Twin API, music, AI providers, personality
+// ═══════════════════════════════════════════════════════════════════════════
 
 const config = {
   token: env("DISCORD_BOT_TOKEN"),
@@ -90,10 +112,15 @@ const config = {
     env("GEMINI_API_KEY_12"),
   ].filter(Boolean),
 
-  // Twitch API (for live notifications)
+  // ═══════════════════════════════════════════════════════════════════════
+  // EXTERNAL APIs — Twitch (for live stream notifications)
+  // ═══════════════════════════════════════════════════════════════════════
   twitchClientId: env("TWITCH_CLIENT_ID"),
   twitchClientSecret: env("TWITCH_CLIENT_SECRET"),
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // BOT PERSONALITY — loaded from prompts/*.md, with hard-coded fallback
+  // ═══════════════════════════════════════════════════════════════════════
   // Bot personality — loaded from prompts/*.md files at runtime.
   // To edit personality, modify files in prompts/ directory.
   botPersonality: (() => {
@@ -204,6 +231,9 @@ RELATIONSHIPS:
     }
   })(),
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // RATE LIMITS, EMBEDDINGS & TUNABLE THRESHOLDS
+  // ═══════════════════════════════════════════════════════════════════════
   // Rate limits
   aiCooldownMs: 1500, // 1.5 seconds between AI requests per user
   aiMaxHistory: 10, // Messages to keep in conversation memory
@@ -227,6 +257,9 @@ RELATIONSHIPS:
   ttsMaxCacheSize: 50,
   webRateLimitPerMin: 10,
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // EMBED COLORS — brand palette used across all embeds
+  // ═══════════════════════════════════════════════════════════════════════
   // Colors for embeds
   colors: {
     primary:    0x7C3AED,  // violet — Irene's signature brand color
@@ -253,6 +286,10 @@ RELATIONSHIPS:
     fetch:         parseInt(env("TIMEOUT_FETCH", "5000")),
   },
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VALIDATION & EXPORT — bail out at startup if Discord token is missing
+// ═══════════════════════════════════════════════════════════════════════════
 
 if (!config.token) {
   console.error("DISCORD_BOT_TOKEN is required");

@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@defnotean/shared": "*",
-    "@discordjs/opus": "^0.9.0",
     "@discordjs/voice": "^0.18.0",
     "@google/genai": "1.50.1",
     "@supabase/supabase-js": "2.104.1",
@@ -31,5 +30,8 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
+  },
+  "optionalDependencies": {
+    "@discordjs/opus": "^0.9.0"
   }
 }

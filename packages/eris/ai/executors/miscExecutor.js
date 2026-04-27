@@ -59,6 +59,7 @@ export async function execute(toolName, input, message, _context) {
     //  MOOD & RELATIONSHIPS
     // ════════════════════════════════════════════════════════════════════
 
+    // ─── REFERENCE TOOL ─── See packages/eris/ai/tools.js:427 for the schema and packages/eris/tests/ai/getMoodTool.test.ts:1 for the spec. ───
     case "get_mood": {
       const mood = db.getMood();
       const moodLabel = mood.mood_score > 30 ? "great" : mood.mood_score > 0 ? "decent" : mood.mood_score > -30 ? "meh" : "terrible";

@@ -1,7 +1,41 @@
 // ─── Irene's AI Tool Definitions ────────────────────────────────────────────
 // All the actions Irene can perform via natural language
+//
+// ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────
+//  ADMIN_TOOLS — privileged tools (mods/admins/owner only)
+//   1. Channel management (create/delete/lock/clone/perms) .... ~line 40
+//   2. Category management ................................... ~line 182
+//   3. Role management (create/edit/permissions/icons) ....... ~line 201
+//   4. Moderation (ban/kick/timeout/warn/purge/lockdown) ..... ~line 359
+//   5. Server settings (welcome, verification, autorole, etc) ~line 573
+//   6. Server whitelist (bot-owner only) ..................... ~line 703
+//   7. Messaging / embeds / animated messages / threads ...... ~line 1065
+//   8. Emoji management ...................................... ~line 1124
+//   9. Invites ............................................... ~line 1146
+//  10. Custom commands (create/edit/delete/list) ............. ~line 1161
+//  11. New QOL tools (DM welcome, leave, persona, etc) ....... ~line 1229
+//  12. Voice & auto-responder tools .......................... ~line 1402
+//  13. Tickets, scrim manager, relationship/mood adjustment .. ~line 1623
+//
+//  EVERYONE_TOOLS — tools any member can call
+//  14. Birthday (set/get/list/remove) ........................ ~line 1661
+//  15. Music (play/pause/queue/filters/lyrics) ............... ~line 1702
+//  16. Test / preview (patch news, welcome, birthday, GIF) ... ~line 1805
+//  17. Temp VC controls (private/public/kick/transfer/claim) . ~line 1942
+//  18. Reminders ............................................. ~line 2020
+//  19. Deferred task scheduling .............................. ~line 2047
+//  20. Eris (twin sister) integration ........................ ~line 2081
+//  21. Calculator ............................................ ~line 2103
+//  22. Web search & read ..................................... ~line 2119
+//  23. Snipe + edit-snipe + directives ....................... ~line 2145
+//  24. Registry hook ......................................... ~line 2189
+// ────────────────────────────────────────────────────────────────────────────
 
 import { NEW_ADMIN_TOOLS, NEW_EVERYONE_TOOLS } from "./newtools.js";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ADMIN_TOOLS — destructive / privileged actions, gated to mods+admins+owner
+// ═══════════════════════════════════════════════════════════════════════════
 
 export const ADMIN_TOOLS = [
   // ─── Channel Management ─────────────────────────────────────────────
@@ -322,6 +356,9 @@ export const ADMIN_TOOLS = [
       required: ["role_name", "action"],
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // MODERATION TOOLS — ban/kick/timeout/warn/purge/lockdown/find-message
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Moderation ─────────────────────────────────────────────────────
   {
     name: "ban_user",
@@ -533,6 +570,10 @@ export const ADMIN_TOOLS = [
       required: ["username"],
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // SERVER SETUP — welcome, verification, autorole, log channel, persona,
+  // patch/twitch/youtube/github feeds, role pickers, color roles, VC setup
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Server Settings ────────────────────────────────────────────────
   {
     name: "set_welcome_channel",
@@ -659,6 +700,9 @@ export const ADMIN_TOOLS = [
       required: ["role_name"],
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // SERVER WHITELIST — bot-owner-only allowlist of servers Irene may join
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Server Whitelist (bot-owner only) ───────────────────────────
   {
     name: "whitelist_server",
@@ -1018,6 +1062,9 @@ export const ADMIN_TOOLS = [
       required: ["channel_name"],
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // MESSAGING & CONTENT — embeds, animated embeds, threads
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Messaging / Content ────────────────────────────────────────────
   {
     name: "send_message",
@@ -1111,6 +1158,9 @@ export const ADMIN_TOOLS = [
       },
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // CUSTOM COMMANDS — admin authoring of !triggered embed responses
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Custom Commands ────────────────────────────────────────────────
   {
     name: "create_custom_command",
@@ -1176,6 +1226,11 @@ export const ADMIN_TOOLS = [
     description: "List all custom commands",
     input_schema: { type: "object", properties: {} },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // QUALITY-OF-LIFE — DM welcome, leave channel, server avatar/banner,
+  // server/channel persona, bad words, escalation, stats channels,
+  // reaction roles, starboard, and the bundled NEW_ADMIN_TOOLS extension
+  // ═══════════════════════════════════════════════════════════════════
   // ─── New QOL Tools ─────────────────────────────────────────────────────
   {
     name: "set_dm_welcome",
@@ -1344,6 +1399,10 @@ export const ADMIN_TOOLS = [
     },
   },
   ...NEW_ADMIN_TOOLS,
+  // ═══════════════════════════════════════════════════════════════════
+  // VOICE & AUTO-RESPONDER — VC leaderboard, auto-replies, milestones,
+  // feature toggles (twin chat, voice tracking, invite filter), sticky msgs
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Voice & Auto-Responder Tools ─────────────────────────────────────
   {
     name: "voice_leaderboard",
@@ -1561,6 +1620,9 @@ export const ADMIN_TOOLS = [
       required: ["action", "game"],
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // TICKETS, SCRIM MANAGER, RELATIONSHIP & MOOD ADJUSTMENT (owner-only)
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Relationship / Mood Management (owner-only, natural language) ────
   {
     name: "adjust_relationship",
@@ -1591,6 +1653,10 @@ export const ADMIN_TOOLS = [
     },
   },
 ];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EVERYONE_TOOLS — non-destructive tools any member can invoke
+// ═══════════════════════════════════════════════════════════════════════════
 
 export const EVERYONE_TOOLS = [
   // ─── Birthday ────────────────────────────────────────────────────────
@@ -1633,6 +1699,9 @@ export const EVERYONE_TOOLS = [
       },
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // MUSIC — playback, queue, filters, lyrics mode
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Music ────────────────────────────────────────────────────────────
   {
     name: "play_music",
@@ -1733,6 +1802,10 @@ export const EVERYONE_TOOLS = [
     description: "Enable auto lyrics mode — lyrics will automatically show for every track that plays. Use when someone says 'auto lyrics', 'always show lyrics', 'lyrics for every song'.",
     input_schema: { type: "object", properties: {} },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // PREVIEW & UTILITY — patch news, welcome/birthday tests, GIF, server/
+  // user/role/channel/emoji/ban listings, random member, member counts
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Test / Preview ─────────────────────────────────────────────────
   {
     name: "test_patch_news",
@@ -1825,6 +1898,7 @@ export const EVERYONE_TOOLS = [
       required: ["role_name"],
     },
   },
+  // ─── REFERENCE TOOL ─── This is a canonical example. New contributors: copy this pattern when adding a tool. See ai/executor.js:1510 for handler and tests/ai/executors/listEmojis.test.ts:43 for spec. ───
   {
     name: "list_emojis",
     description: "List all custom emojis in the server",
@@ -1866,6 +1940,9 @@ export const EVERYONE_TOOLS = [
       required: ["role_name"],
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // TEMP VC CONTROLS — owner-of-the-channel controls (private/lock/kick/etc)
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Temp VC Controls (for channel owners) ─────────────────────────
   {
     name: "vc_info",
@@ -1941,6 +2018,9 @@ export const EVERYONE_TOOLS = [
     description: "Claim ownership of a temp VC whose owner already left. You must be in the channel.",
     input_schema: { type: "object", properties: {} },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // REMINDERS — set/cancel a per-user delayed ping
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Reminder Tools ────────────────────────────────────────────────────
   {
     name: "reminder_set",
@@ -1965,6 +2045,9 @@ export const EVERYONE_TOOLS = [
       required: ["reminder_id"],
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // DEFERRED TASK SCHEDULING — schedule any other tool to run later
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Deferred Task Scheduling ──────────────────────────────────────────
   {
     name: "schedule_task",
@@ -1996,6 +2079,9 @@ export const EVERYONE_TOOLS = [
     description: "List pending scheduled tasks for this server with their IDs, tool names, fire times, and notes. Use this before cancelling to find the right ID.",
     input_schema: { type: "object", properties: {} },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // ERIS (TWIN SISTER) — handoff to Eris for reminders/notes/facts/mood
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Eris (Twin Sister) Integration ────────────────────────────
   {
     name: "ask_eris",
@@ -2015,6 +2101,9 @@ export const EVERYONE_TOOLS = [
       required: ["action"],
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // CALCULATOR — sandboxed math expression evaluator
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Calculator ──────────────────────────────────────────────────────
   {
     name: "calculate",
@@ -2028,6 +2117,9 @@ export const EVERYONE_TOOLS = [
       required: ["expression"],
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // WEB — search & fetch URL contents
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Web Search & Read ───────────────────────────────────────────────
   {
     name: "web_search",
@@ -2051,6 +2143,9 @@ export const EVERYONE_TOOLS = [
       required: ["url"],
     },
   },
+  // ═══════════════════════════════════════════════════════════════════
+  // SNIPE & DIRECTIVES — recover deleted/edited messages, save admin rules
+  // ═══════════════════════════════════════════════════════════════════
   // ─── Snipe ──────────────────────────────────────────────────────────
   {
     name: "snipe",
@@ -2093,6 +2188,9 @@ export const EVERYONE_TOOLS = [
   ...NEW_EVERYONE_TOOLS,
 ];
 
+// ═══════════════════════════════════════════════════════════════════════════
+// REGISTRY HOOK — wire both tiers into the presence-bot registry on import
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── Register tools with the two-tier registry ───
 import { registerPresenceBotTools } from "./toolRegistry.js";
 registerPresenceBotTools(ADMIN_TOOLS, EVERYONE_TOOLS);

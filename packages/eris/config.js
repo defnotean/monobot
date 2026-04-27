@@ -1,5 +1,19 @@
 // ─── Centralized Configuration ──────────────────────────────────────────────
+//
+// ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────
+//  1. Imports & .env loader ............................. ~line 17
+//  2. env() helper + GitHub token bootstrap ............. ~line 41
+//  3. Identity, twin API, agent kill switches ........... ~line 61
+//  4. AI provider config (Gemini + NVIDIA fallback) ..... ~line 81
+//  5. External integrations (Supabase, GH, music APIs) .. ~line 126
+//  6. Bot personality (prompts/*.md + inline fallback) .. ~line 150
+//  7. Tunables, colors, timeouts ........................ ~line 402
+//  8. Startup validation & default export ............... ~line 434
+// ────────────────────────────────────────────────────────────────────────────
 
+// ═══════════════════════════════════════════════════════════════════════════
+// IMPORTS & .ENV FILE LOADER — parses .env into envVars before anything else
+// ═══════════════════════════════════════════════════════════════════════════
 import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -24,6 +38,11 @@ if (existsSync(envPath)) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// env() HELPER + GITHUB TOKEN BOOTSTRAP — env() prefers .env, falls back to
+// process.env, then to a literal default. ghToken is extracted from `gh` CLI
+// when GITHUB_TOKEN isn't set so dev machines can use their existing auth.
+// ═══════════════════════════════════════════════════════════════════════════
 function env(key, fallback) {
   return envVars[key] || process.env[key] || fallback;
 }
@@ -34,7 +53,15 @@ if (!ghToken) {
   try { ghToken = execSync("gh auth token", { encoding: "utf8", timeout: 5000 }).trim(); } catch {}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CONFIG OBJECT — every runtime knob lives on this single object. Sections
+// inside follow: identity → AI → integrations → personality → tunables.
+// ═══════════════════════════════════════════════════════════════════════════
 const config = {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // IDENTITY, TWIN API, AGENT KILL SWITCHES — Discord credentials, owner ID,
+  // bot name, PC agent disable flag, and the HMAC-signed twin (Irene) link.
+  // ═══════════════════════════════════════════════════════════════════════════
   token: env("DISCORD_TOKEN"),
   clientId: env("CLIENT_ID"),
   ownerId: env("BOT_OWNER_ID", "123456789012345678"),
@@ -51,6 +78,10 @@ const config = {
   twinApiSecret: env("TWIN_API_SECRET"),
   twinApiUrl: env("IRENE_API_URL", "https://irene-bot.onrender.com"),
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AI PROVIDER CONFIG — Gemini (primary) and NVIDIA Llama (fallback). Voyage
+  // handles embeddings for semantic memory. Switch via aiProvider string.
+  // ═══════════════════════════════════════════════════════════════════════════
   // AI Provider — back on Gemini (NVIDIA models had inconsistent tool calling)
   // To switch: "gemini" | "nvidia". The nvidia config below is preserved
   // so you can flip back any time by changing this single string.
@@ -92,6 +123,10 @@ const config = {
   geminiFallbackModel: env("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash"),
   geminiFastModel: env("GEMINI_FAST_MODEL", "gemini-3-flash-preview"),
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EXTERNAL INTEGRATIONS — Supabase persistence, music (Last.fm), GIFs (Klipy),
+  // GitHub (gh-derived token), Render deploys, Google OAuth (Gmail/etc.).
+  // ═══════════════════════════════════════════════════════════════════════════
   supabaseUrl: env("SUPABASE_URL"),
   supabaseKey: env("SUPABASE_KEY"),
   get supabaseEnabled() {
@@ -112,6 +147,11 @@ const config = {
     get enabled() { return !!(this.clientId && this.clientSecret && this.refreshToken); },
   },
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BOT PERSONALITY — assembled from prompts/*.md at startup. The huge inline
+  // string below is the fallback used when the prompt files can't be read; it
+  // duplicates the canonical content in prompts/eris-*.md.
+  // ═══════════════════════════════════════════════════════════════════════════
   // Eris personality — loaded from prompts/*.md files at runtime.
   // To edit personality, modify files in prompts/ directory.
   // The inline string below is kept as a fallback only.
@@ -359,6 +399,10 @@ Keep responses under 200 characters unless genuinely explaining something (then 
     }
   })(),
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TUNABLES, COLORS, TIMEOUTS — runtime knobs (cooldowns, history budgets),
+  // embed colors, and request timeouts overridable via TIMEOUT_* env vars.
+  // ═══════════════════════════════════════════════════════════════════════════
   // Tunables
   aiCooldownMs: 1500,
   aiMaxHistory: 10,
@@ -387,6 +431,10 @@ Keep responses under 200 characters unless genuinely explaining something (then 
   },
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// STARTUP VALIDATION & DEFAULT EXPORT — fail-fast checks for required env
+// vars; non-fatal warnings for optional integrations; module export.
+// ═══════════════════════════════════════════════════════════════════════════
 // ─── Startup validation — fail fast on missing critical vars ────────────────
 if (!config.token) {
   console.error("[FATAL] DISCORD_TOKEN is required in .env");
