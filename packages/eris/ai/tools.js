@@ -1,3 +1,8 @@
+// ─── packages/eris/ai/tools.js ──────────────────────────────────────────
+// Schema-only declarations for every AI tool (EVERYONE_TOOLS + OWNER_TOOLS).
+// Add `tags: ["fun"]` to opt a tool into the twin-conversation profile.
+// Handlers live in ai/executor.js / ai/executors/* — this file is pure data.
+// See docs/ai-pipeline-eris.md §3 (two-tier tool selection) and §5.
 // ai/tools.js — All 46 AI tool declarations for Eris
 // Anthropic schema format, ESM exports
 //

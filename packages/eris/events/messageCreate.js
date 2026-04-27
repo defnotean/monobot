@@ -1,3 +1,8 @@
+// ─── packages/eris/events/messageCreate.js ──────────────────────────────
+// The whole AI pipeline: gating → context → AI → tool dispatch → render → persist.
+// 1,328 lines; section dividers below match docs/ai-pipeline-eris.md stages.
+// Per-channel mutex (withLock) serializes concurrent messages in the same channel.
+// See docs/start-here.md if you've never seen this file before.
 // ─── AI Chat Handler — Multi-Provider with Per-Channel Locking ──────────────
 
 import { GoogleGenAI } from "@google/genai";
@@ -253,6 +258,8 @@ function addWarning(guildId, userId) {
   _capMap(_warnings, 5000);
   return 1;
 }
+
+// ─── 1. ENTRY ───────────────────────────────────────────────────────────
 export default async function messageCreate(message) {
   if (message.partial) { try { await message.fetch(); } catch { return; } }
 
@@ -264,6 +271,7 @@ export default async function messageCreate(message) {
   if (_processed.has(message.id)) return;
   _processed.set(message.id, true);
 
+  // ─── 2. GATING ──────────────────────────────────────────────────────────
   // ── Bump-service confirmation detection ────────────────────────────────
   // Runs BEFORE the "other bots must mention us" gate, since DISBOARD /
   // Discadia / Disforge confirm messages don't mention Eris.
@@ -596,6 +604,7 @@ export default async function messageCreate(message) {
       // Save user message (non-blocking — don't delay AI response)
       db.saveInteraction(message.author.id, message.author.username, message.channel.id, cleanMessage, false).catch(() => {});
 
+      // ─── 3. CONTEXT BUILDING ────────────────────────────────────────────
       // Build system instruction — parallelize all async context fetches for speed
       const relationship = db.getRelationship(message.author.id);
       const mood = db.getMood();
@@ -1037,6 +1046,7 @@ HOW TO INTERACT:
         systemInstruction += `\n\n[LENGTH BUDGET — this turn: reply MUST be ≤ ${_charBudget} characters. count your output chars. replies over this limit will be truncated by the system at the last sentence boundary. 1 short sentence if possible, 2 max. no preamble ("ok so", "anyway"), no trailing wrap-up ("pretty insane tbh"), no speculation past what you know for sure.]`;
       }
 
+      // ─── 4. AI CALL  +  5. TOOL DISPATCH (inline callback) ──────────────
       // Main AI call
       const t0Gemini = Date.now();
       const result = await runGeminiChat(workClient, systemInstruction, formattedTools, history, userMsg, async (toolName, toolArgs) => {
@@ -1052,6 +1062,7 @@ HOW TO INTERACT:
       const geminiMs = Date.now() - t0Gemini;
       if (geminiMs > 5000) log(`[PERF] Gemini took ${geminiMs}ms (prompt ${systemInstruction.length} chars, history ${history.length} msgs)`);
 
+      // ─── 6. RESPONSE RENDERING ──────────────────────────────────────────
       // Stop typing indicator
       clearInterval(_typingInterval);
 
@@ -1187,6 +1198,7 @@ HOW TO INTERACT:
         } // end if (reply) — stripped-empty responses silently skipped
       }
 
+      // ─── 7. STATE PERSISTENCE ───────────────────────────────────────────
       // Update history — don't save suppressed game text (user never saw it)
       if (result.text && !gameEmbedSent) {
         history.push({ role: "model", parts: [{ text: result.text }] });

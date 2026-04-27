@@ -1,3 +1,9 @@
+// ─── packages/irene/music/player.js ─────────────────────────────────────
+// Lavalink/Shoukaku queue manager. Per-guild mutex + 60s queue auto-save
+// + restore-on-clientReady so restarts don't lose state. Karaoke ties in
+// via onTrackStart/onTrackEnd events.
+// See docs/local-dev-loop.md for "Testing music locally".
+
 // ─── Music Queue Manager — Lavalink Backend via Shoukaku ────────────────────
 // Audio streaming handled by Lavalink server (runs on VPS with UDP support).
 // Bot sends commands over WebSocket/REST — no local voice, yt-dlp, or ffmpeg.

@@ -1,3 +1,9 @@
+// ─── packages/irene/database.js ─────────────────────────────────────────
+// In-memory cache + ~2s debounced flush to Supabase. Reads sync from
+// cache; writes mark a bucket dirty; SIGTERM awaits final flush.
+// `withUserLock(userId, fn)` for read-modify-write atomicity.
+// See docs/start-here.md and the existing TOC below.
+
 // ─── Database — Supabase backed, in-memory cache ─────────────────────────────
 // All reads are synchronous (from cache). Writes update cache immediately then
 // flush to Supabase in the background. On startup, loads from Supabase so data

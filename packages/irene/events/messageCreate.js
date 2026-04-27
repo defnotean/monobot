@@ -1,3 +1,9 @@
+// ─── packages/irene/events/messageCreate.js ─────────────────────────────
+// THE AI pipeline. Every Discord MESSAGE_CREATE flows through execute() —
+// gating gauntlet → context assembly → AI call → tool dispatch → render →
+// persist. Auto-mod (rulesEnforcer) runs FIRST and short-circuits if it acts.
+// See docs/ai-pipeline-irene.md for the 7-stage trace.
+
 import { EmbedBuilder, MessageFlags, PermissionFlagsBits } from "discord.js";
 import { GoogleGenAI } from "@google/genai";
 import config from "../config.js";
@@ -328,7 +334,9 @@ function wakeSleep() {
   log(`[SLEEP] Irene woke up from ${wasNap ? "nap" : "sleep"}`);
 }
 
+// ─── 1. ENTRY ───────────────────────────────────────────────────────────
 export async function execute(message) {
+  // ─── 2. GATING ────────────────────────────────────────────────────────
   // Dedup — prevent processing the same message twice (shard replays, gateway bugs)
   if (processing.has(message.id)) return;
   processing.add(message.id);
@@ -347,6 +355,7 @@ export async function execute(message) {
   // No-op for DMs, bot messages, and self. Cheap (in-memory LRU).
   recordEvidenceMessage(message);
 
+  // ─── 2a. AUTO-MOD (rules engine) ──────────────────────────────────────
   // Auto-mod rule enforcement — opt-in per guild via `/rules enable`.
   // No-op when disabled; otherwise runs the cheap regex pre-filter, and
   // only if THAT trips, the LLM judge with surrounding context. NEVER
@@ -862,6 +871,7 @@ export async function execute(message) {
 
   const isBotOwner = message.author.id === config.userId;
 
+  // ─── 3. CONTEXT BUILDING ──────────────────────────────────────────────
   // Role-based permission detection from Discord API
   const memberPerms = msgCtx.member?.permissions;
   const canMod = memberPerms?.has?.("ModerateMembers") || memberPerms?.has?.("KickMembers") || memberPerms?.has?.("BanMembers");
@@ -1613,6 +1623,7 @@ HOW TO INTERACT:
       log(`[PERF] Prompt budgeted to ${systemPromptWithMemory.length} chars`);
     }
 
+    // ─── 4. AI CALL (dual.js → runGeminiChat — also stage 5 tool dispatch) ─
     let geminiResult;
     const t0Gemini = Date.now();
     try {
@@ -1664,6 +1675,7 @@ HOW TO INTERACT:
     const geminiMs = Date.now() - t0Gemini;
     if (geminiMs > 5000) log(`[PERF] Gemini took ${geminiMs}ms (prompt ${systemPromptWithMemory.length} chars, history ${history.length} msgs)`);
 
+    // ─── 6. RESPONSE RENDERING ────────────────────────────────────────────
     const { text: reply, toolsUsed } = geminiResult;
     if (!reply || !reply.trim()) { saveConversation(channelKey, history); return; }
 
@@ -1758,6 +1770,7 @@ HOW TO INTERACT:
         await sendHumanReply(message, chunk, { isDM: !message.guild, allowSplit: false, messageOptions: suppressOpts });
       }
     }
+    // ─── 7. STATE PERSISTENCE ─────────────────────────────────────────────
     trackHumanInteraction(message.author.id, message.author.username, content || message.content, sentimentScore, isCreator);
     detectMoment(message.author.id, content || message.content, reply || "", sentimentScore);
     markBotResponded(message.guildId || "dm", message.author.id);

@@ -1,3 +1,10 @@
+// ─── packages/irene/index.js ────────────────────────────────────────────
+// Process entry point. Boot order MATTERS: startPresenceAPI →
+// initDatabase → loadCommands → loadEvents → registerCommands →
+// client.login → setupLavalink. Render's port-detection kills the dyno
+// if HTTP isn't open within ~30s; that's why presence API starts first.
+// See docs/start-here.md.
+
 // ─── All-in-One Discord Bot ─────────────────────────────────────────────────
 // Features: Moderation, Server Setup, AI Chat, Games, Music, Presence API
 // ──────────────────────────────────────────────────────────────────────────────

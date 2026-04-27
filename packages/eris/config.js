@@ -1,3 +1,7 @@
+// ─── packages/eris/config.js ────────────────────────────────────────────
+// Single source of truth for env, model IDs, API keys, personality text,
+// and tunables. Loaded synchronously at process start before anything else.
+// See docs/start-here.md and section TOC below.
 // ─── Centralized Configuration ──────────────────────────────────────────────
 //
 // ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────

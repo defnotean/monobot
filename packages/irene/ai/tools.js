@@ -1,3 +1,10 @@
+// ─── packages/irene/ai/tools.js ─────────────────────────────────────────
+// Schema-only tool declarations. Handlers live in ai/executors/. ~24
+// categories grouped by section in the existing TOC below. Tool with the
+// `// ─── REFERENCE TOOL ───` marker (around list_emojis) is the
+// canonical "how to add a tool" example.
+// See docs/ai-pipeline-irene.md §3 + §5 and docs/cheatsheet.md §1.
+
 // ─── Irene's AI Tool Definitions ────────────────────────────────────────────
 // All the actions Irene can perform via natural language
 //

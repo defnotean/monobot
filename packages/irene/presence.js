@@ -1,3 +1,9 @@
+// ─── packages/irene/presence.js ─────────────────────────────────────────
+// THE HTTP server. Hosts /presence (Lanyard replacement), /tts/:id,
+// /api/* dashboard, and the HMAC-signed /api/twin/command Eris uses.
+// Started FIRST in boot so Render's port-detection doesn't kill the dyno.
+// See docs/presence-api.md for the full endpoint inventory.
+
 // ─── Presence Cache & HTTP API (extracted from original index.js) ───────────
 
 import http from "http";

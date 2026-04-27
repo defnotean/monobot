@@ -1,3 +1,8 @@
+// ─── packages/eris/ai/dual.js ───────────────────────────────────────────
+// Gemini orchestration loop (runGeminiChat): up to MAX_ITERATIONS turns of
+// generate → split parts → execute tool calls in parallel → feed results back.
+// Handles 429 fallback, empty/thinking-only retries, dedup, per-tool timeouts.
+// See docs/ai-pipeline-eris.md §4 for the full trace.
 // ─── Dual-Model AI System ───────────────────────────────────────────────────
 // Fast model for quick acknowledgments, main model for tool-augmented chat.
 

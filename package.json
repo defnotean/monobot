@@ -15,7 +15,11 @@
     "test": "npm test --workspaces --if-present",
     "test:eris": "npm test --workspace=@defnotean/eris",
     "test:irene": "npm test --workspace=@defnotean/irene",
-    "lint:version-sync": "node scripts/verify-version-sync.js"
+    "lint:version-sync": "node scripts/verify-version-sync.js",
+    "new:tool": "node scripts/scaffold-tool.js",
+    "new:command": "node scripts/scaffold-command.js",
+    "new:event": "node scripts/scaffold-event.js",
+    "new:executor": "node scripts/scaffold-executor.js"
   },
   "engines": {
     "node": ">=18.0.0"

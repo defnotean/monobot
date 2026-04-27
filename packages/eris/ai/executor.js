@@ -1,3 +1,8 @@
+// ─── packages/eris/ai/executor.js ───────────────────────────────────────
+// Single dispatch entry point (executeTool). Applies TOOL_ALIASES, per-user
+// rate limits, the read-only LRU cache, then walks SUB_EXECUTORS in order —
+// first non-undefined wins. All ~170 tool implementations live downstream.
+// See docs/ai-pipeline-eris.md §5 for the dispatch trace.
 // ─── Tool Execution Engine ──────────────────────────────────────────────────
 // Thin router that delegates to domain-specific sub-executors.
 // Each sub-executor handles its own tool group and returns a string result

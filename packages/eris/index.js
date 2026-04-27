@@ -1,3 +1,8 @@
+// ─── packages/eris/index.js ─────────────────────────────────────────────
+// Process entry point: builds the discord.js client, auto-loads events/ +
+// commands/, calls initDatabase(), starts the keepalive HTTP server, and
+// wires SIGTERM/SIGINT to flush in-memory buffers before exit.
+// See docs/start-here.md for the 30-second mental model.
 // ─── OpenClaw — Eris Bootstrap ─────────────────────────────────────────
 
 import { Client, Collection, GatewayIntentBits, Partials } from "discord.js";

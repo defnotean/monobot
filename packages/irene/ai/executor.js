@@ -1,3 +1,9 @@
+// ─── packages/irene/ai/executor.js ──────────────────────────────────────
+// Single dispatch entry point (`executeTool`): aliases → rate limits →
+// cache → walk SUB_EXECUTORS array (first non-undefined wins). Each
+// sub-executor in ai/executors/ owns a domain via a HANDLED Set.
+// See docs/ai-pipeline-irene.md §5.
+
 // ─── Tool Execution Engine ──────────────────────────────────────────────────
 // Thin router — delegates to domain-specific sub-executors, falls back to
 // remaining inline cases for tools not yet extracted.

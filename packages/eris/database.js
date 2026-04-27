@@ -1,3 +1,8 @@
+// ─── packages/eris/database.js ──────────────────────────────────────────
+// In-memory read cache + ~2s debounced flush to Supabase. ALL state for
+// economy / mood / relationships / games / etc. lives here behind getters.
+// Reads are sync from cache; writes mutate cache + queue a flush.
+// See docs/start-here.md and section TOC below.
 // ─── In-Memory Cache + Debounced Supabase Sync ──────────────────────────────
 //
 // ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────

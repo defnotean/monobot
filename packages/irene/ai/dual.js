@@ -1,3 +1,10 @@
+// ─── packages/irene/ai/dual.js ──────────────────────────────────────────
+// Gemini orchestration loop (`runGeminiChat`): generate → split parts →
+// execute tool calls in parallel → feed back. Handles 429 keypool
+// fallback, retries, dedup, timeouts. maxOutputTokens MUST exceed
+// thinkingBudget or visible text gets silently truncated.
+// See docs/ai-pipeline-irene.md §4.
+
 // ─── Gemini AI Engine ────────────────────────────────────────────────────────
 // Gemini is the primary AI for all conversations and tool execution.
 // Supports full chat (text replies) and multi-turn tool calling loops.

@@ -1,3 +1,9 @@
+// ─── packages/irene/config.js ───────────────────────────────────────────
+// Single source of truth for env / model IDs / API keys / Lavalink /
+// timeouts. Loaded synchronously before everything. Fail-fast on missing
+// required keys; warn-and-continue on optional ones.
+// See docs/start-here.md and the existing TOC below.
+
 // ─── Centralized Configuration ──────────────────────────────────────────────
 //
 // ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────
