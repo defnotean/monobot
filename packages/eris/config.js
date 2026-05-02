@@ -6,7 +6,7 @@
 //
 // ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────
 //  1. Imports & .env loader ............................. ~line 17
-//  2. env() helper + GitHub token bootstrap ............. ~line 41
+//  2. env() helper ..................................... ~line 41
 //  3. Identity, twin API, agent kill switches ........... ~line 61
 //  4. AI provider config (Gemini + NVIDIA fallback) ..... ~line 81
 //  5. External integrations (Supabase, GH, music APIs) .. ~line 126
@@ -21,7 +21,6 @@
 import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { execSync } from "child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = join(__dirname, ".env");
@@ -43,19 +42,120 @@ if (existsSync(envPath)) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// env() HELPER + GITHUB TOKEN BOOTSTRAP — env() prefers .env, falls back to
-// process.env, then to a literal default. ghToken is extracted from `gh` CLI
-// when GITHUB_TOKEN isn't set so dev machines can use their existing auth.
+// env() HELPER - deployed process.env values win over local .env defaults.
 // ═══════════════════════════════════════════════════════════════════════════
 function env(key, fallback) {
-  return envVars[key] || process.env[key] || fallback;
+  return process.env[key] || envVars[key] || fallback;
 }
 
-// Extract GitHub token from gh CLI
-let ghToken = env("GITHUB_TOKEN");
-if (!ghToken) {
-  try { ghToken = execSync("gh auth token", { encoding: "utf8", timeout: 5000 }).trim(); } catch {}
+const ghToken = env("GITHUB_TOKEN");
+
+function envFirst(keys, fallback = "") {
+  for (const key of keys) {
+    const value = env(key);
+    if (value) return value;
+  }
+  return fallback;
 }
+
+function parseJsonEnv(key, fallback = {}) {
+  const value = env(key);
+  if (!value) return fallback;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    console.warn(`[WARN] ${key} must be valid JSON object syntax; ignoring it`);
+    return fallback;
+  }
+}
+
+function parseToolChoice(value, fallback = "auto") {
+  if (!value) return fallback;
+  if (["auto", "none", "required"].includes(value)) return value;
+  try { return JSON.parse(value); } catch { return value; }
+}
+
+const openAICompatibleProviderAliases = new Set([
+  "openai-compatible",
+  "openaicompatible",
+  "openai_compatible",
+  "openai-compat",
+  "openai",
+  "openrouter",
+  "groq",
+  "cerebras",
+  "mistral",
+  "deepinfra",
+  "together",
+  "github",
+  "cloudflare",
+  "lmstudio",
+  "ollama",
+]);
+
+const localOpenAICompatibleProviderAliases = new Set(["lmstudio", "ollama"]);
+
+function getOpenAICompatDefaults(provider) {
+  switch ((provider || "").toLowerCase()) {
+    case "openrouter":
+      return { providerName: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4o-mini" };
+    case "groq":
+      return { providerName: "Groq", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" };
+    case "cerebras":
+      return { providerName: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", model: "llama3.1-8b" };
+    case "mistral":
+      return { providerName: "Mistral", baseUrl: "https://api.mistral.ai/v1", model: "mistral-large-latest" };
+    case "deepinfra":
+      return { providerName: "DeepInfra", baseUrl: "https://api.deepinfra.com/v1/openai", model: "meta-llama/Meta-Llama-3.1-70B-Instruct" };
+    case "together":
+      return { providerName: "Together", baseUrl: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo" };
+    case "github":
+      return { providerName: "GitHub Models", baseUrl: "https://models.github.ai/inference", model: "openai/gpt-4o-mini" };
+    case "cloudflare":
+      return { providerName: "Cloudflare Workers AI", baseUrl: "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1", model: "@cf/meta/llama-3.1-8b-instruct" };
+    case "lmstudio":
+      return { providerName: "LM Studio", baseUrl: "http://localhost:1234/v1", model: "local-model" };
+    case "ollama":
+      return { providerName: "Ollama", baseUrl: "http://localhost:11434/v1", model: "llama3.1" };
+    case "openai":
+      return { providerName: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" };
+    default:
+      return { providerName: "OpenAI-compatible", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" };
+  }
+}
+
+function getOpenAICompatKeyVars(provider) {
+  switch ((provider || "").toLowerCase()) {
+    case "openai":
+    case "openai-compatible":
+    case "openaicompatible":
+    case "openai_compatible":
+    case "openai-compat":
+      return ["OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"];
+    case "openrouter":
+      return ["OPENAI_COMPAT_API_KEY", "OPENROUTER_API_KEY"];
+    case "groq":
+      return ["OPENAI_COMPAT_API_KEY", "GROQ_API_KEY"];
+    case "cerebras":
+      return ["OPENAI_COMPAT_API_KEY", "CEREBRAS_API_KEY"];
+    case "mistral":
+      return ["OPENAI_COMPAT_API_KEY", "MISTRAL_API_KEY"];
+    case "deepinfra":
+      return ["OPENAI_COMPAT_API_KEY", "DEEPINFRA_API_KEY"];
+    case "together":
+      return ["OPENAI_COMPAT_API_KEY", "TOGETHER_API_KEY"];
+    case "github":
+      return ["OPENAI_COMPAT_API_KEY", "GITHUB_MODELS_API_KEY", "GITHUB_TOKEN"];
+    case "cloudflare":
+      return ["OPENAI_COMPAT_API_KEY", "CLOUDFLARE_API_TOKEN"];
+    default:
+      return ["OPENAI_COMPAT_API_KEY"];
+  }
+}
+
+const selectedAIProvider = env("AI_PROVIDER", "gemini").toLowerCase();
+const openAICompatDefaultConfig = getOpenAICompatDefaults(selectedAIProvider);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG OBJECT — every runtime knob lives on this single object. Sections
@@ -86,10 +186,9 @@ const config = {
   // AI PROVIDER CONFIG — Gemini (primary) and NVIDIA Llama (fallback). Voyage
   // handles embeddings for semantic memory. Switch via aiProvider string.
   // ═══════════════════════════════════════════════════════════════════════════
-  // AI Provider — back on Gemini (NVIDIA models had inconsistent tool calling)
-  // To switch: "gemini" | "nvidia". The nvidia config below is preserved
-  // so you can flip back any time by setting AI_PROVIDER in .env.
-  aiProvider: env("AI_PROVIDER", "gemini"),
+  // AI Provider — "gemini", "nvidia", or OpenAI-compatible aliases like
+  // "openai", "openrouter", "groq", "mistral", "lmstudio", and "ollama".
+  aiProvider: selectedAIProvider,
 
   // Voyage AI (embeddings for semantic memory search)
   voyageApiKey: env("VOYAGE_API_KEY"),
@@ -115,6 +214,23 @@ const config = {
     thinking: env("NVIDIA_THINKING", "false") === "true",
   },
 
+  // Generic OpenAI-compatible chat completions provider.
+  openaiCompat: {
+    apiKey: envFirst(getOpenAICompatKeyVars(selectedAIProvider)),
+    baseUrl: env("OPENAI_COMPAT_BASE_URL", openAICompatDefaultConfig.baseUrl),
+    model: env("OPENAI_COMPAT_MODEL", openAICompatDefaultConfig.model),
+    fastModel: env("OPENAI_COMPAT_FAST_MODEL", env("OPENAI_COMPAT_MODEL", openAICompatDefaultConfig.model)),
+    maxTokens: parseInt(env("OPENAI_COMPAT_MAX_TOKENS", "4096")),
+    temperature: parseFloat(env("OPENAI_COMPAT_TEMPERATURE", "0.4")),
+    topP: parseFloat(env("OPENAI_COMPAT_TOP_P", "0.95")),
+    providerName: env("OPENAI_COMPAT_PROVIDER_NAME", openAICompatDefaultConfig.providerName),
+    httpReferer: env("OPENAI_COMPAT_HTTP_REFERER"),
+    appTitle: env("OPENAI_COMPAT_APP_TITLE", "Eris"),
+    extraHeaders: parseJsonEnv("OPENAI_COMPAT_EXTRA_HEADERS"),
+    toolChoice: parseToolChoice(env("OPENAI_COMPAT_TOOL_CHOICE"), "auto"),
+    allowNoApiKey: localOpenAICompatibleProviderAliases.has(selectedAIProvider) || env("OPENAI_COMPAT_ALLOW_NO_API_KEY", "0") === "1",
+  },
+
   // Gemini API (legacy — kept as fallback provider)
   geminiKeys: [
     env("GEMINI_API_KEY"),
@@ -133,6 +249,7 @@ const config = {
   // ═══════════════════════════════════════════════════════════════════════════
   supabaseUrl: env("SUPABASE_URL"),
   supabaseKey: env("SUPABASE_KEY"),
+  requirePersistence: env("REQUIRE_PERSISTENCE", "0") === "1",
   get supabaseEnabled() {
     return !!(this.supabaseUrl && this.supabaseKey && !this.supabaseUrl.includes("your-"));
   },
@@ -448,12 +565,25 @@ if (!config.clientId) {
   console.error("[FATAL] CLIENT_ID is required in .env (needed for slash command registration)");
   process.exit(1);
 }
-if (config.aiProvider === "gemini" && !config.geminiKeys.length) {
+const configuredAIProvider = (config.aiProvider || "").toLowerCase();
+if ((configuredAIProvider === "gemini" || configuredAIProvider === "google") && !config.geminiKeys.length) {
   console.error("[FATAL] At least one GEMINI_API_KEY is required when AI_PROVIDER=gemini");
   process.exit(1);
 }
-if (config.aiProvider === "nvidia" && !config.nvidia.apiKey) {
+if ((configuredAIProvider === "nvidia" || configuredAIProvider === "kimi") && !config.nvidia.apiKey) {
   console.error("[FATAL] NVIDIA_API_KEY is required when AI_PROVIDER=nvidia");
+  process.exit(1);
+}
+if (
+  openAICompatibleProviderAliases.has(configuredAIProvider)
+  && !config.openaiCompat.allowNoApiKey
+  && !config.openaiCompat.apiKey
+) {
+  console.error(`[FATAL] OPENAI_COMPAT_API_KEY or the provider-specific API key is required when AI_PROVIDER=${config.aiProvider}`);
+  process.exit(1);
+}
+if (!["gemini", "google", "nvidia", "kimi"].includes(configuredAIProvider) && !openAICompatibleProviderAliases.has(configuredAIProvider)) {
+  console.error(`[FATAL] AI_PROVIDER="${config.aiProvider}" is not a recognized value. Expected "gemini", "nvidia", or an OpenAI-compatible alias.`);
   process.exit(1);
 }
 // Non-fatal warnings for degraded functionality

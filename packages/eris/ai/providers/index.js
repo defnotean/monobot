@@ -47,6 +47,28 @@ switch (PROVIDER) {
     primary = await import("./gemini.js");
     log("[AI] Provider: Google Gemini");
     break;
+  case "openai-compatible":
+  case "openaicompatible":
+  case "openai_compatible":
+  case "openai-compat":
+  case "openai":
+  case "openrouter":
+  case "groq":
+  case "cerebras":
+  case "mistral":
+  case "deepinfra":
+  case "together":
+  case "github":
+  case "cloudflare":
+  case "lmstudio":
+  case "ollama":
+    if (!config.openaiCompat?.allowNoApiKey && !config.openaiCompat?.apiKey) {
+      log(`[AI] FATAL: aiProvider=${PROVIDER} but OPENAI_COMPAT_API_KEY is not set in .env`);
+      throw new Error("OPENAI_COMPAT_API_KEY required when aiProvider is OpenAI-compatible");
+    }
+    primary = await import("./openaiCompat.js");
+    log(`[AI] Provider: ${config.openaiCompat?.providerName || PROVIDER} (${config.openaiCompat?.model || "unknown"})`);
+    break;
   default:
     // Should be unreachable thanks to config.js validation; kept as a
     // last-resort guard so we never silently load the wrong provider.

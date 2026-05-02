@@ -50,9 +50,104 @@ if (existsSync(envPath)) {
   }
 }
 
-// .env values take priority, then fall back to system env
+// Deployed process.env values win over local .env defaults.
 function env(key, fallback) {
-  return envVars[key] || process.env[key] || fallback;
+  return process.env[key] || envVars[key] || fallback;
+}
+
+function envJson(key, fallback = {}) {
+  const raw = env(key);
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function envToolChoice(key, fallback = "auto") {
+  const raw = env(key);
+  if (!raw) return fallback;
+  if (raw === "none" || raw === "auto" || raw === "required") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function envFirst(keys, fallback = "") {
+  for (const key of keys) {
+    const value = env(key);
+    if (value) return value;
+  }
+  return fallback;
+}
+
+const OPENAI_COMPAT_PROVIDERS = new Set([
+  "openai-compatible",
+  "openaicompatible",
+  "openai_compatible",
+  "openai-compat",
+  "openai",
+  "openrouter",
+  "groq",
+  "cerebras",
+  "mistral",
+  "deepinfra",
+  "together",
+  "github",
+  "cloudflare",
+  "lmstudio",
+  "ollama",
+]);
+
+const OPENAI_COMPAT_DEFAULTS = {
+  "openai-compatible": { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", fastModel: "gpt-4o-mini" },
+  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", fastModel: "gpt-4o-mini" },
+  openrouter: { baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4o-mini", fastModel: "openai/gpt-4o-mini" },
+  groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", fastModel: "llama-3.1-8b-instant" },
+  cerebras: { baseUrl: "https://api.cerebras.ai/v1", model: "llama3.1-70b", fastModel: "llama3.1-8b" },
+  mistral: { baseUrl: "https://api.mistral.ai/v1", model: "mistral-large-latest", fastModel: "mistral-small-latest" },
+  deepinfra: { baseUrl: "https://api.deepinfra.com/v1/openai", model: "meta-llama/Llama-3.3-70B-Instruct", fastModel: "meta-llama/Meta-Llama-3.1-8B-Instruct" },
+  together: { baseUrl: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", fastModel: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
+  github: { baseUrl: "https://models.github.ai/inference", model: "openai/gpt-4o-mini", fastModel: "openai/gpt-4o-mini" },
+  cloudflare: { baseUrl: "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1", model: "@cf/meta/llama-3.1-8b-instruct", fastModel: "@cf/meta/llama-3.1-8b-instruct" },
+  lmstudio: { baseUrl: "http://localhost:1234/v1", model: "local-model", fastModel: "local-model" },
+  ollama: { baseUrl: "http://localhost:11434/v1", model: "llama3.1", fastModel: "llama3.1" },
+};
+
+const selectedAiProvider = env("AI_PROVIDER", "gemini").toLowerCase();
+const openaiCompatDefaults = OPENAI_COMPAT_DEFAULTS[selectedAiProvider] || OPENAI_COMPAT_DEFAULTS["openai-compatible"];
+
+function getOpenAICompatKeyVars(provider) {
+  switch ((provider || "").toLowerCase()) {
+    case "openai":
+    case "openai-compatible":
+    case "openaicompatible":
+    case "openai_compatible":
+    case "openai-compat":
+      return ["OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"];
+    case "openrouter":
+      return ["OPENAI_COMPAT_API_KEY", "OPENROUTER_API_KEY"];
+    case "groq":
+      return ["OPENAI_COMPAT_API_KEY", "GROQ_API_KEY"];
+    case "cerebras":
+      return ["OPENAI_COMPAT_API_KEY", "CEREBRAS_API_KEY"];
+    case "mistral":
+      return ["OPENAI_COMPAT_API_KEY", "MISTRAL_API_KEY"];
+    case "deepinfra":
+      return ["OPENAI_COMPAT_API_KEY", "DEEPINFRA_API_KEY"];
+    case "together":
+      return ["OPENAI_COMPAT_API_KEY", "TOGETHER_API_KEY"];
+    case "github":
+      return ["OPENAI_COMPAT_API_KEY", "GITHUB_MODELS_API_KEY", "GITHUB_TOKEN"];
+    case "cloudflare":
+      return ["OPENAI_COMPAT_API_KEY", "CLOUDFLARE_API_TOKEN"];
+    default:
+      return ["OPENAI_COMPAT_API_KEY"];
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -88,7 +183,7 @@ const config = {
   // ─── AI Provider — Irene runs on Gemini (Eris runs on NVIDIA Kimi) ────────
   // The bot's "brain" plugs into ai/providers/<name>.js. To switch, set
   // AI_PROVIDER in .env: "gemini" → Google Gemini | "nvidia" → Kimi K2.5
-  aiProvider: env("AI_PROVIDER", "gemini"),
+  aiProvider: selectedAiProvider,
 
   // ─── NVIDIA AI (Qwen 3.5 122B A10B — MoE with strong tool calling) ────────
   nvidia: {
@@ -100,6 +195,25 @@ const config = {
     temperature: parseFloat(env("NVIDIA_TEMPERATURE", "0.4")),
     topP: parseFloat(env("NVIDIA_TOP_P", "0.95")),
     thinking: env("NVIDIA_THINKING", "false") === "true",
+  },
+
+  // Generic OpenAI-compatible chat completions provider.
+  // Enabled by AI_PROVIDER=openai-compatible/openai/openrouter/groq/cerebras/
+  // mistral/deepinfra/together/github/cloudflare/lmstudio/ollama.
+  openaiCompat: {
+    apiKey: envFirst(getOpenAICompatKeyVars(selectedAiProvider)),
+    baseUrl: env("OPENAI_COMPAT_BASE_URL", openaiCompatDefaults.baseUrl),
+    model: env("OPENAI_COMPAT_MODEL", openaiCompatDefaults.model),
+    fastModel: env("OPENAI_COMPAT_FAST_MODEL", openaiCompatDefaults.fastModel),
+    maxTokens: parseInt(env("OPENAI_COMPAT_MAX_TOKENS", "4096")),
+    temperature: parseFloat(env("OPENAI_COMPAT_TEMPERATURE", "0.4")),
+    topP: parseFloat(env("OPENAI_COMPAT_TOP_P", "0.95")),
+    providerName: env("OPENAI_COMPAT_PROVIDER_NAME", selectedAiProvider),
+    httpReferer: env("OPENAI_COMPAT_HTTP_REFERER", ""),
+    appTitle: env("OPENAI_COMPAT_APP_TITLE", ""),
+    extraHeaders: envJson("OPENAI_COMPAT_EXTRA_HEADERS", {}),
+    toolChoice: envToolChoice("OPENAI_COMPAT_TOOL_CHOICE", "auto"),
+    allowNoApiKey: ["lmstudio", "ollama"].includes(selectedAiProvider) || env("OPENAI_COMPAT_ALLOW_NO_API_KEY", "0") === "1",
   },
 
   // Gemini (legacy — still works if AI_PROVIDER=gemini)
@@ -124,6 +238,7 @@ const config = {
   supabaseUrl: env("SUPABASE_URL"),
   supabaseKey: env("SUPABASE_KEY"),
   supabaseAnonKey: env("SUPABASE_ANON_KEY"),
+  requirePersistence: env("REQUIRE_PERSISTENCE", "0") === "1",
   get supabaseEnabled() {
     return !!(this.supabaseUrl && this.supabaseKey && !this.supabaseUrl.includes("your-"));
   },
@@ -326,8 +441,12 @@ if (config.aiProvider === "nvidia" && !config.nvidia.apiKey) {
   console.error("[FATAL] NVIDIA_API_KEY is required when AI_PROVIDER=nvidia");
   process.exit(1);
 }
-if (!["gemini", "nvidia"].includes(config.aiProvider)) {
-  console.error(`[FATAL] AI_PROVIDER="${config.aiProvider}" is not a recognized value. Expected "gemini" or "nvidia".`);
+if (OPENAI_COMPAT_PROVIDERS.has(config.aiProvider) && !config.openaiCompat.allowNoApiKey && !config.openaiCompat.apiKey) {
+  console.error(`[FATAL] OPENAI_COMPAT_API_KEY (or OPENAI_API_KEY) is required when AI_PROVIDER=${config.aiProvider}`);
+  process.exit(1);
+}
+if (!["gemini", "google", "nvidia", "kimi"].includes(config.aiProvider) && !OPENAI_COMPAT_PROVIDERS.has(config.aiProvider)) {
+  console.error(`[FATAL] AI_PROVIDER="${config.aiProvider}" is not a recognized value. Expected "gemini", "nvidia", or an OpenAI-compatible alias.`);
   process.exit(1);
 }
 // Non-fatal warnings for degraded functionality

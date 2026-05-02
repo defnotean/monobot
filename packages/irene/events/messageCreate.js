@@ -52,6 +52,9 @@ const _geminiPools = createSplitPools("gemini", config.geminiKeys, GoogleGenAI);
 
 function getConvClient() { return _geminiPools.conv?.get() || null; }
 function getGeminiClient() { return _geminiPools.work?.get() || null; }
+function activeProviderNeedsGeminiClient() {
+  return ["gemini", "google"].includes((config.aiProvider || "").toLowerCase());
+}
 
 // Conversations: pre-populated from DB on first use via getConversations()
 // loadConversations() returns a Map; we lazy-initialize from DB.
@@ -1572,7 +1575,7 @@ HOW TO INTERACT:
     // if the fast model decides to call a tool, runGeminiChat auto-upgrades to worker.
     const geminiClient = isTask ? getGeminiClient() : (getConvClient() || getGeminiClient());
 
-    if (!geminiClient) {
+    if (!geminiClient && activeProviderNeedsGeminiClient()) {
       await message.reply("no AI keys configured — can't respond right now").catch((e) => log(`[Error] ${e.message}`));
       return;
     }
