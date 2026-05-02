@@ -48,12 +48,17 @@ let _humanityCounter = 0;
 // With 12 keys: keys 0,2,4,6,8,10 → conversation, keys 1,3,5,7,9,11 → worker
 // If one key hits 429, only THAT key pauses — others keep serving requests.
 import { createSplitPools } from "../ai/keyPool.js";
-const _geminiPools = createSplitPools("gemini", config.geminiKeys, GoogleGenAI);
+const _geminiPools = activeProviderNeedsGeminiClient()
+  ? createSplitPools("gemini", config.geminiKeys, GoogleGenAI)
+  : {};
 
 function getConvClient() { return _geminiPools.conv?.get() || null; }
 function getGeminiClient() { return _geminiPools.work?.get() || null; }
 function activeProviderNeedsGeminiClient() {
   return ["gemini", "google"].includes((config.aiProvider || "").toLowerCase());
+}
+function activeProviderLabel() {
+  return config.openaiCompat?.providerName || config.aiProvider || "AI";
 }
 
 // Conversations: pre-populated from DB on first use via getConversations()
@@ -748,7 +753,7 @@ export async function execute(message) {
   let isAdmin = false;
 
   if (isDM) {
-    if (!_geminiPools.work) return;
+    if (!_geminiPools.work && activeProviderNeedsGeminiClient()) return;
     const ctx = await resolveDMContext(message);
     if (!ctx.guild) {
       await message.reply("we don't share any servers so i can't really do much here — join a server i'm in first").catch((e) => log(`[Error] ${e.message}`));
@@ -763,7 +768,7 @@ export async function execute(message) {
       if (handled) return;
     }
 
-    if (!_geminiPools.work) return;
+    if (!_geminiPools.work && activeProviderNeedsGeminiClient()) return;
 
     // Respond to @mention, our name in text, or twin sister.
     // Names include guild nickname + server persona + sub-tokens, so a
@@ -1622,11 +1627,15 @@ HOW TO INTERACT:
     // Conversational (fast) path uses the conv pool; worker path uses the work pool.
     try {
       // setRateLimitCallbacks now static import
-      const activePool = isTask ? _geminiPools.work : (_geminiPools.conv ?? _geminiPools.work);
-      setRateLimitCallbacks(
-        (client, durationMs) => activePool?.markRateLimited(client, durationMs),
-        (client) => activePool?.markSuccess(client),
-      );
+      if (activeProviderNeedsGeminiClient()) {
+        const activePool = isTask ? _geminiPools.work : (_geminiPools.conv ?? _geminiPools.work);
+        setRateLimitCallbacks(
+          (client, durationMs) => activePool?.markRateLimited(client, durationMs),
+          (client) => activePool?.markSuccess(client),
+        );
+      } else {
+        setRateLimitCallbacks(null, null);
+      }
     } catch {}
 
     // Smart prompt budget — trim core personality to make room for runtime context
@@ -1647,7 +1656,7 @@ HOW TO INTERACT:
 
     // ─── 4. AI CALL (dual.js → runGeminiChat — also stage 5 tool dispatch) ─
     let geminiResult;
-    const t0Gemini = Date.now();
+    const t0Ai = Date.now();
     try {
       geminiResult = await Promise.race([
         runGeminiChat({
@@ -1696,8 +1705,8 @@ HOW TO INTERACT:
       if (typeof _ackTimer !== "undefined") { clearTimeout(_ackTimer); ackMsg = null; }
     }
 
-    const geminiMs = Date.now() - t0Gemini;
-    if (geminiMs > 5000) log(`[PERF] Gemini took ${geminiMs}ms (prompt ${systemPromptWithMemory.length} chars, history ${history.length} msgs)`);
+    const aiMs = Date.now() - t0Ai;
+    if (aiMs > 5000) log(`[PERF] ${activeProviderLabel()} took ${aiMs}ms (prompt ${systemPromptWithMemory.length} chars, history ${history.length} msgs)`);
 
     // ─── 6. RESPONSE RENDERING ────────────────────────────────────────────
     const { text: reply, toolsUsed } = geminiResult;
@@ -1863,7 +1872,7 @@ HOW TO INTERACT:
       setTimeout(async () => {
         try {
           const convClient = getConvClient();
-          if (!convClient) return;
+          if (!convClient || !activeProviderNeedsGeminiClient()) return;
           const afterResponse = await convClient.models.generateContent({
             model: config.geminiFastModel,
             contents: [{ role: "user", parts: [{ text: `you just said: "${resolvedReply.substring(0, 100)}". send a VERY short afterthought that adds NEW info — a correction, tangent, or "oh wait also". MAX 6 words. NEVER repeat any words from what you just said. examples: "actually wait nvm", "oh also check ur dms", "that came out wrong lol"` }] }],

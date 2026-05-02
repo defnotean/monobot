@@ -118,7 +118,15 @@ function normalizeUnicode(text) {
 
 // Smart Gemini client pools — per-key rate limit tracking, auto-skips limited keys
 import { createSplitPools } from "../ai/keyPool.js";
-const _geminiPools = createSplitPools("gemini", config.geminiKeys, GoogleGenAI);
+function activeProviderNeedsGeminiClient() {
+  return ["gemini", "google"].includes((config.aiProvider || "").toLowerCase());
+}
+function activeProviderLabel() {
+  return config.openaiCompat?.providerName || config.aiProvider || "AI";
+}
+const _geminiPools = activeProviderNeedsGeminiClient()
+  ? createSplitPools("gemini", config.geminiKeys, GoogleGenAI)
+  : {};
 function getConvClient() { return _geminiPools.conv?.get() || null; }
 function getWorkClient() { return _geminiPools.work?.get() || null; }
 
@@ -972,6 +980,10 @@ export default async function messageCreate(message) {
 
       // formattedTools already set by pre-filtered tool profile above
       const workClient = getWorkClient();
+      if (!workClient && activeProviderNeedsGeminiClient()) {
+        await message.reply("no AI keys configured - can't respond right now").catch(() => {});
+        return;
+      }
 
       // Add twin context to system prompt
       if (isTwinMsg) {
@@ -1001,16 +1013,22 @@ HOW TO INTERACT:
       if (!isTwinMsg && !isGameMsg && !isSisterMsg && looksLikeTask(cleanMessage)) {
         const convClient = getConvClient();
         // quickReply now static import (aliased as qr below)
-        quickReply(convClient, systemInstruction, cleanMessage, message).catch(() => {});
+        if (!activeProviderNeedsGeminiClient() || convClient) {
+          quickReply(convClient, systemInstruction, cleanMessage, message).catch(() => {});
+        }
       }
 
       // Wire up per-key rate limit callbacks for the pool
       try {
         // setRateLimitCallbacks now static import
-        setRateLimitCallbacks(
-          (client, durationMs) => _geminiPools.work?.markRateLimited(client, durationMs),
-          (client) => _geminiPools.work?.markSuccess(client),
-        );
+        if (activeProviderNeedsGeminiClient()) {
+          setRateLimitCallbacks(
+            (client, durationMs) => _geminiPools.work?.markRateLimited(client, durationMs),
+            (client) => _geminiPools.work?.markSuccess(client),
+          );
+        } else {
+          setRateLimitCallbacks(null, null);
+        }
       } catch (e) { log(`[MSG] ${e.message}`); }
 
       // Smart prompt budget — Gemini latency scales with token count.
@@ -1058,7 +1076,7 @@ HOW TO INTERACT:
 
       // ─── 4. AI CALL  +  5. TOOL DISPATCH (inline callback) ──────────────
       // Main AI call
-      const t0Gemini = Date.now();
+      const t0Ai = Date.now();
       const result = await runGeminiChat(workClient, systemInstruction, formattedTools, history, userMsg, async (toolName, toolArgs) => {
         db.logToolUsage(toolName, message.author.id, message.channel.id);
         // executeTool now static import
@@ -1069,8 +1087,8 @@ HOW TO INTERACT:
         return toolResult;
       });
 
-      const geminiMs = Date.now() - t0Gemini;
-      if (geminiMs > 5000) log(`[PERF] Gemini took ${geminiMs}ms (prompt ${systemInstruction.length} chars, history ${history.length} msgs)`);
+      const aiMs = Date.now() - t0Ai;
+      if (aiMs > 5000) log(`[PERF] ${activeProviderLabel()} took ${aiMs}ms (prompt ${systemInstruction.length} chars, history ${history.length} msgs)`);
 
       // ─── 6. RESPONSE RENDERING ──────────────────────────────────────────
       // Stop typing indicator
@@ -1192,7 +1210,7 @@ HOW TO INTERACT:
           setTimeout(async () => {
             try {
               const convClient = getConvClient();
-              if (!convClient) return;
+              if (!convClient || !activeProviderNeedsGeminiClient()) return;
               const afterResponse = await convClient.models.generateContent({
                 model: config.geminiFastModel,
                 contents: [{ role: "user", parts: [{ text: `you just said: "${reply.substring(0, 100)}". send a VERY short afterthought that adds NEW info — a correction, tangent, or "oh wait also". MAX 6 words. NEVER repeat any words from what you just said. examples: "actually wait nvm", "oh also check ur dms", "that came out wrong lol"` }] }],

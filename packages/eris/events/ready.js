@@ -12,6 +12,10 @@ import { GoogleGenAI } from "@google/genai";
 let lastMessageTime = Date.now();
 export function markActivity() { lastMessageTime = Date.now(); }
 
+function activeProviderNeedsGeminiClient() {
+  return ["gemini", "google"].includes((config.aiProvider || "").toLowerCase());
+}
+
 export default async function ready(client) {
   log(`[BOT] ${client.user.tag} online | guilds: ${client.guilds.cache.size}`);
 
@@ -125,6 +129,7 @@ export default async function ready(client) {
   // Dream mode (every 10min, fires if idle 30+ min) — per-guild dream channels
   const _recentDreams = []; // last 3 dreams for continuity
   setInterval(async () => {
+    if (!activeProviderNeedsGeminiClient()) return;
     if (Date.now() - lastMessageTime < 30 * 60 * 1000) return;
     if (Math.random() > 0.1) return; // 10% chance
 
@@ -210,6 +215,7 @@ Generate ONE short dream-like thought (under 200 chars). Lowercase, no periods. 
   }
 
   setInterval(async () => {
+    if (!activeProviderNeedsGeminiClient()) return;
     if (!config.geminiKeys?.[0]) return;
 
     try {
