@@ -146,7 +146,7 @@ export const registry = new ToolRegistry();
 
 export function registerOpenClawTools(EVERYONE_TOOLS, OWNER_TOOLS) {
   // ── Always-include (core tools for every conversation) ──
-  registry.registerAlwaysInclude([
+  const alwaysInclude = [
     "remember_fact", "forget_fact", "forget_all", "recall_memories",
     "send_gif", "analyze_image", "search_images", "search_meme_templates", "create_meme",
     "web_search", "scrape_url", "check_presence",
@@ -155,7 +155,13 @@ export function registerOpenClawTools(EVERYONE_TOOLS, OWNER_TOOLS) {
     "get_mood", "get_relationship",
     "configure_feature", "list_features", "toggle_twin_chat",
     "ask_irene",
-  ]);
+  ];
+  registry.registerAlwaysInclude(alwaysInclude);
+  registry.registerTools(
+    [...EVERYONE_TOOLS, ...OWNER_TOOLS].filter(t => alwaysInclude.includes(t.name)),
+    "always_include",
+    null
+  );
 
   // ── Economy ──
   registry.registerTools(

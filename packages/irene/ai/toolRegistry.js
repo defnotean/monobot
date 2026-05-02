@@ -134,11 +134,17 @@ export const registry = new ToolRegistry();
 
 export function registerPresenceBotTools(ADMIN_TOOLS, EVERYONE_TOOLS) {
   // ── Always-include (core tools available to everyone) ──
-  registry.registerAlwaysInclude([
+  const alwaysInclude = [
     "remember_fact", "recall_memories", "forget_memory", "clear_all_memories",
     "send_gif", "web_search", "web_read", "calculate", "snipe", "editsnipe",
     "ask_eris", "reminder_set", "reminder_cancel",
-  ]);
+  ];
+  registry.registerAlwaysInclude(alwaysInclude);
+  registry.registerTools(
+    [...ADMIN_TOOLS, ...EVERYONE_TOOLS].filter(t => alwaysInclude.includes(t.name)),
+    "always_include",
+    null
+  );
 
   // ── Admin tool categories with keyword triggers ──
 
