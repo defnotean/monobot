@@ -162,7 +162,7 @@ export const NEW_ADMIN_TOOLS = [
   },
   {
     name: "remove_level_reward",
-    description: "Remove a level reward",
+    description: "Remove the configured role reward for a specific level. Use only when editing leveling rewards, not when removing a user's role.",
     input_schema: {
       type: "object",
       properties: {
@@ -173,7 +173,7 @@ export const NEW_ADMIN_TOOLS = [
   },
   {
     name: "toggle_leveling",
-    description: "Enable or disable the XP/leveling system",
+    description: "Enable or disable the server XP/leveling system.",
     input_schema: {
       type: "object",
       properties: {
@@ -184,7 +184,7 @@ export const NEW_ADMIN_TOOLS = [
   },
   {
     name: "set_level_channel",
-    description: "Set the channel for level-up announcements",
+    description: "Set the text channel used for level-up announcements.",
     input_schema: {
       type: "object",
       properties: {
@@ -206,7 +206,7 @@ export const NEW_ADMIN_TOOLS = [
   },
   {
     name: "configure_suggestions",
-    description: "Set the channel for user suggestions",
+    description: "Set the text channel where user suggestions should be submitted or posted.",
     input_schema: {
       type: "object",
       properties: {
@@ -279,7 +279,7 @@ export const NEW_ADMIN_TOOLS = [
   },
   {
     name: "set_server_icon",
-    description: "Change the server icon from an image URL.",
+    description: "Change the Discord server icon from an image URL. Do not use this for Irene's bot avatar or server-specific profile picture; use set_server_avatar for that.",
     input_schema: {
       type: "object",
       properties: {
@@ -375,7 +375,7 @@ export const NEW_ADMIN_TOOLS = [
   },
   {
     name: "react_to_message",
-    description: "Add a reaction emoji to a message.",
+    description: "Add Irene's plain emoji reaction to a message. Do not use this for reaction roles; use add_reaction_role or setup_reaction_roles for role assignment.",
     input_schema: {
       type: "object",
       properties: {
@@ -388,7 +388,7 @@ export const NEW_ADMIN_TOOLS = [
   },
   {
     name: "remove_reaction",
-    description: "Remove the bot's reaction from a message.",
+    description: "Remove Irene's plain emoji reaction from a message. Do not use this to remove a reaction-role mapping; use remove_reaction_role for that.",
     input_schema: {
       type: "object",
       properties: {

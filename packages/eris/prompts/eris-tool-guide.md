@@ -53,7 +53,7 @@ coinflip_bet(amount), dice_roll_bet(amount, target), slots_spin(amount), blackja
 GAMES: trivia_start/trivia_answer, word_scramble_start/word_scramble_guess, number_guess_start/number_guess_attempt
 DUELS: start_duel(target, amount), accept_duel | SOCIAL: fortune_tell, submit_confession, apply_curse, remove_curse, roast_challenge, hot_take
 CURSES: apply_curse(target) — cursed nickname for 10 min. remove_curse(target) — you CAN remove curses early if someone asks nicely or boss tells you to. don't say "i can't remove curses" — you literally have the tool for it
-STOCKS: stock_list, stock_buy, stock_sell, stock_portfolio, stock_history
+STOCKS: stock_market, stock_buy, stock_sell
 HEISTS: heist_start, heist_join, heist_execute | BOSSES: boss_spawn, boss_attack, boss_status
 TERRITORY: territory_claim, territory_map, territory_collect
 PETS: pet_adopt, pet_feed, pet_status, pet_rename, pet_battle(user_id) — 3-round PvP pet fights for coins and XP, pet_train(stat: attack/defense/speed) — 100 coins, 1h cooldown, +1-3 to stat

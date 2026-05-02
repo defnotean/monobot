@@ -495,8 +495,8 @@ export const EVERYONE_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        song:   { type: "string", description: "Song title" },
-        artist: { type: "string", description: "Artist name" },
+        song:   { type: "string", description: "Song title or search query" },
+        artist: { type: "string", description: "Artist name for the karaoke track" },
       },
       required: ["song", "artist"],
     },
@@ -509,7 +509,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "set_event_channels",
-    description: "Manage which channels server events (coin rain, chaos storm, lucky hour, pirate raid, etc.) are allowed or blocked from firing in. Supports both a whitelist ('only fire in these') and a denylist ('never fire in these'). ALWAYS call this tool — do NOT use save_directive for channel-restriction asks, the event scheduler only reads from this tool's settings. Actions: 'list' shows both whitelist + denylist. 'set'/'add'/'remove'/'clear' manage the whitelist — use when someone says 'only spawn events in X', 'events should only fire in #casino', 'restrict events to these channels', 'allow events in X'. 'deny'/'undeny'/'clear_denied' manage the denylist — use when someone says 'don't fire events in #general', 'no events in this channel', 'stop spawning events here', 'block events from #serious', 'never send events to #rules'. Denylist applies even when no whitelist is set. The 'list' action is safe for anyone; mutations require Manage Channels or trusted-user status.",
+    description: "Manage which channels server events (coin rain, chaos storm, lucky hour, pirate raid, etc.) are allowed or blocked from firing in. This affects random/event automation only, not Eris's normal chat replies. Supports both a whitelist ('only fire in these') and a denylist ('never fire in these'). ALWAYS call this tool - do NOT use save_directive for channel-restriction asks, the event scheduler only reads from this tool's settings. Actions: 'list' shows both whitelist + denylist. 'set'/'add'/'remove'/'clear' manage the whitelist; 'deny'/'undeny'/'clear_denied' manage the denylist. For 'don't chat here' or 'stop replying in #x', use set_chat_channels instead.",
     input_schema: {
       type: "object",
       properties: {
@@ -524,7 +524,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "set_chat_channels",
-    description: "Manage which channels you (Eris) stay quiet in. Use action:'list' to answer 'where are you muted?', 'what channels don't you talk in?', 'show me the chat config'. Use 'mute'/'unmute'/'clear' when someone says 'don't chat in #X', 'stop responding in these channels', 'you can talk here again', 'only respond to pings in #announcements'. Muted channels mean you won't react to name triggers — direct @mentions still get a reply. The 'list' action is safe for anyone; mutations require Manage Channels or trusted-user status.",
+    description: "Manage which channels Eris stays quiet in for normal chat/name-trigger replies. This does not control random server events; use set_event_channels for event firing. Use action:'list' to answer 'where are you muted?', 'what channels don't you talk in?', or 'show me the chat config'. Use 'mute'/'unmute'/'clear' when someone says 'don't chat in #X', 'stop responding in these channels', or 'you can talk here again'. Muted channels mean name triggers stay quiet; direct @mentions still get a reply.",
     input_schema: {
       type: "object",
       properties: {
@@ -1102,7 +1102,7 @@ export const EVERYONE_TOOLS = [
 
   {
     name: "configure_feature",
-    description: "Configure a feature for this server — enable/disable features, set notification channels, set ping roles. Use when someone says 'set gambling channel', 'disable economy', 'set ping role for events', 'configure boss battles', 'turn off stocks'. Available features: economy, gambling, events, confessions, boss_battles, stocks, heists, territories, pets, daily_challenges, achievements, loans.",
+    description: "Configure server-level features: enable/disable features, set feature notification channels, and set feature ping roles. Use when someone says 'set gambling channel', 'disable economy', 'set ping role for events', 'configure boss battles', or 'turn off stocks'. Do not use this for game odds/payout tuning; use configure_game. Do not use this for slot symbols; use configure_slots. Available features: economy, gambling, events, confessions, boss_battles, stocks, heists, territories, pets, daily_challenges, achievements, loans.",
     input_schema: {
       type: "object",
       properties: {
@@ -1309,7 +1309,7 @@ export const OWNER_TOOLS = [
   {
     name: "execute_terminal",
     description:
-      "Execute a shell command on the host machine and return stdout/stderr. Owner-only. Use when defnotean asks to run a command, check something on the server, or perform a system task.",
+      "Execute a one-off shell command on the host machine and return stdout/stderr. Owner-only. Use when defnotean asks to run a command, check something on the server, or perform a system task. For a command that needs an audit description, use execute_local instead.",
     input_schema: {
       type: "object",
       properties: {
@@ -1321,7 +1321,7 @@ export const OWNER_TOOLS = [
   {
     name: "execute_local",
     description:
-      "Execute a local system command with an optional description for audit logging. Owner-only. Similar to execute_terminal but intended for scripted/automated tasks with traceability.",
+      "Execute a local system command with an optional description for audit logging. Owner-only. Use this for scripted or automated host tasks where a human-readable audit description matters. For a simple one-off command, execute_terminal is enough.",
     input_schema: {
       type: "object",
       properties: {
@@ -1334,7 +1334,7 @@ export const OWNER_TOOLS = [
   {
     name: "update_personality",
     description:
-      "Update Irene's personality or system prompt instructions on the fly. Owner-only. Use when defnotean wants to tweak behavior, tone, rules, or add new personality traits.",
+      "Update Eris's personality or system prompt instructions on the fly. Owner-only. Use when defnotean wants to tweak Eris's behavior, tone, rules, or add new personality traits. Do not use this for Irene; use ask_irene only when delegating to Irene.",
     input_schema: {
       type: "object",
       properties: {
@@ -1345,7 +1345,7 @@ export const OWNER_TOOLS = [
   },
   {
     name: "configure_game",
-    description: "Full control over ANY game's odds, payouts, and behavior. You can tweak coinflip odds, dice payouts, blackjack rules, roulette death chance, RPS bias, and more. List all settings with action='list'. Owner-only.",
+    description: "Full control over built-in game odds, payouts, and behavior. Use for tuning coinflip, dice, blackjack, roulette, RPS, trivia, or global game settings. Do not use for server feature enable/disable or notification channels; use configure_feature for that. List all settings with action='list'. Owner-only.",
     input_schema: {
       type: "object",
       properties: {
@@ -1380,7 +1380,7 @@ export const OWNER_TOOLS = [
   },
   {
     name: "configure_slots",
-    description: "Full control over YOUR slot machine. You can add/remove symbols, tweak weights (probability), change tiers (affects payout), and customize everything. This is YOUR machine — make it however you want. Owner-only.",
+    description: "Full control over the slot machine symbol table only. Use to add/remove slot symbols, tweak symbol weights, or change symbol payout tiers. Do not use for general game odds; use configure_game for those. Owner-only.",
     input_schema: {
       type: "object",
       properties: {
@@ -1492,7 +1492,7 @@ export const OWNER_TOOLS = [
       type: "object",
       properties: {
         repo: { type: "string", description: "Repository in 'owner/repo' format" },
-        title: { type: "string", description: "Issue title" },
+        title: { type: "string", description: "GitHub issue title" },
         body: { type: "string", description: "Issue body/description in Markdown" },
       },
       required: ["repo", "title"],

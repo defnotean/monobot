@@ -199,7 +199,7 @@ export function registerOpenClawTools(EVERYONE_TOOLS, OWNER_TOOLS) {
   // ── Advanced Economy ──
   registry.registerTools(
     EVERYONE_TOOLS.filter(t => [
-      "stock_list", "stock_buy", "stock_sell", "stock_portfolio", "stock_history",
+      "stock_market", "stock_buy", "stock_sell",
       "heist_start", "heist_join", "heist_execute",
       "boss_spawn", "boss_attack", "boss_status",
       "territory_claim", "territory_map", "territory_collect",
@@ -233,7 +233,6 @@ export function registerOpenClawTools(EVERYONE_TOOLS, OWNER_TOOLS) {
   // ── News/Prices ──
   registry.registerTools(
     EVERYONE_TOOLS.filter(t => [
-      "track_news", "check_news", "untrack_news",
       "watch_price", "check_prices", "unwatch_price",
     ].includes(t.name)),
     "news",

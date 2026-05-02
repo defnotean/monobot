@@ -48,7 +48,7 @@ export const ADMIN_TOOLS = [
   // ─── Channel Management ─────────────────────────────────────────────
   {
     name: "create_channel",
-    description: "Create a new text or voice channel. Can set it as private for specific users only.",
+    description: "Create a brand-new text, voice, stage, or forum channel. Do not use this to configure an existing voice channel as join-to-create; use set_create_vc_channel for that.",
     input_schema: {
       type: "object",
       properties: {
@@ -85,12 +85,12 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "rename_channel",
-    description: "Rename a channel",
+    description: "Rename an existing channel. Use this only when the user wants the channel's displayed name changed, not when configuring channel permissions or VC systems.",
     input_schema: {
       type: "object",
       properties: {
         channel_name: { type: "string", description: "Current channel name" },
-        new_name: { type: "string", description: "New name" },
+        new_name: { type: "string", description: "New channel name to apply" },
       },
       required: ["channel_name", "new_name"],
     },
@@ -244,11 +244,11 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "create_role",
-    description: "Create a new role",
+    description: "Create a brand-new server role. Do not use this for assigning an existing role to a user; use give_role for that.",
     input_schema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Role name" },
+        name: { type: "string", description: "Exact server role name" },
         color: { type: "string", description: "Hex color like #ff0000" },
         hoist: { type: "boolean", description: "Show separately in member list" },
         mentionable: { type: "boolean", description: "Can be @mentioned by anyone" },
@@ -259,7 +259,7 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "delete_role",
-    description: "Delete a role",
+    description: "Delete an existing server role from the guild. Destructive: use only when the user explicitly asks to remove the role itself.",
     input_schema: {
       type: "object",
       properties: { name: { type: "string", description: "Role name to delete" } },
@@ -294,7 +294,7 @@ export const ADMIN_TOOLS = [
           items: {
             type: "object",
             properties: {
-              name: { type: "string", description: "Role name" },
+              name: { type: "string", description: "Exact server role name" },
               icon: { type: "string", description: "Unicode emoji (e.g. '👑'), image URL, or 'none' to clear" },
             },
             required: ["name", "icon"],
@@ -316,7 +316,7 @@ export const ADMIN_TOOLS = [
           items: {
             type: "object",
             properties: {
-              name: { type: "string", description: "Role name" },
+              name: { type: "string", description: "Exact server role name" },
               position: { type: "number", description: "New position (1 = bottom, higher = further up the list)" },
             },
             required: ["name", "position"],
@@ -328,11 +328,11 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "give_role",
-    description: "Give a role to a user",
+    description: "Assign an existing role to a specific user. Do not use this to create a role; use create_role first if the role truly does not exist.",
     input_schema: {
       type: "object",
       properties: {
-        username: { type: "string", description: "Username" },
+        username: { type: "string", description: "Target Discord username or mention" },
         role_name: { type: "string", description: "Role to give" },
       },
       required: ["username", "role_name"],
@@ -344,7 +344,7 @@ export const ADMIN_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        username: { type: "string", description: "Username" },
+        username: { type: "string", description: "Target Discord username or mention" },
         role_name: { type: "string", description: "Role to remove" },
       },
       required: ["username", "role_name"],
@@ -374,7 +374,7 @@ export const ADMIN_TOOLS = [
       type: "object",
       properties: {
         username: { type: "string", description: "Username to ban" },
-        reason: { type: "string", description: "Reason" },
+        reason: { type: "string", description: "Reason for audit logs or moderation record" },
         delete_messages: { type: "number", description: "Days of messages to delete (0-7)" },
       },
       required: ["username"],
@@ -400,7 +400,7 @@ export const ADMIN_TOOLS = [
       type: "object",
       properties: {
         username: { type: "string", description: "Username to kick" },
-        reason: { type: "string", description: "Reason" },
+        reason: { type: "string", description: "Reason for audit logs or moderation record" },
       },
       required: ["username"],
     },
@@ -411,8 +411,8 @@ export const ADMIN_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        username: { type: "string", description: "Username" },
-        reason: { type: "string", description: "Reason" },
+        username: { type: "string", description: "Target Discord username or mention" },
+        reason: { type: "string", description: "Reason for audit logs or moderation record" },
       },
       required: ["username", "reason"],
     },
@@ -423,9 +423,9 @@ export const ADMIN_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        username: { type: "string", description: "Username" },
-        duration: { type: "string", enum: ["1m", "5m", "10m", "30m", "1h", "6h", "12h", "1d", "3d", "7d"], description: "Duration" },
-        reason: { type: "string", description: "Reason" },
+        username: { type: "string", description: "Target Discord username or mention" },
+        duration: { type: "string", enum: ["1m", "5m", "10m", "30m", "1h", "6h", "12h", "1d", "3d", "7d"], description: "Timeout duration such as 10m, 1h, or 7d" },
+        reason: { type: "string", description: "Reason for audit logs or moderation record" },
       },
       required: ["username", "duration"],
     },
@@ -461,7 +461,7 @@ export const ADMIN_TOOLS = [
       type: "object",
       properties: {
         username: { type: "string", description: "User to unmute" },
-        reason: { type: "string", description: "Reason" },
+        reason: { type: "string", description: "Reason for audit logs or moderation record" },
       },
       required: ["username"],
     },
@@ -485,7 +485,7 @@ export const ADMIN_TOOLS = [
       type: "object",
       properties: {
         username: { type: "string", description: "User whose warnings should be cleared" },
-        reason: { type: "string", description: "Reason" },
+        reason: { type: "string", description: "Reason for audit logs or moderation record" },
       },
       required: ["username"],
     },
@@ -550,7 +550,7 @@ export const ADMIN_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        username: { type: "string", description: "Username" },
+        username: { type: "string", description: "Target Discord username or mention" },
         nickname: { type: "string", description: "New nickname (empty to reset)" },
       },
       required: ["username", "nickname"],
@@ -562,7 +562,7 @@ export const ADMIN_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        username: { type: "string", description: "Username" },
+        username: { type: "string", description: "Target Discord username or mention" },
         channel_name: { type: "string", description: "Voice channel to move them to" },
       },
       required: ["username", "channel_name"],
@@ -573,7 +573,7 @@ export const ADMIN_TOOLS = [
     description: "Disconnect a user from their current voice channel",
     input_schema: {
       type: "object",
-      properties: { username: { type: "string", description: "Username" } },
+      properties: { username: { type: "string", description: "Target Discord username or mention" } },
       required: ["username"],
     },
   },
@@ -884,6 +884,7 @@ export const ADMIN_TOOLS = [
         embed_footer: { type: "string", description: "Footer text (e.g. 'click to toggle')" },
         roles: {
           type: "array",
+          description: "Button role options to show on the picker. Use existing role names from list_roles unless create_if_missing is intentionally true.",
           items: {
             type: "object",
             properties: {
@@ -919,6 +920,7 @@ export const ADMIN_TOOLS = [
         max_roles: { type: "integer", description: "Maximum roles to select at once (default: all)" },
         roles: {
           type: "array",
+          description: "Dropdown role options to show. Use existing role names from list_roles unless create_if_missing is intentionally true.",
           items: {
             type: "object",
             properties: {
@@ -1060,7 +1062,7 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "set_afk_channel",
-    description: "Set the AFK voice channel — users who self-deafen for too long get auto-moved there",
+    description: "Set the AFK voice channel - users who self-deafen for too long get auto-moved there. Do not use this for join-to-create setup; use set_create_vc_channel.",
     input_schema: {
       type: "object",
       properties: {
@@ -1107,7 +1109,7 @@ export const ADMIN_TOOLS = [
       properties: {
         channel_name: { type: "string", description: "Channel to send the animated embed in" },
         animation: { type: "string", enum: ["typewriter", "progress", "countdown", "reveal", "loading", "sparkle", "status", "giveaway", "poll_results", "alert"], description: "Animation style to use" },
-        title: { type: "string", description: "Embed title" },
+        title: { type: "string", description: "Title text shown at the top of the embed" },
         text: { type: "string", description: "Main content text (what gets revealed/typed/shown). Use \\n for newlines. For status animation, separate steps with | (pipe)" },
         color: { type: "string", description: "Hex color (#2b2d31, #e8c4f0, etc.) — affects the embed accent bar" },
         end_title: { type: "string", description: "For countdown: custom end text instead of 'GO!'. For giveaway: not used" },
@@ -1123,7 +1125,7 @@ export const ADMIN_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Thread name" },
+        name: { type: "string", description: "Name for the new thread" },
         channel_name: { type: "string", description: "Channel to create thread in (optional — defaults to current)" },
         auto_archive: { type: "string", enum: ["60", "1440", "4320", "10080"], description: "Auto-archive after minutes: '60' (1h), '1440' (1d), '4320' (3d), '10080' (7d)" },
       },
@@ -1148,7 +1150,7 @@ export const ADMIN_TOOLS = [
     description: "Remove a custom emoji from the server",
     input_schema: {
       type: "object",
-      properties: { name: { type: "string", description: "Emoji name" } },
+      properties: { name: { type: "string", description: "Custom emoji name to remove" } },
       required: ["name"],
     },
   },
@@ -1222,7 +1224,7 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "delete_custom_command",
-    description: "Delete a custom command",
+    description: "Delete an existing custom !command by trigger. Use only when the user asks to remove the custom command itself.",
     input_schema: {
       type: "object",
       properties: { trigger: { type: "string", description: "Command trigger to delete" } },
@@ -1231,7 +1233,7 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "list_custom_commands",
-    description: "List all custom commands",
+    description: "List every custom !command configured in this server, including admin-only markers.",
     input_schema: { type: "object", properties: {} },
   },
   // ═══════════════════════════════════════════════════════════════════
@@ -1242,7 +1244,7 @@ export const ADMIN_TOOLS = [
   // ─── New QOL Tools ─────────────────────────────────────────────────────
   {
     name: "set_dm_welcome",
-    description: "Configure a DM welcome message sent to new members when they join",
+    description: "Configure the automated DM welcome message sent to new members when they join. Do not use this for personal DM opt-out; use set_dm_preference for that.",
     input_schema: {
       type: "object",
       properties: {
@@ -1344,7 +1346,7 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "setup_reaction_roles",
-    description: "Post an embed message with emoji REACTION roles — users react with emojis to get roles. Supports both multi-select (pick many) and exclusive mode (pick one, like color roles). Use this when the user says 'reaction roles', 'emoji roles', 'react roles', or specifies emojis. Reaction roles CAN be exclusive — set exclusive: true for color roles etc.",
+    description: "Post an embed message with emoji REACTION roles - users react with emojis to get roles. Supports both multi-select (pick many) and exclusive mode (pick one, like color roles). Use this when the user says 'reaction roles', 'emoji roles', 'react roles', or specifies emojis. For button-based role pickers, use setup_role_picker instead.",
     input_schema: {
       type: "object",
       properties: {
@@ -1354,6 +1356,7 @@ export const ADMIN_TOOLS = [
         exclusive: { type: "boolean", description: "If true, users can only have ONE role from this set (like color roles). Picking a new one removes the old one. Default: false (multi-select)" },
         roles: {
           type: "array",
+          description: "Reaction-role mappings. Each entry connects one emoji reaction to one role.",
           items: {
             type: "object",
             properties: {
@@ -1384,7 +1387,7 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "remove_reaction_role",
-    description: "Remove a reaction role from a message",
+    description: "Remove a reaction-role mapping from an existing message. Do not use this to remove Irene's plain emoji reaction; use remove_reaction for that.",
     input_schema: {
       type: "object",
       properties: {
@@ -1734,12 +1737,12 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "pause_music",
-    description: "Pause the current song.",
+    description: "Pause the currently playing music track without clearing the queue.",
     input_schema: { type: "object", properties: {} },
   },
   {
     name: "resume_music",
-    description: "Resume a paused song.",
+    description: "Resume music playback after pause_music paused the current track.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -1914,7 +1917,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "list_bans",
-    description: "List banned users",
+    description: "List users currently banned from this server, including available ban metadata when Discord exposes it.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -1944,7 +1947,7 @@ export const EVERYONE_TOOLS = [
     description: "List all members who have a specific role",
     input_schema: {
       type: "object",
-      properties: { role_name: { type: "string", description: "Role name" } },
+      properties: { role_name: { type: "string", description: "Exact server role name to inspect" } },
       required: ["role_name"],
     },
   },
