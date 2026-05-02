@@ -118,6 +118,53 @@ describe("OpenAI-compatible provider (Irene)", () => {
     expect((globalThis.fetch as any).mock.calls[1][1].headers.Authorization).toBe("Bearer test-key-2");
   });
 
+  it("rotates keys across successful requests for quota smoothing", async () => {
+    Object.assign(config.openaiCompat, {
+      apiKey: "test-key-1",
+      apiKeys: ["test-key-1", "test-key-2"],
+    });
+    mockFetchResponses(
+      chatMessage({ role: "assistant", content: "first-ok" }),
+      chatMessage({ role: "assistant", content: "second-ok" }),
+    );
+
+    await provider.runGeminiChat({
+      systemInstruction: "system",
+      history: [],
+      tools: [],
+      message: { userMessage: "first" },
+      executor: vi.fn(),
+    });
+    await provider.runGeminiChat({
+      systemInstruction: "system",
+      history: [],
+      tools: [],
+      message: { userMessage: "second" },
+      executor: vi.fn(),
+    });
+
+    const usedKeys = (globalThis.fetch as any).mock.calls.map((call: any[]) => call[1].headers.Authorization);
+    expect(new Set(usedKeys)).toEqual(new Set(["Bearer test-key-1", "Bearer test-key-2"]));
+  });
+
+  it("does not duplicate the current user message when history already contains it", async () => {
+    const userText = "[defnotean said]\ncount this sentinel once";
+    const history: any[] = [{ role: "user", content: userText }];
+    mockFetchResponses(chatMessage({ role: "assistant", content: "normal-ok" }));
+
+    await provider.runGeminiChat({
+      systemInstruction: "system",
+      history,
+      tools: [],
+      message: { userMessage: userText },
+      executor: vi.fn(),
+    });
+
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body).not.toHaveProperty("tools");
+    expect(body.messages.filter((m: any) => m.role === "user" && m.content === userText)).toHaveLength(1);
+  });
+
   it("executes tool calls and returns final text", async () => {
     const executor = vi.fn(async (_name, args) => ({ ok: true, value: args.query }));
     mockFetchResponses(

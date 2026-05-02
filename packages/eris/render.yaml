@@ -1,10 +1,13 @@
+# Canonical deploy config lives at ../../render.yaml. This package-level copy
+# mirrors the important Eris env surface so it is not a stale footgun.
 services:
   - type: web
     name: eris-bot
     runtime: node
     plan: free
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: npm run start:eris
+    healthCheckPath: /
     envVars:
       - key: NODE_ENV
         value: production
@@ -15,6 +18,8 @@ services:
       - key: AI_PROVIDER
         value: openrouter
       - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEYS
         sync: false
       - key: OPENAI_COMPAT_MODEL
         value: openai/gpt-oss-120b:free
@@ -32,6 +37,14 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+      - key: REQUIRE_PERSISTENCE
+        value: "1"
+      - key: TWIN_API_SECRET
+        sync: false
+      - key: DASHBOARD_API_KEY
+        sync: false
+      - key: PC_AGENT_DISABLED
+        value: "1"
       - key: KLIPY_API_KEY
         sync: false
       - key: BOT_OWNER_ID

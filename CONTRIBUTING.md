@@ -141,11 +141,11 @@ Tests don't connect to Discord or Supabase — safe to run anywhere.
 
 These exist in the codebase today. Don't fix them as part of your first PR; they need their own scoped change.
 
-- **`aiProvider` is hardcoded in `config.js`** despite the NVIDIA fallback config and `.env` comments suggesting it's switchable. Both bots ignore an `AI_PROVIDER` env var.
+- **`AI_PROVIDER` is switchable** between Gemini, NVIDIA, and OpenAI-compatible providers such as OpenRouter. When you add provider-specific behavior, keep Eris and Irene in parity and update `docs/llm-provider-guide.md`.
 - **Some env vars bypass `config.js`'s `env()` helper** — `SUPABASE_URL`/`KEY` are read via `process.env` directly in `database.js` and `events/messageCreate.js`. The `.env.example` files document them anyway.
 - **Length budgeting is multi-layered.** A truncated reply could be caused by the system-prompt `[LENGTH BUDGET]` directive, `ai/dual.js`'s `maxOutputTokens`, or a post-hoc sentence trimmer in `messageCreate.js`. See `docs/ai-pipeline-*.md` for line numbers.
 - **Eris's tool selection bypasses `toolRegistry.selectByMessage`** at runtime — the actual selection happens in `messageCreate.js` via cached tool profiles (`twin`/`chat`/`chatOwner`/`full`/`fullOwner`). If you want to change tool selection behavior, edit `messageCreate.js`, not the registry.
-- **`@discordjs/opus`** is `optionalDependencies` — voice features still work in production where it builds; local Windows installs no longer fail on it.
+- **Voice receive/Opus behavior depends on hosted audio support.** The vulnerable native `@discordjs/opus` optional dependency was removed; avoid reintroducing native audio packages without an audit pass.
 - **Twin coordination has unsigned `ask_eris` calls** that may hit non-existent endpoints in Eris's API. Tracked separately.
 
 ## Twin coordination (Eris ↔ Irene)

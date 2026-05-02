@@ -28,6 +28,10 @@
   "author": "defnotean",
   "license": "ISC",
   "dependencies": {
-    "onnxruntime-node": "^1.20.1"
+    "onnxruntime-node": "^1.25.1"
+  },
+  "overrides": {
+    "protobufjs": "^7.5.5",
+    "tar": "^7.5.13"
   }
 }

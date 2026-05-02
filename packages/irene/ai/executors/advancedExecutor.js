@@ -1,6 +1,5 @@
 // ─── Advanced / Misc Executor ───────────────────────────────────────────────
 
-import { Parser as ExprParser } from "expr-eval";
 import { addReminder, removeReminder, addScheduledTask, getScheduledTasks, getScheduledTask, removeScheduledTask, getSupabase } from "../../database.js";
 import { armScheduledTask, scheduledTaskTimers, NON_SCHEDULABLE } from "../../utils/scheduler.js";
 import { log } from "../../utils/logger.js";
@@ -80,7 +79,158 @@ function getGroundingClient() {
   return c;
 }
 
-const _exprParser = new ExprParser();
+const CALC_FUNCTIONS = {
+  abs: Math.abs,
+  acos: Math.acos,
+  asin: Math.asin,
+  atan: Math.atan,
+  ceil: Math.ceil,
+  cos: Math.cos,
+  exp: Math.exp,
+  floor: Math.floor,
+  ln: Math.log,
+  log: Math.log,
+  log10: Math.log10,
+  max: Math.max,
+  min: Math.min,
+  round: Math.round,
+  sin: Math.sin,
+  sqrt: Math.sqrt,
+  tan: Math.tan,
+};
+
+function tokenizeMathExpression(expr) {
+  const tokens = [];
+  let i = 0;
+  while (i < expr.length) {
+    const ch = expr[i];
+    if (/\s/.test(ch)) {
+      i += 1;
+      continue;
+    }
+    if (/[0-9.]/.test(ch)) {
+      const start = i;
+      i += 1;
+      while (i < expr.length && /[0-9._eE+-]/.test(expr[i])) {
+        if ((expr[i] === "+" || expr[i] === "-") && !/[eE]$/.test(expr.slice(start, i))) break;
+        i += 1;
+      }
+      const raw = expr.slice(start, i).replace(/_/g, "");
+      const value = Number(raw);
+      if (!Number.isFinite(value)) throw new Error(`invalid number "${raw}"`);
+      tokens.push({ type: "number", value });
+      continue;
+    }
+    if (/[a-zA-Z_]/.test(ch)) {
+      const start = i;
+      i += 1;
+      while (i < expr.length && /[a-zA-Z0-9_]/.test(expr[i])) i += 1;
+      tokens.push({ type: "identifier", value: expr.slice(start, i) });
+      continue;
+    }
+    if ("+-*/%^(),".includes(ch)) {
+      tokens.push({ type: ch, value: ch });
+      i += 1;
+      continue;
+    }
+    throw new Error(`unsupported character "${ch}"`);
+  }
+  return tokens;
+}
+
+function evaluateMathExpression(expr, vars = {}) {
+  const tokens = tokenizeMathExpression(expr);
+  let index = 0;
+
+  const peek = () => tokens[index];
+  const take = (type) => (peek()?.type === type ? tokens[index++] : null);
+  const expect = (type) => {
+    const token = take(type);
+    if (!token) throw new Error(`expected "${type}"`);
+    return token;
+  };
+
+  function parseExpression() {
+    let value = parseTerm();
+    while (peek()?.type === "+" || peek()?.type === "-") {
+      const op = tokens[index++].type;
+      const rhs = parseTerm();
+      value = op === "+" ? value + rhs : value - rhs;
+    }
+    return value;
+  }
+
+  function parseTerm() {
+    let value = parsePower();
+    while (["*", "/", "%"].includes(peek()?.type)) {
+      const op = tokens[index++].type;
+      const rhs = parsePower();
+      if ((op === "/" || op === "%") && rhs === 0) throw new Error("division by zero");
+      if (op === "*") value *= rhs;
+      else if (op === "/") value /= rhs;
+      else value %= rhs;
+    }
+    return value;
+  }
+
+  function parsePower() {
+    let value = parseUnary();
+    if (peek()?.type === "^") {
+      index += 1;
+      const exponent = parsePower();
+      if (Math.abs(exponent) > 12 || Math.abs(value) > 1e6) throw new Error("large exponents are forbidden for safety");
+      value = Math.pow(value, exponent);
+    }
+    return value;
+  }
+
+  function parseUnary() {
+    if (take("+")) return parseUnary();
+    if (take("-")) return -parseUnary();
+    return parsePrimary();
+  }
+
+  function parsePrimary() {
+    const token = peek();
+    if (!token) throw new Error("unexpected end of expression");
+    if (take("(")) {
+      const value = parseExpression();
+      expect(")");
+      return value;
+    }
+    if (token.type === "number") {
+      index += 1;
+      return token.value;
+    }
+    if (token.type === "identifier") {
+      index += 1;
+      const name = token.value;
+      if (take("(")) {
+        const args = [];
+        if (!take(")")) {
+          do {
+            args.push(parseExpression());
+          } while (take(","));
+          expect(")");
+        }
+        const fn = CALC_FUNCTIONS[name.toLowerCase()];
+        if (!fn) throw new Error(`unknown function "${name}"`);
+        const value = fn(...args);
+        if (!Number.isFinite(value)) throw new Error(`function "${name}" returned an invalid number`);
+        return value;
+      }
+      const value = vars[name];
+      if (typeof value !== "number") throw new Error(`unknown variable "${name}"`);
+      return value;
+    }
+    throw new Error(`unexpected token "${token.value}"`);
+  }
+
+  const result = parseExpression();
+  if (index < tokens.length) throw new Error(`unexpected token "${tokens[index].value}"`);
+  if (!Number.isFinite(result)) throw new Error("result is not finite");
+  return result;
+}
 
 // ─── Web rate limiting ──────────────────────────────────────────────────────
 const _webRateLimits = new Map();
@@ -341,10 +491,13 @@ export async function execute(toolName, input, message, ctx) {
           const assignMatch = stmt.match(/^([a-zA-Z_]\w*)\s*=\s*(.+)$/);
           if (assignMatch) {
             const [, varName, valExpr] = assignMatch;
-            lastResult = _exprParser.evaluate(valExpr, vars);
+            if (Object.prototype.hasOwnProperty.call(CALC_FUNCTIONS, varName.toLowerCase())) {
+              return `Math error: "${varName}" is a reserved function name.`;
+            }
+            lastResult = evaluateMathExpression(valExpr, vars);
             vars[varName] = lastResult;
           } else {
-            lastResult = _exprParser.evaluate(stmt, vars);
+            lastResult = evaluateMathExpression(stmt, vars);
           }
         }
         if (lastResult === undefined || lastResult === null) return "Expression returned no result.";

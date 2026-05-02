@@ -17,7 +17,6 @@
     "@google/genai": "1.50.1",
     "@supabase/supabase-js": "2.104.1",
     "discord.js": "14.26.3",
-    "expr-eval": "^2.0.2",
     "prism-media": "^1.3.5",
     "rss-parser": "^3.13.0",
     "shoukaku": "^4.3.0",
@@ -29,9 +28,6 @@
     "@types/node": "^20.19.39",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
-  },
-  "optionalDependencies": {
-    "@discordjs/opus": "^0.9.0"
+    "vitest": "^3.2.4"
   }
 }

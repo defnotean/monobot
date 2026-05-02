@@ -7,7 +7,7 @@ This guide takes you from a fresh `git clone` to a running bot in roughly 15 min
 - **Node.js 18+** (`node -v` to check; 20+ recommended)
 - **npm 9+** (ships with Node)
 - A **Discord bot** for whichever bot you want to run — create one at [discord.com/developers/applications](https://discord.com/developers/applications). You need the bot's **token** and **application ID**.
-- A **Gemini API key** (free tier works) — get one at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+- An **AI provider key**. Production currently uses OpenRouter (`AI_PROVIDER=openrouter`) with `OPENROUTER_API_KEY` or `OPENROUTER_API_KEYS`; Gemini still works with `AI_PROVIDER=gemini` and `GEMINI_API_KEY`.
 - Optional: **Supabase project** (persistence), **Voyage API key** (semantic memory), **Lavalink server** (Irene music features)
 
 ## 1. Clone and install
@@ -18,7 +18,7 @@ cd MonoBot
 npm install
 ```
 
-`npm install` hoists dependencies to the root via npm workspaces. It should complete cleanly on macOS, Linux, and Windows. The native `@discordjs/opus` package is `optionalDependencies` — failure to build it (common on Windows without C++ build tools) is harmless and only disables Irene's voice/music output.
+`npm install` hoists dependencies to the root via npm workspaces. It should complete cleanly on macOS, Linux, and Windows.
 
 ## 2. Pick a bot
 
@@ -38,9 +38,9 @@ cp packages/eris/.env.example  packages/eris/.env
 cp packages/irene/.env.example packages/irene/.env
 ```
 
-**Minimum to boot Eris:** `DISCORD_TOKEN`, `CLIENT_ID`, `GEMINI_API_KEY` (Supabase warns if missing but the bot still runs ephemerally).
+**Minimum to boot Eris:** `DISCORD_TOKEN`, `CLIENT_ID`, and one key for the selected `AI_PROVIDER`. For the current OpenRouter setup, use `OPENROUTER_API_KEY` or `OPENROUTER_API_KEYS`. Supabase warns if missing but the bot still runs ephemerally.
 
-**Minimum to boot Irene:** `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_USER_ID`, `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `TWIN_API_SECRET`.
+**Minimum to boot Irene:** `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_USER_ID`, one key for the selected `AI_PROVIDER`, `SUPABASE_URL`, `SUPABASE_KEY`, `TWIN_API_SECRET`.
 
 The `.env.example` files mark every variable as required, conditional, or optional, and include a link or path to where you obtain each key.
 

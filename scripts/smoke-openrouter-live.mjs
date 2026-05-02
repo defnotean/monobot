@@ -1,16 +1,21 @@
+const splitKeys = (value) => String(value || "")
+  .split(/[\s,;]+/)
+  .map((key) => key.trim())
+  .filter(Boolean);
+
 const cases = [
   {
     name: "Eris",
     pkg: "../packages/eris/ai/providers/openaiCompat.js",
-    key: process.env.ERIS_OPENROUTER_KEY,
+    keys: splitKeys(process.env.ERIS_OPENROUTER_KEYS || process.env.ERIS_OPENROUTER_KEY),
     tokenEnv: { DISCORD_TOKEN: "smoke-token", CLIENT_ID: "smoke-client" },
-    referer: "https://irene-bot.onrender.com",
+    referer: "https://eris-bot.onrender.com",
     appTitle: "Eris smoke test",
   },
   {
     name: "Irene",
     pkg: "../packages/irene/ai/providers/openaiCompat.js",
-    key: process.env.IRENE_OPENROUTER_KEY,
+    keys: splitKeys(process.env.IRENE_OPENROUTER_KEYS || process.env.IRENE_OPENROUTER_KEY),
     tokenEnv: { DISCORD_BOT_TOKEN: "smoke-token", DISCORD_CLIENT_ID: "smoke-client" },
     referer: "https://irene-bot.onrender.com",
     appTitle: "Irene smoke test",
@@ -33,7 +38,7 @@ async function rawChat(bot, payload) {
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${bot.key}`,
+      Authorization: `Bearer ${bot.keys[0]}`,
       "Content-Type": "application/json",
       "HTTP-Referer": bot.referer,
       "X-Title": bot.appTitle,
@@ -50,7 +55,7 @@ async function rawChat(bot, payload) {
 
 async function authCheck(bot) {
   const res = await fetch("https://openrouter.ai/api/v1/auth/key", {
-    headers: { Authorization: `Bearer ${bot.key}` },
+    headers: { Authorization: `Bearer ${bot.keys[0]}` },
     signal: AbortSignal.timeout(60_000),
   });
   const text = await res.text();
@@ -59,11 +64,12 @@ async function authCheck(bot) {
 }
 
 async function runBot(bot) {
-  if (!bot.key) return { bot: bot.name, fatal: "missing key env" };
+  if (!bot.keys.length) return { bot: bot.name, fatal: "missing key env" };
   log(bot, "starting", `model=${model}`);
   Object.assign(process.env, bot.tokenEnv, {
     AI_PROVIDER: "openrouter",
-    OPENROUTER_API_KEY: bot.key,
+    OPENROUTER_API_KEY: bot.keys[0],
+    OPENROUTER_API_KEYS: bot.keys.join("\n"),
     OPENAI_COMPAT_MODEL: model,
     OPENAI_COMPAT_FAST_MODEL: model,
     OPENAI_COMPAT_MAX_TOKENS: "120",

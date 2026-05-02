@@ -35,6 +35,7 @@ function chatMessage(message: any) {
 beforeEach(() => {
   Object.assign(config.openaiCompat, {
     apiKey: "test-key",
+    apiKeys: ["test-key"],
     baseUrl: "https://compat.test/v1",
     model: "test-model",
     fastModel: "test-fast-model",
@@ -64,6 +65,67 @@ describe("OpenAI-compatible provider (Eris)", () => {
       "https://compat.test/v1/chat/completions",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("rotates to the next configured key when OpenRouter rate-limits one", async () => {
+    Object.assign(config.openaiCompat, {
+      apiKey: "test-key-1",
+      apiKeys: ["test-key-1", "test-key-2"],
+    });
+    let index = 0;
+    globalThis.fetch = vi.fn(async () => {
+      index += 1;
+      if (index === 1) {
+        return {
+          ok: false,
+          status: 429,
+          text: async () => "rate limited",
+          json: async () => ({}),
+        };
+      }
+      const body = chatMessage({ role: "assistant", content: "rotated-ok" });
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      };
+    }) as any;
+
+    const result = await provider.runGeminiChat(null, "system", [], [], "hi", vi.fn());
+
+    expect(result).toEqual({ text: "rotated-ok", toolsUsed: [] });
+    expect((globalThis.fetch as any).mock.calls[0][1].headers.Authorization).toBe("Bearer test-key-1");
+    expect((globalThis.fetch as any).mock.calls[1][1].headers.Authorization).toBe("Bearer test-key-2");
+  });
+
+  it("rotates keys across successful requests for quota smoothing", async () => {
+    Object.assign(config.openaiCompat, {
+      apiKey: "test-key-1",
+      apiKeys: ["test-key-1", "test-key-2"],
+    });
+    mockFetchResponses(
+      chatMessage({ role: "assistant", content: "first-ok" }),
+      chatMessage({ role: "assistant", content: "second-ok" }),
+    );
+
+    await provider.runGeminiChat(null, "system", [], [], "first", vi.fn());
+    await provider.runGeminiChat(null, "system", [], [], "second", vi.fn());
+
+    const usedKeys = (globalThis.fetch as any).mock.calls.map((call: any[]) => call[1].headers.Authorization);
+    expect(new Set(usedKeys)).toEqual(new Set(["Bearer test-key-1", "Bearer test-key-2"]));
+  });
+
+  it("does not duplicate the current user message when history already contains it", async () => {
+    const userText = "[defnotean said]\ncount this sentinel once";
+    const history: any[] = [{ role: "user", parts: [{ text: userText }] }];
+    mockFetchResponses(chatMessage({ role: "assistant", content: "normal-ok" }));
+
+    await provider.runGeminiChat(null, "system", [], history, userText, vi.fn());
+
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body).not.toHaveProperty("tools");
+    expect(body.messages.filter((m: any) => m.role === "user" && m.content === userText)).toHaveLength(1);
   });
 
   it("executes tool calls and returns the final text", async () => {

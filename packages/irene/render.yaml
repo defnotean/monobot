@@ -1,15 +1,20 @@
+# Canonical deploy config lives at ../../render.yaml. This package-level copy
+# mirrors the important Irene env surface so it is not a stale footgun.
 services:
-  - type: worker
+  - type: web
     name: irene-bot
     runtime: node
     plan: standard
-    buildCommand: npm install --production
-    startCommand: node index.js
+    buildCommand: npm install
+    startCommand: npm run start:irene
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
-        value: "production"
-      - key: PORT
-        value: "3001"
+        value: production
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        sync: false
       - key: AI_PROVIDER
         value: openrouter
       - key: OPENROUTER_API_KEY
@@ -26,3 +31,13 @@ services:
         value: https://irene-bot.onrender.com
       - key: OPENAI_COMPAT_APP_TITLE
         value: Irene Discord Bot
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: REQUIRE_PERSISTENCE
+        value: "1"
+      - key: TWIN_API_SECRET
+        sync: false
+      - key: DASHBOARD_API_KEY
+        sync: false

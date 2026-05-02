@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // @ts-expect-error - importing JS module without types
-import { callEris, erisErrorText } from "../../../ai/executors/advancedExecutor.js";
+import { callEris, erisErrorText, execute } from "../../../ai/executors/advancedExecutor.js";
 // @ts-expect-error - importing JS module without types
 import { verifyTwinRequest } from "@defnotean/shared/twinSign";
 // @ts-expect-error - importing JS module without types
@@ -129,5 +129,25 @@ describe("erisErrorText", () => {
       expect(out).not.toContain("undefined");
       expect(out.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("calculate executor", () => {
+  it("evaluates arithmetic, functions, and assignment without expr-eval", async () => {
+    const result = await execute("calculate", {
+      expression: "x = 2 + 3 * 4; sqrt(x + 2)",
+    }, {} as any, {} as any);
+
+    expect(result).toBe("**4**  ← `x = 2 + 3 * 4; sqrt(x + 2)`");
+  });
+
+  it("blocks unsafe or unsupported expressions", async () => {
+    await expect(execute("calculate", {
+      expression: "constructor.constructor('return process')()",
+    }, {} as any, {} as any)).resolves.toContain("Math error:");
+
+    await expect(execute("calculate", {
+      expression: "2 ** 99",
+    }, {} as any, {} as any)).resolves.toContain("large exponents are forbidden");
   });
 });

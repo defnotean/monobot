@@ -30,12 +30,15 @@ OPENAI_COMPAT_FAST_MODEL=llama-3.1-8b-instant
 ```env
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=your_key_here
+OPENROUTER_API_KEYS=optional_extra_keys_separated_by_newlines_commas_or_spaces
 OPENAI_COMPAT_MODEL=provider/model-id
 OPENAI_COMPAT_HTTP_REFERER=https://your-site.example
 OPENAI_COMPAT_APP_TITLE=MonoBot
 ```
 
 OpenRouter free models change over time. In their model picker, prefer models labeled `:free` and verify that tool calling is supported before using them for the task-heavy bot flow.
+
+When both `OPENROUTER_API_KEY` and `OPENROUTER_API_KEYS` are set, the single key is treated as the primary key and the plural list is used as the rotation pool after it. Eris and Irene retry the next configured key on `401`, `403`, and `429`, and rotate across successful calls to smooth quota usage.
 
 ### Cloudflare Workers AI
 

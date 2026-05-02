@@ -58,6 +58,20 @@ function envFirst(keys, fallback = "") {
   return fallback;
 }
 
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function envList(keys) {
+  const values = [];
+  for (const key of keys) {
+    const raw = env(key);
+    if (!raw) continue;
+    values.push(...raw.split(/[\s,;]+/).map((value) => value.trim()).filter(Boolean));
+  }
+  return unique(values);
+}
+
 function parseJsonEnv(key, fallback = {}) {
   const value = env(key);
   if (!value) return fallback;
@@ -154,8 +168,22 @@ function getOpenAICompatKeyVars(provider) {
   }
 }
 
+function getOpenAICompatKeyListVars(provider) {
+  switch ((provider || "").toLowerCase()) {
+    case "openrouter":
+      return ["OPENAI_COMPAT_API_KEYS", "OPENROUTER_API_KEYS"];
+    default:
+      return ["OPENAI_COMPAT_API_KEYS"];
+  }
+}
+
 const selectedAIProvider = env("AI_PROVIDER", "gemini").toLowerCase();
 const openAICompatDefaultConfig = getOpenAICompatDefaults(selectedAIProvider);
+const openAICompatApiKey = envFirst(getOpenAICompatKeyVars(selectedAIProvider));
+const openAICompatApiKeys = unique([
+  openAICompatApiKey,
+  ...envList(getOpenAICompatKeyListVars(selectedAIProvider)),
+]);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG OBJECT — every runtime knob lives on this single object. Sections
@@ -216,7 +244,8 @@ const config = {
 
   // Generic OpenAI-compatible chat completions provider.
   openaiCompat: {
-    apiKey: envFirst(getOpenAICompatKeyVars(selectedAIProvider)),
+    apiKey: openAICompatApiKey || openAICompatApiKeys[0] || "",
+    apiKeys: openAICompatApiKeys,
     baseUrl: env("OPENAI_COMPAT_BASE_URL", openAICompatDefaultConfig.baseUrl),
     model: env("OPENAI_COMPAT_MODEL", openAICompatDefaultConfig.model),
     fastModel: env("OPENAI_COMPAT_FAST_MODEL", env("OPENAI_COMPAT_MODEL", openAICompatDefaultConfig.model)),
@@ -577,9 +606,9 @@ if ((configuredAIProvider === "nvidia" || configuredAIProvider === "kimi") && !c
 if (
   openAICompatibleProviderAliases.has(configuredAIProvider)
   && !config.openaiCompat.allowNoApiKey
-  && !config.openaiCompat.apiKey
+  && !config.openaiCompat.apiKeys.length
 ) {
-  console.error(`[FATAL] OPENAI_COMPAT_API_KEY or the provider-specific API key is required when AI_PROVIDER=${config.aiProvider}`);
+  console.error(`[FATAL] OPENAI_COMPAT_API_KEY/OPENAI_COMPAT_API_KEYS or the provider-specific API key env is required when AI_PROVIDER=${config.aiProvider}`);
   process.exit(1);
 }
 if (!["gemini", "google", "nvidia", "kimi"].includes(configuredAIProvider) && !openAICompatibleProviderAliases.has(configuredAIProvider)) {
