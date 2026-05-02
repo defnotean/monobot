@@ -85,6 +85,20 @@ function envFirst(keys, fallback = "") {
   return fallback;
 }
 
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function envList(keys) {
+  const values = [];
+  for (const key of keys) {
+    const raw = env(key);
+    if (!raw) continue;
+    values.push(...raw.split(/[\s,;]+/).map((value) => value.trim()).filter(Boolean));
+  }
+  return unique(values);
+}
+
 const OPENAI_COMPAT_PROVIDERS = new Set([
   "openai-compatible",
   "openaicompatible",
@@ -154,6 +168,21 @@ function getOpenAICompatKeyVars(provider) {
 // CONFIG OBJECT — Discord identity, Twin API, music, AI providers, personality
 // ═══════════════════════════════════════════════════════════════════════════
 
+function getOpenAICompatKeyListVars(provider) {
+  switch ((provider || "").toLowerCase()) {
+    case "openrouter":
+      return ["OPENAI_COMPAT_API_KEYS", "OPENROUTER_API_KEYS"];
+    default:
+      return ["OPENAI_COMPAT_API_KEYS"];
+  }
+}
+
+const openaiCompatApiKey = envFirst(getOpenAICompatKeyVars(selectedAiProvider));
+const openaiCompatApiKeys = unique([
+  ...envList(getOpenAICompatKeyListVars(selectedAiProvider)),
+  openaiCompatApiKey,
+]);
+
 const config = {
   token: env("DISCORD_BOT_TOKEN"),
   clientId: env("DISCORD_CLIENT_ID", "345678901234567890"),
@@ -201,7 +230,8 @@ const config = {
   // Enabled by AI_PROVIDER=openai-compatible/openai/openrouter/groq/cerebras/
   // mistral/deepinfra/together/github/cloudflare/lmstudio/ollama.
   openaiCompat: {
-    apiKey: envFirst(getOpenAICompatKeyVars(selectedAiProvider)),
+    apiKey: openaiCompatApiKey || openaiCompatApiKeys[0] || "",
+    apiKeys: openaiCompatApiKeys,
     baseUrl: env("OPENAI_COMPAT_BASE_URL", openaiCompatDefaults.baseUrl),
     model: env("OPENAI_COMPAT_MODEL", openaiCompatDefaults.model),
     fastModel: env("OPENAI_COMPAT_FAST_MODEL", openaiCompatDefaults.fastModel),
@@ -441,8 +471,8 @@ if (config.aiProvider === "nvidia" && !config.nvidia.apiKey) {
   console.error("[FATAL] NVIDIA_API_KEY is required when AI_PROVIDER=nvidia");
   process.exit(1);
 }
-if (OPENAI_COMPAT_PROVIDERS.has(config.aiProvider) && !config.openaiCompat.allowNoApiKey && !config.openaiCompat.apiKey) {
-  console.error(`[FATAL] OPENAI_COMPAT_API_KEY (or OPENAI_API_KEY) is required when AI_PROVIDER=${config.aiProvider}`);
+if (OPENAI_COMPAT_PROVIDERS.has(config.aiProvider) && !config.openaiCompat.allowNoApiKey && !config.openaiCompat.apiKeys.length) {
+  console.error(`[FATAL] OPENAI_COMPAT_API_KEY/OPENAI_COMPAT_API_KEYS (or provider-specific key env) is required when AI_PROVIDER=${config.aiProvider}`);
   process.exit(1);
 }
 if (!["gemini", "google", "nvidia", "kimi"].includes(config.aiProvider) && !OPENAI_COMPAT_PROVIDERS.has(config.aiProvider)) {

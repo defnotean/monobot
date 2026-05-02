@@ -22,6 +22,8 @@ services:
         value: openrouter
       - key: OPENROUTER_API_KEY
         sync: false
+      - key: OPENROUTER_API_KEYS
+        sync: false
       - key: OPENAI_COMPAT_MODEL
         value: openai/gpt-oss-120b:free
       - key: OPENAI_COMPAT_FAST_MODEL
@@ -66,6 +68,8 @@ services:
       - key: AI_PROVIDER
         value: openrouter
       - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEYS
         sync: false
       - key: OPENAI_COMPAT_MODEL
         value: openai/gpt-oss-120b:free

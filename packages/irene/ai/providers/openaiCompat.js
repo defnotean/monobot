@@ -5,6 +5,7 @@ import { log } from "../../utils/logger.js";
 import { executeTool } from "../executor.js";
 
 const OC = config.openaiCompat || {};
+let _apiKeyCursor = 0;
 
 function stableStringify(value) {
   if (!value || typeof value !== "object") return JSON.stringify(value);
@@ -60,23 +61,29 @@ export function toOpenAICompatTools(tools) {
   return result;
 }
 
-function headers() {
+function apiKeys() {
+  const keys = Array.isArray(OC.apiKeys) ? OC.apiKeys.filter(Boolean) : [];
+  if (!keys.length && OC.apiKey) keys.push(OC.apiKey);
+  return [...new Set(keys)];
+}
+
+function headers(apiKey) {
   const out = {
     "Content-Type": "application/json",
     "Accept": "application/json",
     ...OC.extraHeaders,
   };
-  if (OC.apiKey) out.Authorization = `Bearer ${OC.apiKey}`;
+  if (apiKey) out.Authorization = `Bearer ${apiKey}`;
   if (OC.httpReferer) out["HTTP-Referer"] = OC.httpReferer;
   if (OC.appTitle) out["X-Title"] = OC.appTitle;
   return out;
 }
 
-async function postChat(body, timeoutMs) {
+async function postChatWithKey(body, timeoutMs, apiKey) {
   const baseUrl = String(OC.baseUrl || "").replace(/\/+$/, "");
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: headers(),
+    headers: headers(apiKey),
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -87,6 +94,26 @@ async function postChat(body, timeoutMs) {
     throw error;
   }
   return res.json();
+}
+
+async function postChat(body, timeoutMs) {
+  const keys = apiKeys();
+  if (!keys.length) return postChatWithKey(body, timeoutMs, null);
+
+  let lastError;
+  for (let attempt = 0; attempt < keys.length; attempt += 1) {
+    const keyIndex = (_apiKeyCursor + attempt) % keys.length;
+    try {
+      const result = await postChatWithKey(body, timeoutMs, keys[keyIndex]);
+      _apiKeyCursor = (keyIndex + 1) % keys.length;
+      return result;
+    } catch (err) {
+      lastError = err;
+      if (![401, 403, 429].includes(err?.status) || attempt === keys.length - 1) throw err;
+      log(`[${OC.providerName || "OpenAICompat"}] key ${keyIndex + 1}/${keys.length} returned HTTP ${err.status}; trying next key`);
+    }
+  }
+  throw lastError;
 }
 
 function withTimeout(promise, timeoutMs, label) {

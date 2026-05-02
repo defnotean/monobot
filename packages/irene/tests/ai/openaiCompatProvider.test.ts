@@ -39,6 +39,7 @@ function chatMessage(message: any) {
 beforeEach(() => {
   Object.assign(config.openaiCompat, {
     apiKey: "test-key",
+    apiKeys: ["test-key"],
     baseUrl: "https://compat.test/v1",
     model: "test-model",
     fastModel: "test-fast-model",
@@ -77,6 +78,44 @@ describe("OpenAI-compatible provider (Irene)", () => {
       "https://compat.test/v1/chat/completions",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("rotates to the next configured key when OpenRouter rate-limits one", async () => {
+    Object.assign(config.openaiCompat, {
+      apiKey: "test-key-1",
+      apiKeys: ["test-key-1", "test-key-2"],
+    });
+    let index = 0;
+    globalThis.fetch = vi.fn(async () => {
+      index += 1;
+      if (index === 1) {
+        return {
+          ok: false,
+          status: 429,
+          text: async () => "rate limited",
+          json: async () => ({}),
+        };
+      }
+      const body = chatMessage({ role: "assistant", content: "rotated-ok" });
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      };
+    }) as any;
+
+    const result = await provider.runGeminiChat({
+      systemInstruction: "system",
+      history: [],
+      tools: [],
+      message: { userMessage: "hi" },
+      executor: vi.fn(),
+    });
+
+    expect(result).toEqual({ text: "rotated-ok", toolsUsed: [] });
+    expect((globalThis.fetch as any).mock.calls[0][1].headers.Authorization).toBe("Bearer test-key-1");
+    expect((globalThis.fetch as any).mock.calls[1][1].headers.Authorization).toBe("Bearer test-key-2");
   });
 
   it("executes tool calls and returns final text", async () => {
