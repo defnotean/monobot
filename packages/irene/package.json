@@ -7,7 +7,7 @@
     "start": "node index.js",
     "dev": "tsx --watch index.ts",
     "deploy": "node deploy-commands.js",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },

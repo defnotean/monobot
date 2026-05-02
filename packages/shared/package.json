@@ -15,6 +15,7 @@
     "./firewallPatterns": "./src/ai/firewallPatterns.js"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },

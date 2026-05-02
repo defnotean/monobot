@@ -144,6 +144,58 @@ describe("OpenAI-compatible provider (Irene)", () => {
     expect(result).toEqual({ text: "args were bad", toolsUsed: [] });
   });
 
+  it("persists tool calls and results so later turns do not replay old actions", async () => {
+    const history: any[] = [{ role: "user", content: "[defnotean said]\nAlright Irene, dab for me" }];
+    const executor = vi.fn(async (_name, args) => ({ ok: true, sent: args.query }));
+
+    mockFetchResponses(
+      chatMessage({
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "call_dab",
+            type: "function",
+            function: { name: "send_gif", arguments: JSON.stringify({ query: "dab meme", caption: "" }) },
+          },
+        ],
+      }),
+      chatMessage({ role: "assistant", content: "" }),
+    );
+
+    const first = await provider.runGeminiChat({
+      systemInstruction: "system",
+      history,
+      tools: [{ name: "send_gif", description: "send gif", input_schema: { type: "object" } }],
+      message: { userMessage: "[defnotean said]\nAlright Irene, dab for me" },
+      executor,
+    });
+
+    expect(first).toEqual({ text: "", toolsUsed: ["send_gif"] });
+    expect(history[1].content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool_use", name: "send_gif", input: { query: "dab meme", caption: "" } }),
+    ]));
+    expect(history[2].content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool_result", tool_use_id: "call_dab", tool_name: "send_gif" }),
+    ]));
+
+    history.push({ role: "user", content: "[defnotean said]\nhow about hit the quan for me" });
+    mockFetchResponses(chatMessage({ role: "assistant", content: "fresh turn" }));
+
+    await provider.runGeminiChat({
+      systemInstruction: "system",
+      history,
+      tools: [{ name: "send_gif", description: "send gif", input_schema: { type: "object" } }],
+      message: { userMessage: "[defnotean said]\nhow about hit the quan for me" },
+      executor,
+    });
+
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    const promptText = body.messages.map((m: any) => m.content).filter(Boolean).join("\n");
+    expect(promptText).toContain("[tool result: send_gif]");
+    expect(promptText).toContain("how about hit the quan for me");
+  });
+
   it("guards duplicate tool calls and returns a visible fallback", async () => {
     const executor = vi.fn(async () => "first result");
     const duplicateCall = {

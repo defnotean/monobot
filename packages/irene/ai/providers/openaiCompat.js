@@ -130,6 +130,48 @@ function textFromContent(content) {
     .join("\n");
 }
 
+function stringifyToolContent(content, limit = 2500) {
+  let text;
+  if (typeof content === "string") {
+    text = content;
+  } else {
+    try {
+      text = JSON.stringify(content);
+    } catch {
+      text = String(content);
+    }
+  }
+  return (text || "").slice(0, limit);
+}
+
+function appendAnthropicToolHistory(history, msg, slots) {
+  if (!Array.isArray(history) || !slots?.length) return;
+
+  const assistantContent = [];
+  const visibleText = textFromContent(msg?.content).trim();
+  if (visibleText) assistantContent.push({ type: "text", text: visibleText.slice(0, 1900) });
+
+  for (const slot of slots) {
+    assistantContent.push({
+      type: "tool_use",
+      id: String(slot.call?.id || `${slot.fnName || "tool"}_${Date.now()}`),
+      name: slot.fnName || "unknown_tool",
+      input: slot.parseError ? {} : (slot.fnArgs || {}),
+    });
+  }
+
+  history.push({ role: "assistant", content: assistantContent });
+  history.push({
+    role: "user",
+    content: slots.map((slot) => ({
+      type: "tool_result",
+      tool_use_id: String(slot.call?.id || `${slot.fnName || "tool"}_result`),
+      tool_name: slot.fnName || "unknown_tool",
+      content: stringifyToolContent(slot.resultContent),
+    })),
+  });
+}
+
 function toMessages(systemInstruction, history, userMessage) {
   const messages = [{ role: "system", content: systemInstruction || "" }];
   for (const turn of history || []) {
@@ -262,6 +304,7 @@ export async function runOpenAICompatChat(arg1, ...rest) {
   let finalText = "";
   const calledSignatures = new Set();
   const maxIterations = Math.max(1, OC.maxIterations || 10);
+  const shouldPersistHistory = Array.isArray(history) && typeof arg1 === "object" && arg1;
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     let data;
@@ -349,12 +392,15 @@ export async function runOpenAICompatChat(arg1, ...rest) {
       } else {
         content = byId.get(slot.call.id);
       }
+      slot.resultContent = content;
       messages.push({
         role: "tool",
         tool_call_id: slot.call.id,
-        content: typeof content === "string" ? content : JSON.stringify(content),
+        content: stringifyToolContent(content),
       });
     }
+
+    if (shouldPersistHistory) appendAnthropicToolHistory(history, msg, slots);
 
     if (allDuplicates) {
       finalText = msg.content || (toolsUsed.length ? "i already checked that, but got stuck finishing the answer. try again in a sec" : "");
@@ -362,7 +408,7 @@ export async function runOpenAICompatChat(arg1, ...rest) {
     }
   }
 
-  if (Array.isArray(history) && typeof arg1 === "object" && arg1 && finalText) {
+  if (shouldPersistHistory && finalText) {
     history.push({ role: "assistant", content: finalText.slice(0, 1900) });
   }
 

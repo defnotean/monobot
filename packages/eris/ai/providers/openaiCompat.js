@@ -138,6 +138,43 @@ function textFromContent(content) {
     .join("\n");
 }
 
+function stringifyToolContent(content, limit = 2500) {
+  let text;
+  if (typeof content === "string") {
+    text = content;
+  } else {
+    try {
+      text = JSON.stringify(content);
+    } catch {
+      text = String(content);
+    }
+  }
+  return (text || "").slice(0, limit);
+}
+
+function appendGeminiStyleToolHistory(history, msg, slots) {
+  if (!Array.isArray(history) || !slots?.length) return;
+
+  const assistantLines = [];
+  const visibleText = textFromContent(msg?.content).trim();
+  if (visibleText) assistantLines.push(visibleText);
+  for (const slot of slots) {
+    const args = slot.parseError ? "{malformed arguments}" : stableStringify(slot.fnArgs || {});
+    assistantLines.push(`[tool call: ${slot.fnName || "unknown_tool"}] ${args}`);
+  }
+
+  history.push({ role: "model", parts: [{ text: assistantLines.join("\n").slice(0, 1900) }] });
+  history.push({
+    role: "user",
+    parts: [{
+      text: slots
+        .map((slot) => `[tool result: ${slot.fnName || "unknown_tool"}] ${stringifyToolContent(slot.resultContent, 900)}`)
+        .join("\n")
+        .slice(0, 1900),
+    }],
+  });
+}
+
 function toMessages(systemInstruction, history, userMessage) {
   const messages = [{ role: "system", content: systemInstruction || "" }];
 
@@ -349,12 +386,15 @@ export async function runOpenAICompatChat(_client, systemInstruction, tools, his
       } else {
         content = byId.get(slot.call.id);
       }
+      slot.resultContent = content;
       messages.push({
         role: "tool",
         tool_call_id: slot.call.id,
-        content: typeof content === "string" ? content : JSON.stringify(content),
+        content: stringifyToolContent(content),
       });
     }
+
+    appendGeminiStyleToolHistory(history, msg, slots);
 
     if (allDuplicates) {
       finalText = msg.content || (toolsUsed.length ? "i already checked that, but got stuck finishing the answer. try again in a sec" : "");

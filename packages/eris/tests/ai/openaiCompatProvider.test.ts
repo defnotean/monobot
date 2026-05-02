@@ -151,6 +151,56 @@ describe("OpenAI-compatible provider (Eris)", () => {
     });
   });
 
+  it("persists tool call summaries so later turns do not replay old actions", async () => {
+    const history: any[] = [{ role: "user", parts: [{ text: "[defnotean said]\nAlright Eris, dab for me" }] }];
+    const executor = vi.fn(async (_name, args) => ({ ok: true, sent: args.query }));
+
+    mockFetchResponses(
+      chatMessage({
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "call_dab",
+            type: "function",
+            function: { name: "send_gif", arguments: JSON.stringify({ query: "dab meme", caption: "" }) },
+          },
+        ],
+      }),
+      chatMessage({ role: "assistant", content: "" }),
+    );
+
+    const first = await provider.runGeminiChat(
+      null,
+      "system",
+      [{ name: "send_gif", description: "send gif", input_schema: { type: "object" } }],
+      history,
+      "[defnotean said]\nAlright Eris, dab for me",
+      executor,
+    );
+
+    expect(first).toEqual({ text: "", toolsUsed: ["send_gif"] });
+    expect(history[1].parts[0].text).toContain("[tool call: send_gif]");
+    expect(history[2].parts[0].text).toContain("[tool result: send_gif]");
+
+    history.push({ role: "user", parts: [{ text: "[defnotean said]\nhow about hit the quan for me" }] });
+    mockFetchResponses(chatMessage({ role: "assistant", content: "fresh turn" }));
+
+    await provider.runGeminiChat(
+      null,
+      "system",
+      [{ name: "send_gif", description: "send gif", input_schema: { type: "object" } }],
+      history,
+      "[defnotean said]\nhow about hit the quan for me",
+      executor,
+    );
+
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    const promptText = body.messages.map((m: any) => m.content).filter(Boolean).join("\n");
+    expect(promptText).toContain("[tool result: send_gif]");
+    expect(promptText).toContain("how about hit the quan for me");
+  });
+
   it("converts Anthropic, Gemini, and OpenAI tool schemas", () => {
     const anthropic = provider.toGeminiTools([
       {

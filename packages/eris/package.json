@@ -9,7 +9,7 @@
     "dev": "tsx --watch index.ts",
     "agent": "node local_agent.cjs",
     "deploy": "node deploy-commands.js",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate": "node migrate.cjs"
