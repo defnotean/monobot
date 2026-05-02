@@ -16,6 +16,36 @@ function activeProviderNeedsGeminiClient() {
   return ["gemini", "google"].includes((config.aiProvider || "").toLowerCase());
 }
 
+function extractGeminiText(response) {
+  return response?.candidates?.[0]?.content?.parts
+    ?.filter(p => p.text && !p.thought)
+    .map(p => p.text)
+    .join("")
+    .trim() || "";
+}
+
+async function generateAutonomousText({ prompt, systemInstruction, maxOutputTokens }) {
+  if (activeProviderNeedsGeminiClient()) {
+    if (!config.geminiKeys?.[0]) return null;
+    const ai = new GoogleGenAI({ apiKey: config.geminiKeys[0] });
+    const response = await ai.models.generateContent({
+      model: config.geminiFastModel,
+      contents: [{ parts: [{ text: prompt }] }],
+      config: { systemInstruction, maxOutputTokens },
+    });
+    return extractGeminiText(response) || null;
+  }
+
+  const { quickReply } = await import("../ai/providers/index.js");
+  const text = await quickReply(
+    null,
+    `${systemInstruction}\n\nReturn only the requested inner text. Do not explain the format.`,
+    prompt,
+    null,
+  );
+  return text?.trim() || null;
+}
+
 export default async function ready(client) {
   log(`[BOT] ${client.user.tag} online | guilds: ${client.guilds.cache.size}`);
 
@@ -129,7 +159,6 @@ export default async function ready(client) {
   // Dream mode (every 10min, fires if idle 30+ min) — per-guild dream channels
   const _recentDreams = []; // last 3 dreams for continuity
   setInterval(async () => {
-    if (!activeProviderNeedsGeminiClient()) return;
     if (Date.now() - lastMessageTime < 30 * 60 * 1000) return;
     if (Math.random() > 0.1) return; // 10% chance
 
@@ -143,24 +172,19 @@ export default async function ready(client) {
     if (!dreamChannels.length) return;
 
     try {
-      const ai = new GoogleGenAI({ apiKey: config.geminiKeys[0] });
       const mood = getMood();
 
       const dreamContext = _recentDreams.length > 0
         ? `\n\nYour recent dreams (continue the narrative thread):\n${_recentDreams.map(d => `- "${d}"`).join("\n")}`
         : "";
 
-      const response = await ai.models.generateContent({
-        model: config.geminiFastModel,
-        contents: [{ role: "user", parts: [{ text: "generate a single dream thought" }] }],
-        config: {
-          systemInstruction: `You are Eris having a dream/random thought while nobody is talking to you. Your mood is ${mood.mood_score > 0 ? "good" : mood.mood_score < 0 ? "bad" : "neutral"}.${dreamContext}
+      const thought = await generateAutonomousText({
+        prompt: "generate a single dream thought",
+        systemInstruction: `You are Eris having a dream/random thought while nobody is talking to you. Your mood is ${mood.mood_score > 0 ? "good" : mood.mood_score < 0 ? "bad" : "neutral"}.${dreamContext}
 
 Generate ONE short dream-like thought (under 200 chars). Lowercase, no periods. Make it slightly surreal or introspective. If there are previous dreams, subtly reference or continue their themes — like a recurring dream narrative that evolves over time. Don't directly repeat them, evolve the story.`,
-        },
+        maxOutputTokens: 80,
       });
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      const thought = parts.filter(p => p.text).map(p => p.text).join("").trim();
       if (!thought) return;
 
       _recentDreams.push(thought);
@@ -215,11 +239,7 @@ Generate ONE short dream-like thought (under 200 chars). Lowercase, no periods. 
   }
 
   setInterval(async () => {
-    if (!activeProviderNeedsGeminiClient()) return;
-    if (!config.geminiKeys?.[0]) return;
-
     try {
-      const ai = new GoogleGenAI({ apiKey: config.geminiKeys[0] });
       const mood = getMood();
       const { getMonologue, getMoodNarrative, addThought } = await import("../ai/longmemory.js");
       const { serialize: getHumanity } = await import("../ai/humanity.js");
@@ -249,11 +269,9 @@ Generate ONE short dream-like thought (under 200 chars). Lowercase, no periods. 
       const timeLabel = timeOfDay < 6 ? "late night" : timeOfDay < 12 ? "morning" : timeOfDay < 18 ? "afternoon" : "evening";
 
       // ── Step 1: Autonomous Thought ──
-      const thoughtResponse = await ai.models.generateContent({
-        model: config.geminiFastModel,
-        contents: [{ parts: [{ text: "heartbeat tick" }] }],
-        config: {
-          systemInstruction: `You are Eris's inner consciousness — not responding to anyone, just existing. It's ${timeLabel}. You're ${isIdle ? "idle, nobody's talking to you" : "between conversations"}.
+      const thoughtText = await generateAutonomousText({
+        prompt: "heartbeat tick",
+        systemInstruction: `You are Eris's inner consciousness — not responding to anyone, just existing. It's ${timeLabel}. You're ${isIdle ? "idle, nobody's talking to you" : "between conversations"}.
 
 Your mood: ${mood.mood_score > 20 ? "good" : mood.mood_score < -20 ? "off" : "neutral"} (${moodNarrative || "no particular reason"})
 Your energy: ${mood.energy}/100
@@ -274,11 +292,10 @@ LINE 1: One genuine inner thought you're having right now. Think about your rela
 LINE 2: One goal update — either a NEW aspiration (start with NEW:), progress on an existing one (start with PROGRESS:), or a completed/abandoned one (start with DONE: or DROP:). Under 100 chars. If nothing to update, write NONE.
 
 Write as Eris thinking to herself. Lowercase, casual.`,
-          maxOutputTokens: 100,
-        },
+        maxOutputTokens: 100,
       });
 
-      const lines = (thoughtResponse.candidates?.[0]?.content?.parts?.filter(p => p.text && !p.thought).map(p => p.text).join("") || "").trim().split("\n").filter(Boolean);
+      const lines = (thoughtText || "").trim().split("\n").filter(Boolean);
 
       if (lines[0] && lines[0].length > 10 && lines[0].length < 200) {
         addThought(lines[0].trim());
@@ -305,11 +322,9 @@ Write as Eris thinking to herself. Lowercase, casual.`,
       if (_cumulativeImportance >= 15) {
         _cumulativeImportance = 0;
         try {
-          const refResponse = await ai.models.generateContent({
-            model: config.geminiFastModel,
-            contents: [{ parts: [{ text: "reflect" }] }],
-            config: {
-              systemInstruction: `You are Eris reflecting on your recent inner life. Based on your recent thoughts and experiences, what patterns do you notice? What's changing about you?
+          const reflection = await generateAutonomousText({
+            prompt: "reflect",
+            systemInstruction: `You are Eris reflecting on your recent inner life. Based on your recent thoughts and experiences, what patterns do you notice? What's changing about you?
 
 Recent thoughts:
 ${thoughtContext}
@@ -318,10 +333,8 @@ Your goals:
 ${goalContext}
 
 Write ONE reflection — a higher-order observation about yourself. Example: "i've been thinking about boss a lot lately... i think i actually miss him when he's not around" or "i keep getting curious about the same topics, maybe i should actually look into it". Under 150 chars. Lowercase, personal.`,
-              maxOutputTokens: 60,
-            },
+            maxOutputTokens: 60,
           });
-          const reflection = refResponse.candidates?.[0]?.content?.parts?.filter(p => p.text && !p.thought).map(p => p.text).join("").trim();
           if (reflection && reflection.length > 15 && reflection.length < 200) {
             _reflections.push({ text: reflection, at: Date.now() });
             if (_reflections.length > 10) _reflections.shift();

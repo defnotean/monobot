@@ -28,6 +28,37 @@ function activeProviderNeedsGeminiClient() {
   return provider === "gemini" || provider === "google";
 }
 
+function extractGeminiText(response) {
+  return response?.candidates?.[0]?.content?.parts
+    ?.filter(p => p.text && !p.thought)
+    .map(p => p.text)
+    .join("")
+    .trim() || "";
+}
+
+async function generateAutonomousText({ prompt, systemInstruction, maxOutputTokens }) {
+  if (activeProviderNeedsGeminiClient()) {
+    if (!config.geminiKeys?.[0]) return null;
+    const { GoogleGenAI } = await import("@google/genai");
+    const ai = new GoogleGenAI({ apiKey: config.geminiKeys[0] });
+    const response = await ai.models.generateContent({
+      model: config.geminiFastModel || "gemini-2.5-flash",
+      contents: [{ parts: [{ text: prompt }] }],
+      config: { systemInstruction, maxOutputTokens },
+    });
+    return extractGeminiText(response) || null;
+  }
+
+  const { quickReply } = await import("../ai/providers/index.js");
+  const text = await quickReply(
+    null,
+    `${systemInstruction}\n\nReturn only the requested inner text. Do not explain the format.`,
+    prompt,
+    null,
+  );
+  return text?.trim() || null;
+}
+
 function autoDetectGuildChannels(guild) {
   const settings = getGuildSettings(guild.id);
 
@@ -554,10 +585,7 @@ export async function execute(client) {
   } catch {}
 
   setInterval(async () => {
-    if (!activeProviderNeedsGeminiClient() || !config.geminiKeys?.[0]) return;
     try {
-      const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: config.geminiKeys[0] });
       const mood = getMood();
       const { getMonologue, getMoodNarrative, addThought } = await import("../ai/longmemory.js");
 
@@ -569,11 +597,9 @@ export async function execute(client) {
       const timeOfDay = new Date().getHours();
       const timeLabel = timeOfDay < 6 ? "late night" : timeOfDay < 12 ? "morning" : timeOfDay < 18 ? "afternoon" : "evening";
 
-      const response = await ai.models.generateContent({
-        model: config.geminiFastModel || "gemini-2.5-flash",
-        contents: [{ parts: [{ text: "heartbeat" }] }],
-        config: {
-          systemInstruction: `You are Irene's inner consciousness — not responding to anyone, just existing. It's ${timeLabel}.
+      const text = await generateAutonomousText({
+        prompt: "heartbeat",
+        systemInstruction: `You are Irene's inner consciousness — not responding to anyone, just existing. It's ${timeLabel}.
 Your mood: ${mood.mood_score > 20 ? "good" : mood.mood_score < -20 ? "off" : "neutral"} (${moodNarrative || "no reason"})
 Recent thoughts: ${thoughtContext}
 Goals: ${goalContext}
@@ -583,11 +609,10 @@ Generate 2 lines:
 LINE 1: One genuine inner thought. Reference real things — people you know, server stuff, your sister Eris, or how you feel. Under 120 chars.
 LINE 2: Goal update — NEW: / PROGRESS: / DONE: / DROP: or NONE. Under 100 chars.
 Write as Irene thinking to herself. Lowercase.`,
-          maxOutputTokens: 100,
-        },
+        maxOutputTokens: 100,
       });
 
-      const lines = (response.candidates?.[0]?.content?.parts?.filter(p => p.text && !p.thought).map(p => p.text).join("") || "").trim().split("\n").filter(Boolean);
+      const lines = (text || "").trim().split("\n").filter(Boolean);
       if (lines[0]?.length > 10 && lines[0].length < 200) {
         addThought(lines[0].trim());
         _cumulativeImportance += lines[0].includes("boss") || lines[0].includes("eris") ? 3 : 1;
@@ -605,12 +630,11 @@ Write as Irene thinking to herself. Lowercase.`,
       if (_cumulativeImportance >= 15) {
         _cumulativeImportance = 0;
         try {
-          const ref = await ai.models.generateContent({
-            model: config.geminiFastModel || "gemini-2.5-flash",
-            contents: [{ parts: [{ text: "reflect" }] }],
-            config: { systemInstruction: `You are Irene reflecting. Recent thoughts: ${thoughtContext}\nGoals: ${goalContext}\nWrite ONE self-reflection about patterns you notice in yourself. Under 150 chars. Lowercase.`, maxOutputTokens: 60 },
+          const rText = await generateAutonomousText({
+            prompt: "reflect",
+            systemInstruction: `You are Irene reflecting. Recent thoughts: ${thoughtContext}\nGoals: ${goalContext}\nWrite ONE self-reflection about patterns you notice in yourself. Under 150 chars. Lowercase.`,
+            maxOutputTokens: 60,
           });
-          const rText = ref.candidates?.[0]?.content?.parts?.filter(p => p.text && !p.thought).map(p => p.text).join("").trim();
           if (rText?.length > 15 && rText.length < 200) {
             _reflections.push({ text: rText, at: Date.now() });
             if (_reflections.length > 10) _reflections.shift();
