@@ -10,3 +10,17 @@ services:
         value: "production"
       - key: PORT
         value: "3001"
+      - key: AI_PROVIDER
+        value: openrouter
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENAI_COMPAT_MODEL
+        value: openai/gpt-oss-120b:free
+      - key: OPENAI_COMPAT_FAST_MODEL
+        value: openai/gpt-oss-120b:free
+      - key: OPENAI_COMPAT_PROVIDER_NAME
+        value: OpenRouter
+      - key: OPENAI_COMPAT_HTTP_REFERER
+        value: https://irene-bot.onrender.com
+      - key: OPENAI_COMPAT_APP_TITLE
+        value: Irene Discord Bot

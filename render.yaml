@@ -1,0 +1,89 @@
+# Canonical Render Blueprint for the monorepo.
+#
+# Root Directory is intentionally omitted for both services. Render runs build
+# and start commands from the repository root by default, which lets npm
+# workspaces link @defnotean/shared correctly.
+services:
+  - type: web
+    name: eris-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start:eris
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: CLIENT_ID
+        sync: false
+      - key: AI_PROVIDER
+        value: openrouter
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENAI_COMPAT_MODEL
+        value: openai/gpt-oss-120b:free
+      - key: OPENAI_COMPAT_FAST_MODEL
+        value: openai/gpt-oss-120b:free
+      - key: OPENAI_COMPAT_PROVIDER_NAME
+        value: OpenRouter
+      - key: OPENAI_COMPAT_HTTP_REFERER
+        value: https://eris-bot.onrender.com
+      - key: OPENAI_COMPAT_APP_TITLE
+        value: OpenClaw Eris
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: REQUIRE_PERSISTENCE
+        value: "1"
+      - key: TWIN_API_SECRET
+        sync: false
+      - key: DASHBOARD_API_KEY
+        sync: false
+      - key: PC_AGENT_DISABLED
+        value: "1"
+      - key: KLIPY_API_KEY
+        sync: false
+      - key: BOT_OWNER_ID
+        sync: false
+
+  - type: web
+    name: irene-bot
+    runtime: node
+    plan: standard
+    buildCommand: npm install
+    startCommand: npm run start:irene
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: AI_PROVIDER
+        value: openrouter
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENAI_COMPAT_MODEL
+        value: openai/gpt-oss-120b:free
+      - key: OPENAI_COMPAT_FAST_MODEL
+        value: openai/gpt-oss-120b:free
+      - key: OPENAI_COMPAT_PROVIDER_NAME
+        value: OpenRouter
+      - key: OPENAI_COMPAT_HTTP_REFERER
+        value: https://irene-bot.onrender.com
+      - key: OPENAI_COMPAT_APP_TITLE
+        value: Irene Discord Bot
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: REQUIRE_PERSISTENCE
+        value: "1"
+      - key: TWIN_API_SECRET
+        sync: false
+      - key: DASHBOARD_API_KEY
+        sync: false
