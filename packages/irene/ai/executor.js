@@ -105,14 +105,27 @@ export function findMember(guild, username) {
   return entry.index.get(lower) ?? null;
 }
 
+function normalizeChannelLookupName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/^#+/, "")
+    .replace(/\s*\[(?:text|voice|stage|forum|category) channel,\s*id:\d{17,20}\]\s*$/i, "")
+    .replace(/\s*\[id:\d{17,20}\]\s*$/i, "")
+    .replace(/[\uFE00-\uFE0F]/g, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
 export function findChannel(guild, name, preferType) {
   if (!name) return null;
   // Handle bare numeric IDs and mention format directly
-  const idMatch = name.match(/^(?:<#)?(\d{17,20})>?$/);
+  const idMatch = String(name).match(/^(?:<#)?(\d{17,20})>?$/)
+    || String(name).match(/\bid:(\d{17,20})\b/i)
+    || String(name).match(/\[id:(\d{17,20})\]/i);
   if (idMatch) return guild.channels.cache.get(idMatch[1]) ?? null;
 
-  const lower = name.toLowerCase().replace(/^#/, "");
-  const matches = guild.channels.cache.filter((c) => c.name.toLowerCase() === lower);
+  const lower = normalizeChannelLookupName(name);
+  const matches = guild.channels.cache.filter((c) => normalizeChannelLookupName(c.name) === lower);
   if (!matches.size) return null;
   if (matches.size === 1) return matches.first();
 
@@ -124,6 +137,24 @@ export function findChannel(guild, name, preferType) {
   // Prefer text/voice over categories when ambiguous
   const nonCategory = matches.find((c) => c.type !== ChannelType.GuildCategory);
   return nonCategory ?? matches.first();
+}
+
+function requesterCurrentVoiceChannel(message) {
+  return message?.member?.voice?.channel ?? null;
+}
+
+function wantsCurrentVoiceChannel(message) {
+  const text = String(message?.content || "").toLowerCase();
+  return /\b(this|current|my|the)\s+(vc|voice|voice channel)\b/.test(text)
+    || /\b(vc|voice channel)\s+(i'?m|im|i am|we'?re|were|we are)\s+in\b/.test(text)
+    || /\bset(?:up)?\s+this\s+(vc|voice)\b/.test(text);
+}
+
+function createVcIntentTargetsExistingChannel(message) {
+  const text = String(message?.content || "").toLowerCase();
+  if (!/\b(create.?vc|join.?to.?create|create a vc|create vc|creator vc|to be a create|be a create)\b/.test(text)) return false;
+  if (!/\b(set|setup|set up|assign|make|turn|configure)\b/.test(text)) return false;
+  return wantsCurrentVoiceChannel(message) || /\b(existing|already made|already exists|that channel|this channel)\b/.test(text);
 }
 
 export function findRole(guild, name) {
@@ -336,6 +367,7 @@ function setCachedResult(toolName, args, guildId, result) {
 }
 
 export async function executeTool(toolName, input, message) {
+  input ||= {};
   // Auto-correct common Gemini tool name mistakes
   if (TOOL_ALIASES[toolName]) {
     log(`[EXECUTOR] Auto-corrected tool: ${toolName} → ${TOOL_ALIASES[toolName]}`);
@@ -386,6 +418,10 @@ async function _executeToolInner(toolName, input, message) {
     checkRoleAssignment,
     webRateLimitPerMin: config.webRateLimitPerMin || 10,
   };
+
+  if (toolName === "create_channel" && createVcIntentTargetsExistingChannel(message)) {
+    return "not creating a new channel — this request is to configure the existing/current voice channel. use set_create_vc_channel with channel_id or the user's current VC.";
+  }
 
   // ─── Try domain sub-executors first ─────────────────────────────────
   for (const executor of SUB_EXECUTORS) {
@@ -532,8 +568,12 @@ async function _executeToolInner(toolName, input, message) {
     }
 
     case "set_create_vc_channel": {
-      const ch = findChannel(guild, input.channel_name);
-      if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const requested = input.channel_id || input.channel_name;
+      let ch = findChannel(guild, requested, ChannelType.GuildVoice);
+      const currentVoice = requesterCurrentVoiceChannel(message);
+      const currentRequested = !requested || /^(this|current|my|here|voice|vc|this vc|current vc|my vc)$/i.test(String(requested).trim());
+      if ((!ch && wantsCurrentVoiceChannel(message)) || currentRequested) ch = currentVoice;
+      if (!ch) return `Couldn't find channel "${requested || input.channel_name || "current voice channel"}"`;
       if (ch.type !== ChannelType.GuildVoice) return `"${ch.name}" isn't a voice channel`;
       setCreateVcChannel(guild.id, ch.id);
       return `Create-VC trigger set to "${ch.name}" — users who join it will get their own personal VC`;
@@ -1439,15 +1479,18 @@ async function _executeToolInner(toolName, input, message) {
       const cats = guild.channels.cache.filter((c) => c.type === ChannelType.GuildCategory).sort((a, b) => a.position - b.position);
       const lines = [];
       for (const cat of cats.values()) {
-        lines.push(`📁 ${cat.name}`);
+        lines.push(`📁 ${cat.name} [id:${cat.id}]`);
         const children = guild.channels.cache.filter((c) => c.parentId === cat.id).sort((a, b) => a.position - b.position);
         for (const ch of children.values()) {
           const prefix = ch.type === ChannelType.GuildVoice ? "🔊" : "#";
-          lines.push(`  ${prefix} ${ch.name}`);
+          lines.push(`  ${prefix} ${ch.name} [id:${ch.id}]`);
         }
       }
       const orphans = guild.channels.cache.filter((c) => !c.parentId && c.type !== ChannelType.GuildCategory);
-      for (const ch of orphans.values()) lines.push(`# ${ch.name}`);
+      for (const ch of orphans.values()) {
+        const prefix = ch.type === ChannelType.GuildVoice ? "🔊" : "#";
+        lines.push(`${prefix} ${ch.name} [id:${ch.id}]`);
+      }
       return lines.join("\n") || "No channels";
     }
 

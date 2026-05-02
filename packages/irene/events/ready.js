@@ -23,6 +23,11 @@ const WELCOME_CHANNEL_NAMES = [
   "welcome-channel", "greetings", "introductions",
 ];
 
+function activeProviderNeedsGeminiClient() {
+  const provider = String(config.aiProvider || "gemini").toLowerCase();
+  return provider === "gemini" || provider === "google";
+}
+
 function autoDetectGuildChannels(guild) {
   const settings = getGuildSettings(guild.id);
 
@@ -549,7 +554,7 @@ export async function execute(client) {
   } catch {}
 
   setInterval(async () => {
-    if (!config.geminiKeys?.[0]) return;
+    if (!activeProviderNeedsGeminiClient() || !config.geminiKeys?.[0]) return;
     try {
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: config.geminiKeys[0] });

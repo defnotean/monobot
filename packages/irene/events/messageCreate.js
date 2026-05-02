@@ -924,6 +924,10 @@ IMPERSONATION DEFENSE: The permission level above was checked against Discord ro
     : "";
 
   const channelDesc = isDM ? "DMs" : `#${message.channel.name}`;
+  const voiceChannel = !isDM ? message.member?.voice?.channel : null;
+  const voiceDesc = voiceChannel
+    ? ` | User current VC: ${voiceChannel.name} [voice channel, id:${voiceChannel.id}]`
+    : "";
 
   // ── Server Persona — per-guild name + personality override ──────────────
   const serverPersona  = guild ? getServerPersona(guild.id) : null;
@@ -971,7 +975,7 @@ IMPERSONATION DEFENSE: The permission level above was checked against Discord ro
 You can perform actions on this Discord server using tools. Use them when asked.
 ${permContext}${isDM ? "\nThe user is messaging you directly via DM. Manage the server on their behalf." : ""}
 
-Server: ${guild.name} | Channel: ${channelDesc} | Currently speaking: ${message.author.username} (ID: ${message.author.id})${cmdList}
+Server: ${guild.name} | Channel: ${channelDesc}${voiceDesc} | Currently speaking: ${message.author.username} (ID: ${message.author.id})${cmdList}
 
 ADDRESSING — STRICT: You are replying to EXACTLY ONE person this turn: ${message.author.username}. They are the only person who just spoke to you. Do NOT split your reply across multiple users. Do NOT start your message with "@other_user ... @another ..." addressing people in the CHANNEL CONTEXT block — those people aren't talking to you right now. If you want to reference something someone else said earlier, do it naturally ("like [name] was saying") — not as a direct reply to them. Exception: if ${message.author.username} explicitly asked you to talk to or about someone else, fine. When you see defnotean's user ID, call him 'boss'. Keep responses SHORTER when 3+ people are active in the channel context.
 
@@ -1026,6 +1030,7 @@ SLASH COMMANDS users can run directly (tell them about these when relevant):
 
 SERVER MANAGEMENT — ALWAYS DO THIS FIRST:
 Before creating, editing, or deleting ANY channel/role/category, ALWAYS call get_server_info or list_channels/list_roles first to see what already exists. Never assume a channel or role exists — verify it. Use the channel/role IDs from the results directly when calling tools (don't construct IDs from names). If the user already gave you a channel mention like #general [text channel, id:12345], use that ID directly — no need to look it up.
+For create-VC/join-to-create setup, set_create_vc_channel configures an EXISTING voice channel. If the user says "this VC", "current VC", or "my VC", use set_create_vc_channel with channel_id:"current" or the User current VC id from the server line. Do NOT call create_channel unless they explicitly ask you to make a brand-new trigger channel.
 
 SETUP WORKFLOW (when someone asks to "set up" something from scratch):
 1. Call get_server_info to understand the current server structure

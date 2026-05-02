@@ -1003,13 +1003,14 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "set_create_vc_channel",
-    description: "Set up the 'join to create' voice channel. When someone joins it, the bot automatically creates a personal voice channel for them with full owner controls (rename, user limit, kick). The channel auto-deletes when empty. NOTE: If the user asks you to create the trigger channel itself, be sure to name it EXACTLY what they requested instead of defaulting to 'Create VC'.",
+    description: "Set an EXISTING voice channel as the 'join to create' trigger. When someone joins that existing trigger channel, the bot automatically creates a personal voice channel for them with full owner controls (rename, user limit, kick). The trigger channel itself already exists unless the user explicitly asks you to create a new trigger channel. If they say 'this VC', 'current VC', or 'my VC', use channel_id:'current' or channel_name:'current' instead of creating another channel.",
     input_schema: {
       type: "object",
       properties: {
-        channel_name: { type: "string", description: "Name of the voice channel people join to trigger VC creation (e.g. '➕ Create VC')" },
+        channel_id: { type: "string", description: "Discord channel ID for the existing trigger voice channel. Use 'current' when the user says this/current/my VC." },
+        channel_name: { type: "string", description: "Name of the existing voice channel people join to trigger VC creation (e.g. '➕ Create VC'). Prefer channel_id from list_channels when available." },
       },
-      required: ["channel_name"],
+      required: [],
     },
   },
   {
@@ -1888,7 +1889,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "list_channels",
-    description: "List all channels organized by category",
+    description: "List all channels organized by category, including channel IDs. Use these IDs for channel tools whenever possible.",
     input_schema: { type: "object", properties: {} },
   },
   {
