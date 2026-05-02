@@ -264,7 +264,6 @@ export async function quickReply(_client, systemInstruction, userText, context) 
     if (text && context?.reply) await context.reply(text).catch(() => {});
     return text;
   } catch (err) {
-    recordFailure(err.message);
     log(`[${OC.providerName || "OpenAICompat"}] quickReply failed: ${err.message}`);
     return null;
   }

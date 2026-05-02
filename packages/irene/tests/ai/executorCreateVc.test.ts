@@ -94,6 +94,24 @@ describe("create VC tool routing", () => {
     expect(message.guild.channels.create).not.toHaveBeenCalled();
   });
 
+  it("blocks create_channel when the user says to turn this into a create VC", async () => {
+    const message = makeMessage("Irene Turn this into a create a vc");
+
+    const result = await executeTool("create_channel", { name: "⚙ Game Generator", type: "voice" }, message);
+
+    expect(result).toMatch(/not creating a new channel/i);
+    expect(message.guild.channels.create).not.toHaveBeenCalled();
+  });
+
+  it("reroutes template-only tool calls into create-VC trigger setup for this/current VC", async () => {
+    const message = makeMessage("Irene Turn this into a create a vc");
+
+    const result = await executeTool("set_vc_template", { template: "Game Generator" }, message);
+
+    expect(result).toContain("Create-VC trigger set");
+    expect(getGuildSettings(message.guild.id).create_vc_channel_id).toBe(message.member.voice.channel.id);
+  });
+
   it("lists channel ids for follow-up tool calls", async () => {
     const message = makeMessage("list channels");
 

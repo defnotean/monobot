@@ -147,14 +147,32 @@ function wantsCurrentVoiceChannel(message) {
   const text = String(message?.content || "").toLowerCase();
   return /\b(this|current|my|the)\s+(vc|voice|voice channel)\b/.test(text)
     || /\b(vc|voice channel)\s+(i'?m|im|i am|we'?re|were|we are)\s+in\b/.test(text)
-    || /\bset(?:up)?\s+this\s+(vc|voice)\b/.test(text);
+    || /\bset(?:up)?\s+this\s+(vc|voice)\b/.test(text)
+    || /\b(turn|make|set|setup|configure|assign)\s+(this|that)(?:\s+(?:channel|vc|voice(?:\s+channel)?))?\s+(?:into|as|to be|a|an)\b/.test(text);
 }
 
 function createVcIntentTargetsExistingChannel(message) {
   const text = String(message?.content || "").toLowerCase();
-  if (!/\b(create.?vc|join.?to.?create|create a vc|create vc|creator vc|to be a create|be a create)\b/.test(text)) return false;
+  if (!/\b(create.?vc|join.?to.?create|create a vc|create vc|create a voice|create voice|creator vc|to be a create|be a create)\b/.test(text)) return false;
   if (!/\b(set|setup|set up|assign|make|turn|configure)\b/.test(text)) return false;
   return wantsCurrentVoiceChannel(message) || /\b(existing|already made|already exists|that channel|this channel)\b/.test(text);
+}
+
+function resolveCreateVcTriggerChannel(guild, input, message, fallbackName) {
+  const requested = input.channel_id || input.channel_name || fallbackName;
+  let ch = findChannel(guild, requested, ChannelType.GuildVoice);
+  const currentVoice = requesterCurrentVoiceChannel(message);
+  const currentRequested = !requested || /^(this|current|my|here|voice|vc|this vc|current vc|my vc)$/i.test(String(requested).trim());
+  if ((!ch && wantsCurrentVoiceChannel(message)) || currentRequested) ch = currentVoice;
+  return { ch, requested };
+}
+
+function configureCreateVcTrigger(guild, input, message, fallbackName) {
+  const { ch, requested } = resolveCreateVcTriggerChannel(guild, input, message, fallbackName);
+  if (!ch) return `Couldn't find channel "${requested || input.channel_name || "current voice channel"}"`;
+  if (ch.type !== ChannelType.GuildVoice) return `"${ch.name}" isn't a voice channel`;
+  setCreateVcChannel(guild.id, ch.id);
+  return `Create-VC trigger set to "${ch.name}" - users who join it will get their own personal VC`;
 }
 
 export function findRole(guild, name) {
@@ -423,6 +441,10 @@ async function _executeToolInner(toolName, input, message) {
     return "not creating a new channel — this request is to configure the existing/current voice channel. use set_create_vc_channel with channel_id or the user's current VC.";
   }
 
+  if (toolName === "set_vc_template" && createVcIntentTargetsExistingChannel(message)) {
+    return configureCreateVcTrigger(guild, input, message, input.template);
+  }
+
   // ─── Try domain sub-executors first ─────────────────────────────────
   for (const executor of SUB_EXECUTORS) {
     const result = await executor(toolName, input, message, ctx);
@@ -568,15 +590,7 @@ async function _executeToolInner(toolName, input, message) {
     }
 
     case "set_create_vc_channel": {
-      const requested = input.channel_id || input.channel_name;
-      let ch = findChannel(guild, requested, ChannelType.GuildVoice);
-      const currentVoice = requesterCurrentVoiceChannel(message);
-      const currentRequested = !requested || /^(this|current|my|here|voice|vc|this vc|current vc|my vc)$/i.test(String(requested).trim());
-      if ((!ch && wantsCurrentVoiceChannel(message)) || currentRequested) ch = currentVoice;
-      if (!ch) return `Couldn't find channel "${requested || input.channel_name || "current voice channel"}"`;
-      if (ch.type !== ChannelType.GuildVoice) return `"${ch.name}" isn't a voice channel`;
-      setCreateVcChannel(guild.id, ch.id);
-      return `Create-VC trigger set to "${ch.name}" — users who join it will get their own personal VC`;
+      return configureCreateVcTrigger(guild, input, message);
     }
 
     case "set_afk_channel": {

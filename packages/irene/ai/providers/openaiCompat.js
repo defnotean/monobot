@@ -251,7 +251,6 @@ export async function quickReply(_client, systemInstruction, userText, context) 
     const text = data.choices?.[0]?.message?.content?.trim() || null;
     return text;
   } catch (err) {
-    recordFailure(err.message);
     log(`[${OC.providerName || "OpenAICompat"}] quickReply failed: ${err.message}`);
     return null;
   }

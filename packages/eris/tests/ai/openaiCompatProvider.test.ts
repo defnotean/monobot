@@ -263,6 +263,18 @@ describe("OpenAI-compatible provider (Eris)", () => {
     expect(promptText).toContain("how about hit the quan for me");
   });
 
+  it("does not open the main chat circuit when quick replies time out", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("The operation was aborted due to timeout");
+    }) as any;
+
+    await expect(provider.quickReply(null, "system", "ping", null)).resolves.toBeNull();
+    await expect(provider.quickReply(null, "system", "ping", null)).resolves.toBeNull();
+    await expect(provider.quickReply(null, "system", "ping", null)).resolves.toBeNull();
+
+    expect(provider.isRateLimited()).toBe(false);
+  });
+
   it("converts Anthropic, Gemini, and OpenAI tool schemas", () => {
     const anthropic = provider.toGeminiTools([
       {
