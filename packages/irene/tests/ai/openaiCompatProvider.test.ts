@@ -59,11 +59,12 @@ afterEach(() => {
 describe("OpenAI-compatible provider (Irene)", () => {
   it("returns a text response from Irene object-call style", async () => {
     mockFetchResponses(chatMessage({ role: "assistant", content: "hello there" }));
+    const history: any[] = [];
 
     const result = await provider.runGeminiChat({
       geminiClient: null,
       systemInstruction: "system",
-      history: [],
+      history,
       tools: [],
       message: { userMessage: "hi" },
       isAdmin: false,
@@ -71,6 +72,7 @@ describe("OpenAI-compatible provider (Irene)", () => {
     });
 
     expect(result).toEqual({ text: "hello there", toolsUsed: [] });
+    expect(history.at(-1)).toEqual({ role: "assistant", content: "hello there" });
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "https://compat.test/v1/chat/completions",
       expect.objectContaining({ method: "POST" }),
@@ -142,12 +144,51 @@ describe("OpenAI-compatible provider (Irene)", () => {
     expect(result).toEqual({ text: "args were bad", toolsUsed: [] });
   });
 
+  it("guards duplicate tool calls and returns a visible fallback", async () => {
+    const executor = vi.fn(async () => "first result");
+    const duplicateCall = {
+      type: "function",
+      function: { name: "search", arguments: JSON.stringify({ query: "repeat" }) },
+    };
+    mockFetchResponses(
+      chatMessage({ role: "assistant", content: null, tool_calls: [{ ...duplicateCall, id: "call_1" }] }),
+      chatMessage({ role: "assistant", content: null, tool_calls: [{ ...duplicateCall, id: "call_2" }] }),
+    );
+
+    const result = await provider.runGeminiChat({
+      systemInstruction: "system",
+      history: [],
+      tools: [],
+      message: { userMessage: "search" },
+      executor,
+    });
+    const secondBody = JSON.parse((globalThis.fetch as any).mock.calls[1][1].body);
+
+    expect(executor).toHaveBeenCalledOnce();
+    expect(secondBody.messages.at(-1)).toMatchObject({
+      role: "tool",
+      tool_call_id: "call_1",
+      content: "first result",
+    });
+    expect(result).toEqual({
+      text: "i already checked that, but got stuck finishing the answer. try again in a sec",
+      toolsUsed: ["search"],
+    });
+  });
+
   it("converts Anthropic, Gemini, and OpenAI tool schemas", () => {
     const anthropic = provider.toGeminiTools([
       {
         name: "remember",
         description: "save",
-        input_schema: { type: ["object", "null"], properties: { text: { type: "string" } }, $schema: "draft" },
+        input_schema: {
+          type: ["object", "null"],
+          properties: {
+            text: { type: "string", enum: [1, true, "saved"], anyOf: [{ type: "string" }] },
+          },
+          additionalProperties: false,
+          $schema: "draft",
+        },
       },
     ]);
     const gemini = provider.toGeminiTools([
@@ -162,6 +203,9 @@ describe("OpenAI-compatible provider (Irene)", () => {
       function: { name: "remember", parameters: { type: "object" } },
     });
     expect(anthropic?.[0].function.parameters).not.toHaveProperty("$schema");
+    expect(anthropic?.[0].function.parameters).not.toHaveProperty("additionalProperties");
+    expect(anthropic?.[0].function.parameters.properties.text).not.toHaveProperty("anyOf");
+    expect(anthropic?.[0].function.parameters.properties.text.enum).toEqual(["1", "true", "saved"]);
     expect(gemini?.[0].function.name).toBe("search");
     expect(openai?.[0].function.name).toBe("ping");
   });

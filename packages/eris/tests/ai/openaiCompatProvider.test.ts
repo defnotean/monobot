@@ -145,7 +145,10 @@ describe("OpenAI-compatible provider (Eris)", () => {
       tool_call_id: "call_1",
       content: "first result",
     });
-    expect(result).toEqual({ text: "", toolsUsed: ["search"] });
+    expect(result).toEqual({
+      text: "i already checked that, but got stuck finishing the answer. try again in a sec",
+      toolsUsed: ["search"],
+    });
   });
 
   it("converts Anthropic, Gemini, and OpenAI tool schemas", () => {
@@ -153,7 +156,14 @@ describe("OpenAI-compatible provider (Eris)", () => {
       {
         name: "remember",
         description: "save",
-        input_schema: { type: ["object", "null"], properties: { text: { type: "string" } }, $schema: "draft" },
+        input_schema: {
+          type: ["object", "null"],
+          properties: {
+            text: { type: "string", enum: [1, true, "saved"], oneOf: [{ type: "string" }] },
+          },
+          additionalProperties: false,
+          $schema: "draft",
+        },
       },
     ]);
     const gemini = provider.toGeminiTools([
@@ -175,6 +185,9 @@ describe("OpenAI-compatible provider (Eris)", () => {
       function: { name: "remember", parameters: { type: "object" } },
     });
     expect(anthropic?.[0].function.parameters).not.toHaveProperty("$schema");
+    expect(anthropic?.[0].function.parameters).not.toHaveProperty("additionalProperties");
+    expect(anthropic?.[0].function.parameters.properties.text).not.toHaveProperty("oneOf");
+    expect(anthropic?.[0].function.parameters.properties.text.enum).toEqual(["1", "true", "saved"]);
     expect(gemini?.[0].function.name).toBe("search");
     expect(openai?.[0].function.name).toBe("ping");
   });

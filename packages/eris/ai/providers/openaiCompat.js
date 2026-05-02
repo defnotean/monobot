@@ -22,9 +22,13 @@ function sanitizeForOpenAI(schema) {
 
   const cleaned = {};
   for (const [key, value] of Object.entries(schema)) {
-    if (["$schema", "default", "format"].includes(key)) continue;
+    if (["$schema", "additionalProperties", "allOf", "anyOf", "default", "format", "oneOf"].includes(key)) continue;
     if (key === "type" && Array.isArray(value)) {
       cleaned.type = value.filter((t) => t !== "null")[0] || "string";
+      continue;
+    }
+    if (key === "enum" && Array.isArray(value)) {
+      cleaned.enum = value.map(String);
       continue;
     }
     cleaned[key] = sanitizeForOpenAI(value);
@@ -93,6 +97,28 @@ async function postChat(body, timeoutMs) {
   }
 
   return res.json();
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${Math.ceil(timeoutMs / 1000)}s`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
+function toolTimeoutMs() {
+  return config.timeouts?.toolSlow ?? config.timeouts?.workerSlow ?? config.timeouts?.worker ?? 30_000;
+}
+
+function getFinishReason(choice) {
+  return choice?.finish_reason || choice?.finishReason || null;
+}
+
+function fallbackForFinishReason(reason, hasToolResults) {
+  if (reason === "content_filter") return "i can't help with that request";
+  if (reason === "length") return hasToolResults ? "i ran the tool, but got cut off finishing the answer. try again in a sec" : "i got cut off thinking there, try again in a sec";
+  return "";
 }
 
 function textFromContent(content) {
@@ -251,7 +277,9 @@ export async function runOpenAICompatChat(_client, systemInstruction, tools, his
       return { text: "i'm having trouble thinking rn, try again in a sec", toolsUsed };
     }
 
-    const msg = data.choices?.[0]?.message;
+    const choice = data.choices?.[0];
+    const msg = choice?.message;
+    const finishReason = getFinishReason(choice);
     if (!msg) {
       recordFailure("empty response");
       return { text: "", toolsUsed };
@@ -259,6 +287,10 @@ export async function runOpenAICompatChat(_client, systemInstruction, tools, his
 
     if (!msg.tool_calls?.length) {
       finalText = msg.content || "";
+      if (!finalText) finalText = fallbackForFinishReason(finishReason, toolsUsed.length > 0);
+      if (finishReason && !["stop", "tool_calls", "function_call"].includes(finishReason)) {
+        log(`[${OC.providerName || "OpenAICompat"}] finish_reason=${finishReason}`);
+      }
       break;
     }
 
@@ -269,16 +301,22 @@ export async function runOpenAICompatChat(_client, systemInstruction, tools, his
       const fnName = call.function?.name;
       let fnArgs = {};
       let parseError = null;
+      if (!fnName) parseError = new Error("missing tool name");
       try {
-        fnArgs = JSON.parse(call.function?.arguments || "{}");
+        if (!parseError) fnArgs = JSON.parse(call.function?.arguments || "{}");
       } catch (err) {
         parseError = err;
         log(`[${OC.providerName || "OpenAICompat"}] bad tool args for ${fnName}: ${err.message}`);
       }
 
+      if (parseError) {
+        allDuplicates = false;
+        return { call, fnName, fnArgs, duplicate: false, parseError };
+      }
+
       const signature = `${fnName}::${stableStringify(fnArgs)}`;
-      if (!parseError && calledSignatures.has(signature)) return { call, fnName, fnArgs, duplicate: true, parseError };
-      if (!parseError) calledSignatures.add(signature);
+      if (calledSignatures.has(signature)) return { call, fnName, fnArgs, duplicate: true, parseError };
+      calledSignatures.add(signature);
       allDuplicates = false;
       return { call, fnName, fnArgs, duplicate: false, parseError };
     });
@@ -289,7 +327,7 @@ export async function runOpenAICompatChat(_client, systemInstruction, tools, his
     const results = await Promise.all(fresh.map(async ({ fnName, fnArgs }) => {
       try {
         log(`[${OC.providerName || "OpenAICompat"}] ${fnName}(${JSON.stringify(fnArgs).slice(0, 100)})`);
-        return await executor(fnName, fnArgs);
+        return await withTimeout(Promise.resolve(executor(fnName, fnArgs)), toolTimeoutMs(), `tool ${fnName}`);
       } catch (err) {
         log(`[${OC.providerName || "OpenAICompat"}] tool ${fnName} failed: ${err.message}`);
         return `tool error: ${err.message}`;
@@ -319,7 +357,7 @@ export async function runOpenAICompatChat(_client, systemInstruction, tools, his
     }
 
     if (allDuplicates) {
-      finalText = msg.content || "";
+      finalText = msg.content || (toolsUsed.length ? "i already checked that, but got stuck finishing the answer. try again in a sec" : "");
       break;
     }
   }
