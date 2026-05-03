@@ -188,6 +188,26 @@ export async function execute(toolName, input, message, _context) {
       if (!message.guild) return "directives only work in servers";
       const text = input.directive || input.text || input.rule;
       if (!text) return "what's the rule? give me a directive to save";
+
+      // Misroute guard: directives don't actually disable events or chat —
+      // the schedulers/responders read from event_*_channels and
+      // chat_muted_channels guild settings, not from the directives table.
+      // If the model picked save_directive for a request that's clearly an
+      // event-fire or chat-mute restriction, refuse with a redirect so the
+      // model retries on the right tool instead of storing a useless string.
+      const lower = String(text).toLowerCase();
+      const eventIntent = /\b(events?|coin rain|chaos storm|lucky hour|pirate raid|random event)\b/.test(lower)
+        && /\b(off|stop|disable|block|deny|don'?t|do not|no|never|only|restrict|allow|enable|whitelist|denylist|fire|trigger|spawn)\b/.test(lower);
+      const chatIntent = !eventIntent
+        && /\b(chat|talk|reply|respond|message|say)\b/.test(lower)
+        && /\b(don'?t|do not|stop|never|mute|silent|quiet|shut up)\b/.test(lower);
+      if (eventIntent) {
+        return "this is an event-channel restriction, not a tone directive — call set_event_channels with action='deny' (block channels) or action='set' (only-allow channels). save_directive doesn't disable events; the scheduler ignores directives.";
+      }
+      if (chatIntent) {
+        return "this is a chat-channel restriction, not a tone directive — call set_chat_channels with action='mute' to keep me quiet there. save_directive doesn't mute channels; @mention triggers ignore directives.";
+      }
+
       // Resolve channel name to ID if provided
       let channelId = null;
       if (input.channel_name || input.channel) {

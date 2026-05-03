@@ -79,7 +79,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "save_directive",
-    description: "Save a behavioral rule/instruction that you will follow persistently. Use when an admin or boss tells you to do (or not do) something as a STANDING rule. Examples: 'dont reply in #announcements', 'be extra chaotic in #shitposting', 'always call user X by their nickname Y'. IMPORTANT: When someone gives you a standing instruction (not a one-time request), ALWAYS save it as a directive.",
+    description: "Save a behavioral/tone rule for how Eris talks — NOT for controlling where events fire or where she chats. Use when an admin or boss tells you to do (or not do) a tone-level standing rule. Examples: 'be extra chaotic in #shitposting', 'always call user X by their nickname Y', 'never use emojis in #serious'. DO NOT use save_directive for: 'turn off events in #x' / 'no events in #x' / 'stop events here' / 'only fire events in #x' (use set_event_channels — directives don't disable events, the scheduler ignores them). DO NOT use for: 'dont chat in #x' / 'dont reply in #x' / 'mute yourself in #x' (use set_chat_channels). When in doubt about channel-scoped enforcement of events or chat, prefer the dedicated tool.",
     input_schema: {
       type: "object",
       properties: {
@@ -510,7 +510,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "set_event_channels",
-    description: "Manage which channels server events (coin rain, chaos storm, lucky hour, pirate raid, etc.) are allowed or blocked from firing in. This affects random/event automation only, not Eris's normal chat replies. Supports both a whitelist ('only fire in these') and a denylist ('never fire in these'). ALWAYS call this tool - do NOT use save_directive for channel-restriction asks, the event scheduler only reads from this tool's settings. Actions: 'list' shows both whitelist + denylist. 'set'/'add'/'remove'/'clear' manage the whitelist; 'deny'/'undeny'/'clear_denied' manage the denylist. For 'don't chat here' or 'stop replying in #x', use set_chat_channels instead.",
+    description: "ALWAYS use this for any ask about where server events (coin rain, chaos storm, lucky hour, pirate raid, etc.) fire — these phrasings ALL map here: 'turn off events in #x', 'no events in #x', 'stop events in #x', 'disable events here', 'block events from #x', 'only fire events in #x', 'restrict events to #x'. Action mapping: 'turn off / no / stop / disable / block events in <channels>' → action='deny' with those channels. 'only fire in / restrict to <channels>' → action='set'. 'where do events fire' → action='list'. 'enable events everywhere again' → action='clear' (whitelist) or 'clear_denied' (denylist). Affects random/event automation only — Eris's chat replies are controlled by set_chat_channels. The event scheduler reads ONLY from this tool's settings — save_directive does NOT disable events, only this tool does.",
     input_schema: {
       type: "object",
       properties: {

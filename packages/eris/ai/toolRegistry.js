@@ -265,7 +265,7 @@ export function registerOpenClawTools(EVERYONE_TOOLS, OWNER_TOOLS) {
       "set_event_channels", "set_chat_channels",
     ].includes(t.name)),
     "channel_restrictions",
-    /\b(events?|coin rain|chaos storm|lucky hour|pirate raid|random event|spawn|fire|trigger|dont (send|fire|spawn|do|chat|talk)|stop (sending|firing|spawning|chatting|talking)|only (send|fire|spawn|chat|talk|respond).*(in|to)|restrict.*(to|in)|whitelist|denylist|blacklist|allowlist|block|mute (this|here|channel|#)|unmute|stay (out|quiet)|shut up in|dont reply in|no events in|never.*events|only.*events|where (do|does|can|should).*you|where.*respond|where.*talk|where.*reply)\b/i
+    /\b(events?|coin rain|chaos storm|lucky hour|pirate raid|random event|spawn|fire|trigger|dont (send|fire|spawn|do|chat|talk)|stop (sending|firing|spawning|chatting|talking)|only (send|fire|spawn|chat|talk|respond).*(in|to)|restrict.*(to|in)|whitelist|denylist|blacklist|allowlist|block|mute (this|here|channel|#)|unmute|stay (out|quiet)|shut up in|dont reply in|no events in|never.*events|only.*events|where (do|does|can|should).*you|where.*respond|where.*talk|where.*reply|turn off|turn on|disable|enable|deny|undeny|allow|disallow)\b/i
   );
 
   // ── Owner tools (always Tier 1 when owner is talking) ──
