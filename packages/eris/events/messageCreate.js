@@ -115,6 +115,31 @@ function normalizeUnicode(text) {
   return out;
 }
 
+// Strict tool-call forcing directive. Some models (notably gpt-oss-120b on
+// OpenRouter free tier) have a training-time tendency to emit
+// `[tool call: name] {json}` as VISIBLE TEXT or to write a natural-language
+// "I did X" confirmation WITHOUT actually populating the structured
+// tool_calls field. Either way, the action never runs and the bot lies
+// about completing it. Combined with the history-shape fix in
+// providers/openaiCompat.js (which removes prose tool calls from the
+// in-context examples the model sees), this directive is the strongest
+// available signal without switching to a different model.
+//
+// Exported so unit tests can assert its content stays present and explicit.
+export const TOOL_CALL_DIRECTIVE = `
+CRITICAL — TOOL CALL PROTOCOL (read before every reply):
+- To take an action, you MUST emit a real structured tool call (the API's tool_calls field). The runtime executes ONLY structured calls — never text descriptions of calls.
+- NEVER write tool calls as visible text content. The following are FORBIDDEN in your reply text and will silently fail to run anything:
+    [tool call: name] {...}
+    [function call: name] {...}
+    <tool_call>...</tool_call>
+    print(name(...))
+    name({...})
+- If you write any of those as text instead of using the structured tool field, NO ACTION HAPPENS — you'll be lying to the user about what you did.
+- Do NOT confirm an action ("ok did that", "done", "marked", "saved", "set that") unless you actually emitted a structured tool call THIS turn. If you didn't make a real call, say so plainly: "i tried but the tool call didn't go through, retry?".
+- Don't describe a tool call in prose ("I'll call set_event_channels...") — just emit the structured call. The user sees the result either way.
+- After a structured tool call returns successfully, your visible reply should be a short natural-language confirmation only — no tool syntax of any kind in the reply text.`;
+
 
 // Smart Gemini client pools — per-key rate limit tracking, auto-skips limited keys
 import { createSplitPools } from "../ai/keyPool.js";
@@ -662,7 +687,7 @@ export default async function messageCreate(message) {
       if (botName !== "Eris") {
         basePersonality = basePersonality.replace(/\beris\b/gi, botName).replace(/\bEris\b/g, botName);
       }
-      let systemInstruction = basePersonality;
+      let systemInstruction = `${TOOL_CALL_DIRECTIVE}\n\n${basePersonality}`;
 
       // Tell the AI who is currently speaking — critical for owner recognition
       const isCreatorSpeaking = message.author.id === config.ownerId;

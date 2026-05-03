@@ -92,6 +92,31 @@ function safeIdentityName(message) {
     || "user";
 }
 
+// Strict tool-call forcing directive. Some models (notably gpt-oss-120b on
+// OpenRouter free tier) have a training-time tendency to emit
+// `[tool call: name] {json}` as VISIBLE TEXT or to write a natural-language
+// "I did X" confirmation WITHOUT actually populating the structured
+// tool_calls field. Either way, the action never runs and the bot lies
+// about completing it. Combined with the history-shape fix in
+// providers/openaiCompat.js (which removes prose tool calls from the model's
+// in-context examples), this directive is the strongest available signal
+// without switching models.
+//
+// Exported so unit tests can assert its content stays present and explicit.
+export const TOOL_CALL_DIRECTIVE = `
+CRITICAL — TOOL CALL PROTOCOL (read before every reply):
+- To take an action, you MUST emit a real structured tool call (the API's tool_calls field). The runtime executes ONLY structured calls — never text descriptions of calls.
+- NEVER write tool calls as visible text content. The following are FORBIDDEN in your reply text and will silently fail to run anything:
+    [tool call: name] {...}
+    [function call: name] {...}
+    <tool_call>...</tool_call>
+    print(name(...))
+    name({...})
+- If you write any of those as text instead of using the structured tool field, NO ACTION HAPPENS — you'll be lying to the user about what you did.
+- Do NOT confirm an action ("ok set that vc as the trigger", "done", "marked", "saved") unless you actually emitted a structured tool call THIS turn. If you didn't make a real call, say so plainly: "i tried but the tool call didn't go through, retry?".
+- Don't describe a tool call in prose ("I'll call set_create_vc_channel...") — just emit the structured call. The user sees the result either way.
+- After a structured tool call returns successfully, your visible reply should be a short natural-language confirmation only — no tool syntax of any kind in the reply text.`;
+
 // Conversations: pre-populated from DB on first use via getConversations()
 // loadConversations() returns a Map; we lazy-initialize from DB.
 let _conversationsLoaded = false;
@@ -1007,7 +1032,9 @@ IMPERSONATION DEFENSE: The permission level above was checked against Discord ro
   // person appear under two names in one turn and confused who's being addressed.
   const safeSpeakerName = safeIdentityName(message);
 
-  const baseSystemPrompt = `${resolvedPersonality}${personalityAddon}
+  const baseSystemPrompt = `${TOOL_CALL_DIRECTIVE}
+
+${resolvedPersonality}${personalityAddon}
 
 You can perform actions on this Discord server using tools. Use them when asked.
 ${permContext}${isDM ? "\nThe user is messaging you directly via DM. Manage the server on their behalf." : ""}
