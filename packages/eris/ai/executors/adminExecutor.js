@@ -11,6 +11,20 @@ import * as db from "../../database.js";
 import { log } from "../../utils/logger.js";
 import { isOwner, canCustomize, denyMessage, addTrustedUser, removeTrustedUser, getTrustedUsers } from "../../utils/permissions.js";
 import { auditLog } from "../../utils/pcAgent.js";
+import { resolveMember } from "../../utils/discord.js";
+
+// Resolve a user_id-or-name input to a verified Discord snowflake. The model
+// often passes a username instead of an ID; without this resolver, we'd store
+// literal strings like "bob" in trust/relationship tables and later mention
+// `<@bob>` (broken ping). Returns null when nothing resolvable was provided.
+async function _resolveUserSnowflake(input, message) {
+  const raw = input?.user_id || input?.userId || input?.username || input?.target;
+  if (!raw) return null;
+  if (/^\d{17,20}$/.test(String(raw))) return String(raw);
+  if (!message?.guild) return null;
+  const member = await resolveMember(message.guild, String(raw));
+  return member?.id || null;
+}
 
 // Fire-and-forget audit record for sensitive admin tools. Never throws.
 function audit(tool, message, command, result) {
@@ -214,7 +228,9 @@ export async function execute(toolName, input, message, _context) {
 
     case "update_personality": {
       if (!canCustomize(message.author.id, message.guild)) return denyMessage("personality");
-      const instructions = input.instructions || input.text || input.personality;
+      // Schema field is `new_instructions` (tools.js); keep legacy fallbacks for
+      // older history turns that used `instructions` / `text` / `personality`.
+      const instructions = input.new_instructions || input.instructions || input.text || input.personality;
       if (!instructions) return "no personality instructions provided";
       const ok = await db.updatePersonality(instructions);
       audit(toolName, message, { instructions: instructions.substring(0, 200) }, ok ? "updated" : "failed");
@@ -287,11 +303,16 @@ export async function execute(toolName, input, message, _context) {
           "user_id", "guild_id", "item_name", "type", "game_type", "date",
           "channel_id", "achievement_key", "challenge_type", "id", "status",
         ]);
-        if (filter) {
+        // Schema documents two shapes: a single column+value pair (`filter` as column
+        // name + `filter_value`), or a `col=val,col=val` string. Accept both.
+        if (filter && input.filter_value !== undefined && !filter.includes("=")) {
+          if (!ALLOWED_COLUMNS.has(filter)) return `filter column "${filter}" not allowed. allowed: ${[...ALLOWED_COLUMNS].join(", ")}`;
+          q = q.eq(filter, String(input.filter_value));
+        } else if (filter) {
           const pairs = filter.split(",").map(s => s.trim()).filter(Boolean);
           for (const pair of pairs) {
             const eqIdx = pair.indexOf("=");
-            if (eqIdx === -1) return `invalid filter format — use "column=value" pairs separated by commas (e.g. "user_id=123,type=gamble")`;
+            if (eqIdx === -1) return `invalid filter format — use "column=value" pairs separated by commas (e.g. "user_id=123,type=gamble") or pass filter+filter_value separately`;
             const col = pair.slice(0, eqIdx).trim();
             const val = pair.slice(eqIdx + 1).trim();
             if (!ALLOWED_COLUMNS.has(col)) return `filter column "${col}" not allowed. allowed: ${[...ALLOWED_COLUMNS].join(", ")}`;
@@ -375,17 +396,22 @@ export async function execute(toolName, input, message, _context) {
 
     case "trust_user": {
       if (!isOwner(message.author.id)) return denyMessage();
-      addTrustedUser(input.user_id);
-      audit(toolName, message, { user_id: input.user_id }, "trusted");
-      const user = message.client.users?.cache.get(input.user_id);
-      return `${user?.username || input.user_id} is now trusted \u2014 they can customize my personality, avatar, name, etc`;
+      const userId = await _resolveUserSnowflake(input, message);
+      if (!userId) return `couldn't find user "${input.user_id || input.username || ""}" \u2014 pass a Discord ID, mention, or exact username`;
+      addTrustedUser(userId);
+      audit(toolName, message, { user_id: userId }, "trusted");
+      const user = message.client.users?.cache.get(userId);
+      return `${user?.username || userId} is now trusted \u2014 they can customize my personality, avatar, name, etc`;
     }
 
     case "untrust_user": {
       if (!isOwner(message.author.id)) return denyMessage();
-      removeTrustedUser(input.user_id);
-      audit(toolName, message, { user_id: input.user_id }, "untrusted");
-      return `${input.user_id} is no longer trusted`;
+      const userId = await _resolveUserSnowflake(input, message);
+      if (!userId) return `couldn't find user "${input.user_id || input.username || ""}" \u2014 pass a Discord ID, mention, or exact username`;
+      removeTrustedUser(userId);
+      audit(toolName, message, { user_id: userId }, "untrusted");
+      const user = message.client.users?.cache.get(userId);
+      return `${user?.username || userId} is no longer trusted`;
     }
 
     case "list_trusted": {

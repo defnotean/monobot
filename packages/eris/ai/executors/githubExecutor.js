@@ -39,6 +39,17 @@ async function getOctokit() {
   return _octokit;
 }
 
+// Schema documents `repo: "owner/repo"` as a single string; legacy callers
+// (and Gemini sometimes) supply `owner` + `repo` separately. Accept both.
+function resolveRepo(input) {
+  const raw = input.repo || "";
+  if (raw.includes("/")) {
+    const [owner, repoPart] = raw.split("/", 2);
+    return { owner: input.owner || input.org || owner, repo: repoPart };
+  }
+  return { owner: input.owner || input.org, repo: raw };
+}
+
 export async function execute(toolName, input, message, _context) {
   if (!HANDLED.has(toolName)) return undefined;
 
@@ -49,7 +60,7 @@ export async function execute(toolName, input, message, _context) {
       const gmail = await getGmail();
       if (!gmail) return "gmail not configured";
       try {
-        const maxResults = input.max || input.limit || 10;
+        const maxResults = input.count || input.max || input.limit || 10;
         const { data } = await gmail.users.messages.list({ userId: "me", maxResults, q: input.filter || "" });
         if (!data.messages?.length) return "no emails found";
         const emails = [];
@@ -74,7 +85,8 @@ export async function execute(toolName, input, message, _context) {
       try {
         const query = input.query || input.search || input.q;
         if (!query) return "no search query provided";
-        const { data } = await gmail.users.messages.list({ userId: "me", maxResults: 10, q: query });
+        const maxResults = input.count || input.max || input.limit || 10;
+        const { data } = await gmail.users.messages.list({ userId: "me", maxResults, q: query });
         if (!data.messages?.length) return "no emails matched";
         const results = [];
         for (const msg of data.messages.slice(0, 10)) {
@@ -138,7 +150,11 @@ export async function execute(toolName, input, message, _context) {
         const { data: repos } = await octokit.repos.listForAuthenticatedUser({
           sort: "updated", per_page: input.limit || 10,
         });
-        return repos.map(r => `- ${r.full_name} ${r.private ? "(private)" : "(public)"} \u2605${r.stargazers_count}`).join("\n") || "no repos found";
+        const q = (input.query || "").toLowerCase().trim();
+        const filtered = q
+          ? repos.filter(r => r.full_name.toLowerCase().includes(q) || (r.description || "").toLowerCase().includes(q))
+          : repos;
+        return filtered.map(r => `- ${r.full_name} ${r.private ? "(private)" : "(public)"} \u2605${r.stargazers_count}`).join("\n") || "no repos found";
       } catch (e) {
         return `github repos failed: ${e.message}`;
       }
@@ -149,9 +165,8 @@ export async function execute(toolName, input, message, _context) {
       const octokit = await getOctokit();
       if (!octokit) return "github not configured";
       try {
-        const owner = input.owner || input.org;
-        const repo = input.repo;
-        if (!owner || !repo) return "need owner and repo name";
+        const { owner, repo } = resolveRepo(input);
+        if (!owner || !repo) return "need a repo in owner/repo format";
         const { data: issues } = await octokit.issues.listForRepo({
           owner, repo, state: input.state || "open", per_page: input.limit || 10,
         });
@@ -167,9 +182,8 @@ export async function execute(toolName, input, message, _context) {
       const octokit = await getOctokit();
       if (!octokit) return "github not configured";
       try {
-        const owner = input.owner || input.org;
-        const repo = input.repo;
-        if (!owner || !repo) return "need owner and repo name";
+        const { owner, repo } = resolveRepo(input);
+        if (!owner || !repo) return "need a repo in owner/repo format";
         const { data: prs } = await octokit.pulls.list({
           owner, repo, state: input.state || "open", per_page: input.limit || 10,
         });
@@ -185,11 +199,11 @@ export async function execute(toolName, input, message, _context) {
       const octokit = await getOctokit();
       if (!octokit) return "github not configured";
       try {
-        const owner = input.owner || input.org;
-        const repo = input.repo;
+        const { owner, repo } = resolveRepo(input);
         const title = input.title;
         const body = input.body || input.description || "";
-        if (!owner || !repo || !title) return "need owner, repo, and title";
+        if (!owner || !repo) return "need a repo in owner/repo format";
+        if (!title) return "need an issue title";
         const { data: issue } = await octokit.issues.create({
           owner, repo, title, body, labels: input.labels || [],
         });
@@ -204,9 +218,8 @@ export async function execute(toolName, input, message, _context) {
       const octokit = await getOctokit();
       if (!octokit) return "github not configured";
       try {
-        const owner = input.owner || input.org;
-        const repo = input.repo;
-        if (!owner || !repo) return "need owner and repo name";
+        const { owner, repo } = resolveRepo(input);
+        if (!owner || !repo) return "need a repo in owner/repo format";
         const { data: r } = await octokit.repos.get({ owner, repo });
         return [
           `${r.full_name} ${r.private ? "(private)" : "(public)"}`,
@@ -225,7 +238,7 @@ export async function execute(toolName, input, message, _context) {
       if (!isOwner(message.author.id)) return denyMessage();
       if (!config.renderApiKey) return "render api not configured";
       try {
-        const serviceId = input.service_id || input.id;
+        const serviceId = input.service_name || input.service_id || input.id;
         if (!serviceId) return "no service id provided";
         const res = await fetch(`https://api.render.com/v1/services/${serviceId}`, {
           headers: { Authorization: `Bearer ${config.renderApiKey}` },

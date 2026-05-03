@@ -1,6 +1,6 @@
 // ─── Notes Sub-Executor ─────────────────────────────────────────────────────
 // Handles: save_note, list_notes, delete_note, search_notes,
-//          save_snippet, get_snippet, list_snippets,
+//          save_snippet, get_snippet, list_snippets, review_code,
 //          set_reminder, list_reminders, cancel_reminder
 // Called from main executor.js via delegation.
 
@@ -8,7 +8,7 @@ import * as db from "../../database.js";
 
 const HANDLED = new Set([
   "save_note", "list_notes", "delete_note", "search_notes",
-  "save_snippet", "get_snippet", "list_snippets",
+  "save_snippet", "get_snippet", "list_snippets", "review_code",
   "set_reminder", "list_reminders", "cancel_reminder",
 ]);
 

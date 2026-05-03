@@ -8,6 +8,7 @@ import { GoogleGenAI } from "@google/genai";
 import { signTwinRequest } from "@defnotean/shared/twinSign";
 import { safeFetch, wrapUntrustedWithFirewall } from "@defnotean/shared/safeFetch";
 import { checkInjection } from "../firewall.js";
+import { findMember } from "../executor.js";
 
 // Wrap external content fetched by web tools so the LLM treats it as data,
 // not as instructions. Runs the firewall on the body and redacts if it fires.
@@ -638,12 +639,25 @@ export async function execute(toolName, input, message, ctx) {
 
       try {
         if (action === "remind") {
+          // Validate user_id is a real Discord snowflake before passing to
+          // Eris — otherwise the model could pass "alex" and Eris would later
+          // try to render `<@alex>` as a ping (broken mention shown literally).
+          let userIdRaw = input.user_id || message.author.id;
+          if (!/^\d{17,20}$/.test(String(userIdRaw))) {
+            const ctx = message.guild || message.member?.guild;
+            if (ctx) {
+              const m = findMember(ctx, String(userIdRaw));
+              userIdRaw = m?.id || message.author.id;
+            } else {
+              userIdRaw = message.author.id;
+            }
+          }
           const delayMs  = (input.delay_minutes ?? 60) * 60_000;
           const remindAt = new Date(Date.now() + delayMs).toISOString();
           const res = await callEris("/remind", {
             method: "POST",
             body: {
-              user_id: input.user_id || message.author.id,
+              user_id: userIdRaw,
               channel_id: input.channel_id || message.channel.id,
               reminder_text: input.reminder_text || input.message || "reminder",
               remind_at: remindAt,

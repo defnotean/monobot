@@ -52,14 +52,22 @@ class ToolRegistry {
       }
     }
 
-    // Boost recently used tools in this channel (skip game/activity tools to prevent AI from auto-firing them)
+    // Boost recently used tools in this channel (skip game/activity tools to prevent AI from auto-firing them).
+    // Keep aligned with GAME_TOOLS in dual.js (parallel-call dedup) and CACHE_INVALIDATING_TOOLS in executor.js.
     const GAME_TOOL_NAMES = new Set([
       "coinflip_bet", "dice_roll_bet", "slots_spin", "blackjack_start", "blackjack_action",
-      "roulette_spin", "rps_play", "trivia_start", "word_scramble_start", "number_guess_start",
+      "russian_roulette", "rps_play",
+      "trivia_start", "trivia_answer",
+      "word_scramble_start", "word_scramble_guess",
+      "number_guess_start", "number_guess_attempt",
       "fish", "hunt", "dig", "work", "beg", "search_location",
-      "rob_user", "russian_roulette", "start_duel", "pet_battle",
-      "scratch_card", "open_lootbox", "adventure_start",
+      "rob_user", "start_duel", "accept_duel",
+      "pet_battle", "pet_train",
+      "scratch_card", "open_lootbox", "open_all_lootboxes",
+      "adventure_start", "adventure_choice",
       "daily_reward", "weekly_reward", "monthly_reward",
+      "heist_start", "heist_join", "heist_execute",
+      "boss_spawn", "boss_attack",
     ]);
     if (channelKey) {
       const recent = this._recentUsage.get(channelKey);
@@ -257,7 +265,7 @@ export function registerOpenClawTools(EVERYONE_TOOLS, OWNER_TOOLS) {
       "set_event_channels", "set_chat_channels",
     ].includes(t.name)),
     "channel_restrictions",
-    /\b(events?|coin rain|chaos storm|lucky hour|pirate raid|random event|spawn|fire|trigger|dont (send|fire|spawn|do|chat|talk)|stop (sending|firing|spawning|chatting|talking)|only (send|fire|spawn|chat|talk|respond).*(in|to)|restrict.*(to|in)|whitelist|denylist|blacklist|allowlist|block|mute (this|here|channel|#)|unmute|stay (out|quiet)|shut up in|dont reply in|no events in|never.*events|only.*events)\b/i
+    /\b(events?|coin rain|chaos storm|lucky hour|pirate raid|random event|spawn|fire|trigger|dont (send|fire|spawn|do|chat|talk)|stop (sending|firing|spawning|chatting|talking)|only (send|fire|spawn|chat|talk|respond).*(in|to)|restrict.*(to|in)|whitelist|denylist|blacklist|allowlist|block|mute (this|here|channel|#)|unmute|stay (out|quiet)|shut up in|dont reply in|no events in|never.*events|only.*events|where (do|does|can|should).*you|where.*respond|where.*talk|where.*reply)\b/i
   );
 
   // ── Owner tools (always Tier 1 when owner is talking) ──

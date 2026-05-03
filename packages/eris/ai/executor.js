@@ -39,12 +39,12 @@ const TOOL_ALIASES = {
   forget: "forget_fact", forget_everything: "forget_all", clear_memories: "forget_all",
   recall: "recall_memories", memories: "recall_memories", facts: "recall_memories",
   search: "web_search", google: "web_search", lookup: "web_search",
-  scrape: "scrape_url", read_url: "scrape_url",
+  scrape: "scrape_url", read_url: "scrape_url", read_page: "scrape_url",
   image_search: "search_images", find_image: "search_images",
   meme: "create_meme", make_meme: "create_meme",
   meme_template: "search_meme_templates", find_meme: "search_meme_templates",
   gif: "send_gif", reaction_gif: "send_gif",
-  analyze: "analyze_image", describe_image: "analyze_image",
+  analyze: "analyze_image", analyse: "analyze_image", describe: "analyze_image", describe_image: "analyze_image",
   note: "save_note", notes: "list_notes", remove_note: "delete_note", find_note: "search_notes",
   remind: "set_reminder", reminder: "set_reminder", reminders: "list_reminders", cancel_remind: "cancel_reminder",
   code_review: "review_code", snippet: "save_snippet", snippets: "list_snippets",
@@ -150,12 +150,19 @@ const CACHEABLE_TOOLS = new Set([
 ]);
 // Write tools that should invalidate the cache
 const CACHE_INVALIDATING_TOOLS = new Set([
-  "shop_buy", "daily_reward", "coinflip_bet", "dice_roll_bet", "slots_spin",
+  "shop_buy", "daily_reward", "weekly_reward", "monthly_reward",
+  "coinflip_bet", "dice_roll_bet", "slots_spin", "blackjack_start", "blackjack_action",
+  "russian_roulette", "rps_play",
   "rob_user", "give_coins", "bank_deposit", "bank_withdraw",
   "stock_buy", "stock_sell", "loan_request", "loan_repay",
   "remember_fact", "forget_fact", "forget_all", "save_note", "delete_note",
-  "pet_adopt", "pet_feed", "pet_rename", "pet_train", "craft_item", "use_item",
+  "pet_adopt", "pet_feed", "pet_rename", "pet_train", "pet_battle",
+  "craft_item", "use_item",
   "trade_offer", "marry", "divorce", "prestige", "adventure_choice",
+  "submit_confession", "apply_curse", "remove_curse", "roast_challenge",
+  "start_duel", "accept_duel",
+  "fish", "hunt", "dig", "work", "beg", "search_location",
+  "scratch_card", "open_lootbox", "open_all_lootboxes",
 ]);
 
 function getCachedResult(toolName, args, userId) {

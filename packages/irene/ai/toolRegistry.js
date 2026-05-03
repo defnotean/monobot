@@ -169,7 +169,7 @@ export function registerPresenceBotTools(ADMIN_TOOLS, EVERYONE_TOOLS) {
       "set_ghost_ping_channels",
     ].includes(t.name)),
     "role_mgmt",
-    /\b(role|assign|give role|remove role|reaction role|color role|role picker|dropdown|select menu|reorder|mass role)\b/i
+    /\b(role|assign|give role|remove role|reaction role|color role|role picker|dropdown|select menu|reorder|mass role|make me|promote|grant|admin|moderator|\bmod\b|staff|hoist)\b/i
   );
 
   registry.registerTools(
@@ -180,7 +180,7 @@ export function registerPresenceBotTools(ADMIN_TOOLS, EVERYONE_TOOLS) {
       "disconnect_user_from_voice", "tempban",
     ].includes(t.name)),
     "moderation",
-    /\b(ban|kick|warn|timeout|mute|purge|delete messages?|clean|nuke|lockdown|find message|nickname|move.*voice|disconnect|tempban|temp.?ban)\b/i
+    /\b(ban|kick|warn|timeout|mute|purge|delete messages?|clean|nuke|lockdown|find message|nickname|move.*voice|disconnect|tempban|temp.?ban|boot|yeet|silence|gag|jail)\b/i
   );
 
   registry.registerTools(

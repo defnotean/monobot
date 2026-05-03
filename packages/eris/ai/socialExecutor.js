@@ -5,6 +5,28 @@
 
 import * as db from "../database.js";
 import { log } from "../utils/logger.js";
+import { resolveMember } from "../utils/discord.js";
+
+// Resolve a target user from any of (user_id, target_id, username) so the model
+// can pass whichever is most natural for the request. user_id wins if present
+// (it's an authoritative snowflake); username is only consulted in guild
+// context where we can resolve via member index. Returns the resolved Discord
+// snowflake or null if nothing resolvable was supplied.
+async function resolveTargetUserId(input, message) {
+  const direct = input?.user_id || input?.target_id;
+  if (direct && /^\d{17,20}$/.test(String(direct))) return String(direct);
+  const username = input?.username || input?.target_username || input?.target;
+  if (username && message?.guild) {
+    const member = await resolveMember(message.guild, String(username));
+    if (member) return member.id;
+  }
+  // Last-resort: if direct is a non-snowflake string, try resolving it via guild.
+  if (direct && message?.guild) {
+    const member = await resolveMember(message.guild, String(direct));
+    if (member) return member.id;
+  }
+  return null;
+}
 
 // Global marry/divorce lock — these are rare operations and the state is
 // shared between two users, so serializing all of them is fine and keeps
@@ -169,7 +191,7 @@ export async function executeSocialTool(toolName, input, message) {
     case "give_coins": {
       if (!message.guild) return "coin transfers only work in servers, not DMs";
 
-      const targetId = input.user_id || input.target_id;
+      const targetId = await resolveTargetUserId(input, message);
       const rawAmount = Number(input.amount);
       if (!targetId) return "need a user to give coins to";
       if (!Number.isFinite(rawAmount) || !Number.isInteger(rawAmount)) return "amount must be a whole number";
@@ -429,7 +451,7 @@ export async function executeSocialTool(toolName, input, message) {
     // ─── Marriage ──────────────────────────────────────────────────────
 
     case "marry": {
-      const targetId = input.user_id || input.target_id;
+      const targetId = await resolveTargetUserId(input, message);
       if (!targetId) return "who do you wanna marry?";
       if (targetId === userId) return "you can't marry yourself weirdo";
 
@@ -551,7 +573,7 @@ export async function executeSocialTool(toolName, input, message) {
     // ─── Trading ───────────────────────────────────────────────────────
 
     case "trade_offer": {
-      const targetId = input.user_id || input.target_id;
+      const targetId = await resolveTargetUserId(input, message);
       const offerItem = input.offer_item;
       const wantItem = input.want_item;
       const offerCoins = parseInt(input.offer_coins) || 0;
@@ -587,7 +609,7 @@ export async function executeSocialTool(toolName, input, message) {
     // ─── Pet Battle ────────────────────────────────────────────────────
 
     case "pet_battle": {
-      const targetId = input.user_id || input.target_id;
+      const targetId = await resolveTargetUserId(input, message);
       if (!targetId) return "who do you want to battle?";
       if (targetId === userId) return "you can't fight yourself";
 

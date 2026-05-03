@@ -507,20 +507,23 @@ export async function execute(toolName, input, message, ctx) {
         if (!isNaN(afterTs)) filtered = filtered.filter((m) => m.createdTimestamp > afterTs);
       }
 
-      // User filters
+      // User filters — fail loud when a name can't be resolved. Previously
+      // these silently no-op'd, so "delete bob's spam" with an unresolvable
+      // bob purged the last N messages from EVERYONE in the channel.
       if (input.from_user) {
         const member = findMember(guild, input.from_user);
-        if (member) filtered = filtered.filter((m) => m.author.id === member.id);
+        if (!member) return `Couldn't find user "${input.from_user}" — refusing to purge without the from_user filter. Use @mention or user ID.`;
+        filtered = filtered.filter((m) => m.author.id === member.id);
       }
       if (input.exclude_user) {
         const member = findMember(guild, input.exclude_user);
-        if (member) filtered = filtered.filter((m) => m.author.id !== member.id);
+        if (!member) return `Couldn't find user "${input.exclude_user}" — refusing to purge without the exclude_user filter.`;
+        filtered = filtered.filter((m) => m.author.id !== member.id);
       }
       if (input.only_keep_media_from_user) {
         const member = findMember(guild, input.only_keep_media_from_user);
-        if (member) {
-          filtered = filtered.filter((m) => !(m.author.id === member.id && hasMedia(m)));
-        }
+        if (!member) return `Couldn't find user "${input.only_keep_media_from_user}".`;
+        filtered = filtered.filter((m) => !(m.author.id === member.id && hasMedia(m)));
       }
 
       // Content type

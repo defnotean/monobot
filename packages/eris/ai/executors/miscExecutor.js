@@ -79,8 +79,16 @@ export async function execute(toolName, input, message, _context) {
       // trust-level operation. Without this gate any user could tell Eris
       // "increase affinity with me by 100" and self-promote.
       if (!isOwner(message.author.id)) return denyMessage();
-      const userId = input.user_id || input.userId;
+      let userId = input.user_id || input.userId || input.username;
       if (!userId) return "need a user_id to adjust relationship";
+      // Models often pass a username instead of a snowflake — resolve it via
+      // the guild member index so we don't end up keying affinity off literal
+      // strings (and the `<@username>` mention won't render as a ping).
+      if (message.guild && !/^\d{17,20}$/.test(String(userId))) {
+        const member = await resolveMember(message.guild, String(userId));
+        if (member) userId = member.id;
+        else return `couldn't find user "${userId}"`;
+      }
       if (input.reset) {
         const current = db.getRelationship(userId);
         db.updateRelationship(userId, -current.affinity_score); // reset to 0
@@ -325,15 +333,21 @@ export async function execute(toolName, input, message, _context) {
 
     case "check_balance": {
       let targetId = message.author.id;
+      let targetMember = null;
       if (input.username) {
-        const member = await resolveMember(message.guild, input.username);
-        if (member) targetId = member.id;
-        else if (message.guild) return `couldn't find user "${input.username}"`;
+        if (!message.guild) return "can't look up other people's balances in DMs — only your own works here";
+        targetMember = await resolveMember(message.guild, input.username);
+        if (targetMember) targetId = targetMember.id;
+        else return `couldn't find user "${input.username}"`;
       }
       const econ = await db.getBalance(targetId);
       const isAuthor = targetId === message.author.id;
       const { balanceEmbed } = await import("../gameVisuals.js");
-      const username = isAuthor ? message.author.displayName : (input.username || "User");
+      // Use the resolved member's actual display name, not the raw string the
+      // model passed (which might be a typo / partial / lowercased version).
+      const username = isAuthor
+        ? message.author.displayName
+        : (targetMember?.displayName || targetMember?.user?.username || input.username || "User");
       await message.channel.send({ embeds: [balanceEmbed(username, econ)] });
       return `${isAuthor ? "your" : `${username}'s`} balance is ${econ.balance} coins`;
     }

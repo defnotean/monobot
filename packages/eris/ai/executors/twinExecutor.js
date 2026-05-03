@@ -49,6 +49,7 @@ export async function execute(toolName, input, message, _context) {
           const member = await resolveMember(message.guild, input.target_username);
           if (!member) return `couldn't find user "${input.target_username}"`;
           args.target_id = member.id;
+          args.username = member.id; // Irene's set_nickname reads input.username (findMember accepts bare IDs)
         }
         args.nickname = input.nickname ? input.nickname.substring(0, 32) : null;
       }
@@ -63,6 +64,7 @@ export async function execute(toolName, input, message, _context) {
       }
       if (command === "set_log_channel" || command === "set_welcome_channel") {
         args.channel_id = input.channel_id || message.channel.id;
+        args.channel_name = args.channel_id; // Irene's setupExecutor reads input.channel_name (findChannel accepts bare IDs)
       }
       if (command === "create_role") {
         const rName = (input.role_name || input.name || "").substring(0, 100);
@@ -74,7 +76,9 @@ export async function execute(toolName, input, message, _context) {
       if (command === "give_role" || command === "remove_role") {
         if (input.target_username && message.guild) {
           const member = await resolveMember(message.guild, input.target_username);
-          if (member) args.target_id = member.id;
+          if (!member) return `couldn't find a unique user "${input.target_username}" — try @mention or user ID instead`;
+          args.target_id = member.id;
+          args.username = member.id; // Irene's roleExecutor reads input.username
         }
         args.role_name = input.role_name || input.role || "";
       }
@@ -84,7 +88,12 @@ export async function execute(toolName, input, message, _context) {
       if (command === "ban" || command === "kick" || command === "warn" || command === "timeout") {
         if (input.target_username && message.guild) {
           const member = await resolveMember(message.guild, input.target_username);
-          if (member) args.target_id = member.id;
+          // Refuse on ambiguity — banning the wrong user is hard to undo, so
+          // the cost of "ask user to disambiguate" is much lower than the cost
+          // of silently picking the wrong "alex".
+          if (!member) return `couldn't find a unique user "${input.target_username}" — try @mention or user ID instead`;
+          args.target_id = member.id;
+          args.username = member.id; // Irene's moderationExecutor reads input.username
         }
         args.reason = input.reason || "requested via Eris";
         if (command === "timeout") args.duration = input.duration || "5m";

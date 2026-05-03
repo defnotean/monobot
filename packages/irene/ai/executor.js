@@ -64,20 +64,42 @@ function parseHexColor(hex) {
 const _memberIndexes = new Map(); // guildId → { index: Map<lower, member>, size, builtAt }
 const MEMBER_INDEX_TTL = 10 * 60_000; // 10 min — rebuild if stale
 
+// Normalize a name for the lookup index. NFKC collapses fullwidth/decorative
+// fonts ("𝓐lice" → "Alice") so a user with a fancy nickname can still be
+// addressed by the plain ASCII version.
+function normalizeNameKey(name) {
+  if (!name) return "";
+  let n = String(name);
+  try { n = n.normalize("NFKC"); } catch { /* keep raw */ }
+  return n.toLowerCase().trim();
+}
+
 function buildMemberIndex(guild) {
-  const index = new Map();
+  const index = new Map();      // normalized key → unique member
+  const ambiguous = new Set();  // keys with two or more candidate members
   for (const m of guild.members.cache.values()) {
     const entries = [
-      m.user.username?.toLowerCase(),
-      m.displayName?.toLowerCase(),
-      m.user.tag?.toLowerCase(),
-      m.nickname?.toLowerCase(),
+      m.user.username,
+      m.displayName,
+      m.user.globalName,
+      m.nickname,
     ];
-    for (const key of entries) {
-      if (key && !index.has(key)) index.set(key, m);
+    for (const raw of entries) {
+      const key = normalizeNameKey(raw);
+      if (!key) continue;
+      const existing = index.get(key);
+      if (existing && existing.id !== m.id) {
+        // Two distinct members share this key — mark it ambiguous so callers
+        // can refuse instead of silently picking whichever the cache iterator
+        // yielded first. Two users named "alex" used to both resolve to the
+        // same alex, locking the other out of any name-based command.
+        ambiguous.add(key);
+      } else if (!existing) {
+        index.set(key, m);
+      }
     }
   }
-  const entry = { index, size: guild.members.cache.size, builtAt: Date.now() };
+  const entry = { index, ambiguous, size: guild.members.cache.size, builtAt: Date.now() };
   _memberIndexes.set(guild.id, entry);
   return entry;
 }
@@ -88,13 +110,20 @@ export function invalidateMemberIndex(guildId) {
 }
 
 export function findMember(guild, username) {
+  // Tools call findMember with whatever the LLM passed; if the model omitted
+  // the field we'd previously crash with `undefined.match is not a function`,
+  // taking the whole tool turn down. Return null so callers emit their normal
+  // "Couldn't find user" string.
+  if (username == null || username === "") return null;
+  const u = String(username);
   // Resolve Discord mention format <@ID> or <@!ID> directly by ID
-  const mentionMatch = username.match(/^<@!?(\d+)>$/);
+  const mentionMatch = u.match(/^<@!?(\d+)>$/);
   if (mentionMatch) return guild.members.cache.get(mentionMatch[1]) ?? null;
   // Also handle bare numeric IDs
-  if (/^\d{17,20}$/.test(username)) return guild.members.cache.get(username) ?? null;
+  if (/^\d{17,20}$/.test(u)) return guild.members.cache.get(u) ?? null;
 
-  const lower = username.toLowerCase().replace(/^@/, "");
+  const key = normalizeNameKey(u.replace(/^@/, ""));
+  if (!key) return null;
 
   // Use the per-guild name index (O(1)) — rebuild if stale or member count drifted
   let entry = _memberIndexes.get(guild.id);
@@ -102,7 +131,32 @@ export function findMember(guild, username) {
   if (!entry || entry.size !== guild.members.cache.size || now - entry.builtAt > MEMBER_INDEX_TTL) {
     entry = buildMemberIndex(guild);
   }
-  return entry.index.get(lower) ?? null;
+  // Refuse ambiguous names — caller should report that disambiguation is
+  // needed rather than silently picking one of the two users.
+  if (entry.ambiguous?.has(key)) return null;
+  return entry.index.get(key) ?? null;
+}
+
+// Variant that distinguishes "no such member" from "ambiguous". Some callers
+// (e.g. moderation tools) want to surface a dedicated error so the user can
+// retry by mention/ID. Returns { member, ambiguous, key }.
+export function findMemberDetailed(guild, username) {
+  if (username == null || username === "") return { member: null, ambiguous: false };
+  const u = String(username);
+  const mentionMatch = u.match(/^<@!?(\d+)>$/);
+  if (mentionMatch) return { member: guild.members.cache.get(mentionMatch[1]) ?? null, ambiguous: false };
+  if (/^\d{17,20}$/.test(u)) return { member: guild.members.cache.get(u) ?? null, ambiguous: false };
+
+  const key = normalizeNameKey(u.replace(/^@/, ""));
+  if (!key) return { member: null, ambiguous: false };
+
+  let entry = _memberIndexes.get(guild.id);
+  const now = Date.now();
+  if (!entry || entry.size !== guild.members.cache.size || now - entry.builtAt > MEMBER_INDEX_TTL) {
+    entry = buildMemberIndex(guild);
+  }
+  if (entry.ambiguous?.has(key)) return { member: null, ambiguous: true, key };
+  return { member: entry.index.get(key) ?? null, ambiguous: false, key };
 }
 
 function normalizeChannelLookupName(name) {
@@ -285,11 +339,9 @@ const TOOL_ALIASES = {
   find: "find_message", snipe: "snipe", deleted: "snipe", editsnipe: "editsnipe", edit_snipe: "editsnipe", esnipe: "editsnipe",
   disconnect: "disconnect_user_from_voice", dc: "disconnect_user_from_voice",
   move_user: "move_user_to_voice",
-  create_channel: "create_channel", delete_channel: "delete_channel", clone_channel: "clone_channel",
-  rename_channel: "rename_channel", move_channel: "move_channel", topic: "set_channel_topic",
-  create_role: "create_role", delete_role: "delete_role", edit_role: "edit_role",
-  give_role: "give_role", add_role: "give_role", assign_role: "give_role", remove_role: "remove_role",
-  mass_role: "mass_role", reorder_roles: "reorder_roles", color_roles: "setup_color_roles",
+  topic: "set_channel_topic",
+  add_role: "give_role", assign_role: "give_role",
+  color_roles: "setup_color_roles",
   roles: "list_roles", channels: "list_channels", bans: "list_bans",
   reaction_roles: "setup_reaction_roles", role_picker: "setup_role_picker",
   nuke: "nuke_channel",
@@ -346,14 +398,22 @@ const CACHEABLE_TOOLS = new Set([
   "list_custom_commands", "list_auto_responders", "list_trusted_users",
   "list_whitelist", "music_queue", "now_playing", "vc_info",
   "get_birthday", "list_birthdays", "voice_leaderboard", "server_milestones",
+  "list_invites", "invite_stats", "list_members", "list_pins", "list_directives",
 ]);
 const CACHE_INVALIDATING_TOOLS = new Set([
   "create_channel", "delete_channel", "nuke_channel", "rename_channel",
+  "set_channel_topic", "set_slowmode", "lock_channel", "unlock_channel",
+  "move_channel", "clone_channel", "set_channel_permissions",
   "create_role", "delete_role", "edit_role", "give_role", "remove_role",
-  "ban_user", "kick_user", "warn_user", "timeout_user",
+  "mass_role", "set_role_permissions", "reorder_roles",
+  "ban_user", "kick_user", "warn_user", "timeout_user", "tempban", "set_nickname",
   "remember_fact", "forget_memory", "clear_all_memories",
   "create_custom_command", "edit_custom_command", "delete_custom_command",
+  "create_auto_responder", "delete_auto_responder",
+  "add_emoji", "remove_emoji",
+  "set_birthday", "remove_birthday",
   "play_music", "skip_song", "stop_music", "set_volume",
+  "save_directive", "remove_directive",
 ]);
 
 function getCachedResult(toolName, args, guildId) {
@@ -377,6 +437,16 @@ function setCachedResult(toolName, args, guildId, result) {
     for (const [k, v] of _toolCache) {
       if (now - v.ts > CACHE_TTL) _toolCache.delete(k);
     }
+  }
+}
+
+// Per-guild invalidation — prevents one guild's mutation from busting cached
+// reads for unrelated guilds. Cache keys are `${guildId}:${tool}:${argsJson}`,
+// so we only need to drop entries that begin with this guild's prefix.
+function invalidateGuildCache(guildId) {
+  const prefix = `${guildId || "dm"}:`;
+  for (const key of _toolCache.keys()) {
+    if (key.startsWith(prefix)) _toolCache.delete(key);
   }
 }
 
@@ -406,17 +476,76 @@ export async function executeTool(toolName, input, message) {
     return cached;
   }
 
-  // Invalidate cache on write operations
-  if (CACHE_INVALIDATING_TOOLS.has(toolName)) _toolCache.clear();
+  // Invalidate cache on write operations — scoped to this guild only.
+  // Previously this cleared the entire cache across all guilds, so a write in
+  // guild A wiped cached `list_roles` etc. for guild B, defeating the point of
+  // the per-guild key prefix.
+  if (CACHE_INVALIDATING_TOOLS.has(toolName)) invalidateGuildCache(guildId);
 
   const result = await _executeToolInner(toolName, input, message);
   setCachedResult(toolName, input, guildId, result);
   return result;
 }
 
+// Tools that absolutely need a guild context — every server-management tool.
+// Tools NOT on this list (memory, web_search, calculate, ask_eris, etc.) are
+// safe to run from DMs. Use this set instead of relying on each handler to
+// guard `guild` itself, since most inline cases dereference guild.* directly.
+const GUILD_REQUIRED_TOOLS = new Set([
+  "create_channel", "delete_channel", "nuke_channel", "rename_channel", "clone_channel",
+  "set_channel_topic", "set_slowmode", "lock_channel", "unlock_channel",
+  "move_channel", "set_channel_permissions", "create_category", "delete_category",
+  "create_role", "delete_role", "edit_role", "give_role", "remove_role",
+  "mass_role", "set_role_permissions", "reorder_roles", "list_roles",
+  "setup_reaction_roles", "add_reaction_role", "remove_reaction_role",
+  "setup_role_picker", "setup_dropdown_roles", "setup_color_roles",
+  "ban_user", "kick_user", "warn_user", "timeout_user", "tempban", "unban_user",
+  "set_nickname", "purge_messages", "lockdown_server", "unlock_server", "find_message",
+  "move_user_to_voice", "disconnect_user_from_voice",
+  "set_create_vc_channel", "set_vc_template", "set_vc_default_limit",
+  "set_vc_naming_mode", "toggle_vc_rich_presence", "set_afk_channel",
+  "set_welcome_channel", "customize_welcome", "set_access_role", "setup_verification",
+  "trust_user", "untrust_user", "list_trusted_users", "set_log_channel",
+  "set_autorole", "whitelist_server", "unwhitelist_server", "list_whitelist",
+  "set_dm_results", "set_dm_welcome", "set_leave_channel",
+  "set_server_avatar", "set_server_banner", "set_server_persona",
+  "set_channel_personality", "set_bad_words", "set_escalation",
+  "setup_stats_channels", "setup_starboard", "toggle_auto_responders",
+  "toggle_twin_chat", "toggle_voice_tracking", "setup_ticket",
+  "configure_suggestions", "sticky_message", "remove_sticky", "toggle_invite_filter",
+  "configure_patch_news", "configure_twitch", "configure_youtube",
+  "configure_github", "configure_giveaway_pings", "test_patch_news",
+  "configure_birthdays", "send_test_birthday", "send_test_welcome",
+  "send_message", "send_animated_message", "create_thread",
+  "add_emoji", "remove_emoji", "create_invite", "list_invites", "delete_invite",
+  "invite_stats", "set_server_settings", "set_server_icon", "view_audit_log",
+  "list_members", "list_channels", "list_emojis", "list_bans",
+  "get_server_info", "get_role_permissions", "random_member", "count_members",
+  "who_has_role", "get_user_info",
+  "set_level_reward", "remove_level_reward", "toggle_leveling",
+  "set_level_channel", "set_level_ping_roles", "voice_leaderboard", "server_milestones",
+  "create_custom_command", "edit_custom_command", "delete_custom_command",
+  "list_custom_commands",
+  "create_auto_responder", "list_auto_responders", "delete_auto_responder",
+  "manage_giveaway", "manage_scrim",
+  "edit_message", "delete_message", "read_messages", "search_messages",
+  "pin_message", "unpin_message", "list_pins",
+  "react_to_message", "remove_reaction",
+  "save_directive", "list_directives", "remove_directive",
+  "vc_info", "vc_private", "vc_public", "vc_lock", "vc_unlock", "vc_rename",
+  "vc_transfer", "vc_kick", "vc_allow", "vc_claim",
+  "set_birthday", "get_birthday", "list_birthdays", "remove_birthday",
+  "summarize_channel",
+]);
+
 async function _executeToolInner(toolName, input, message) {
   const guild = message.guild;
-  const by = `by Irene for ${message.author.username}`;
+  // Guard tools that can't run in DMs. Without this, the inline switch and
+  // several sub-executors crash on `guild.something` or `findChannel(undefined)`.
+  if (!guild && GUILD_REQUIRED_TOOLS.has(toolName)) {
+    return "this only works in a server, not DMs";
+  }
+  const by = `by Irene for ${message.author?.username || "user"}`;
 
   // ─── Build shared context for sub-executors ─────────────────────────
   const ctx = {
@@ -641,14 +770,17 @@ async function _executeToolInner(toolName, input, message) {
     // ─── Directives: persistent behavioral rules ───────────────────
     case "save_directive": {
       const { addDirective } = await import("../database.js");
+      const directive = String(input.directive || "").trim();
+      if (!directive) return "give me the rule text — what should i remember to do?";
+      if (directive.length > 500) return "directive is too long (max 500 chars)";
       let channelId = null;
       if (input.channel_name) {
         const ch = findChannel(guild, input.channel_name);
         if (ch) channelId = ch.id;
       }
-      const result = addDirective(guild.id, input.directive, channelId, message.author.id);
+      const result = addDirective(guild.id, directive, channelId, message.author.id);
       if (!result.success) return result.reason;
-      return `saved directive #${result.index + 1}: "${input.directive}"${channelId ? ` (applies to <#${channelId}>)` : " (server-wide)"}`;
+      return `saved directive #${result.index + 1}: "${directive}"${channelId ? ` (applies to <#${channelId}>)` : " (server-wide)"}`;
     }
 
     case "list_directives": {
@@ -660,7 +792,9 @@ async function _executeToolInner(toolName, input, message) {
 
     case "remove_directive": {
       const { removeDirective } = await import("../database.js");
-      const idx = /^\d+$/.test(input.keyword) ? parseInt(input.keyword) - 1 : input.keyword;
+      const keyword = String(input.keyword || "").trim();
+      if (!keyword) return "give me a directive number or keyword to remove";
+      const idx = /^\d+$/.test(keyword) ? parseInt(keyword, 10) - 1 : keyword;
       const result = removeDirective(guild.id, idx);
       if (!result.success) return result.reason;
       return `removed directive: "${result.removed}"`;
@@ -669,8 +803,16 @@ async function _executeToolInner(toolName, input, message) {
     // ─── Relationship / Mood Management ────────────────────────────
     case "adjust_relationship": {
       const { getRelationship, updateRelationship } = await import("../database.js");
-      const userId = input.user_id || input.userId;
+      let userId = input.user_id || input.userId || input.username;
       if (!userId) return "need a user_id to adjust relationship";
+      // Models often pass a username instead of a snowflake — resolve it via
+      // the guild member index so we don't end up keying affinity off literal
+      // strings (and the `<@username>` mention won't render as a ping).
+      if (guild && !/^\d{17,20}$/.test(String(userId))) {
+        const member = findMember(guild, userId);
+        if (member) userId = member.id;
+        else return `couldn't find user "${userId}"`;
+      }
       if (input.reset) {
         const current = getRelationship(userId);
         updateRelationship(userId, -current.affinity_score);
@@ -1250,7 +1392,12 @@ async function _executeToolInner(toolName, input, message) {
       const { getQueue } = await import("../music/player.js");
       const queue = getQueue(guild.id);
       if (!queue) return "nothing is playing";
-      const vol = Math.min(Math.max(Math.floor(input.volume), 0), 100);
+      // Guard NaN — the model occasionally omits volume entirely or sends a
+      // non-numeric string. Math.floor(undefined) = NaN, which then propagates
+      // into setGlobalVolume(NaN) and throws inside Lavalink. Validate first.
+      const raw = Number(input.volume);
+      if (!Number.isFinite(raw)) return "give me a volume between 0 and 100";
+      const vol = Math.min(Math.max(Math.floor(raw), 0), 100);
       queue.volume = vol;
       if (queue.player) queue.player.setGlobalVolume(vol);
       return `volume set to **${vol}%**`;
@@ -1501,7 +1648,15 @@ async function _executeToolInner(toolName, input, message) {
         const prefix = ch.type === ChannelType.GuildVoice ? "🔊" : "#";
         lines.push(`${prefix} ${ch.name} [id:${ch.id}]`);
       }
-      return lines.join("\n") || "No channels";
+      // Truncate so we never overflow Discord's 2000-char message limit on
+      // servers with hundreds of channels.
+      const MAX = 1900;
+      let out = lines.join("\n");
+      if (out.length > MAX) {
+        const trimmed = lines.slice(0, Math.floor(lines.length * (MAX / out.length)));
+        out = trimmed.join("\n") + `\n…(${lines.length - trimmed.length} more channels truncated)`;
+      }
+      return out || "No channels";
     }
 
     case "list_roles": {
@@ -1558,11 +1713,24 @@ async function _executeToolInner(toolName, input, message) {
       }
 
       const color = role.color ? `#${role.color.toString(16).padStart(6, "0")}` : "none";
-      return (
-        `**@${role.name}** (position ${role.position}, color: ${color}, ${role.members.size} members)\n` +
-        `✅ Granted: ${granted.join(", ") || "none"}\n` +
-        `❌ Denied: ${denied.join(", ") || "none"}`
-      );
+      const header = `**@${role.name}** (position ${role.position}, color: ${color}, ${role.members.size} members)\n`;
+      // Truncate granted/denied lists so we don't overflow Discord's 2000-char
+      // message limit. Admin roles often hit this — only one of the two halves
+      // is usually long, so favor the shorter of the two for full detail.
+      const MAX_LINE = 750;
+      const trimList = (items) => {
+        let out = items.join(", ");
+        if (out.length <= MAX_LINE) return out;
+        const truncated = [];
+        let used = 0;
+        for (const item of items) {
+          if (used + item.length + 2 > MAX_LINE) break;
+          truncated.push(item);
+          used += item.length + 2;
+        }
+        return `${truncated.join(", ")}, …(+${items.length - truncated.length} more)`;
+      };
+      return header + `✅ Granted: ${trimList(granted) || "none"}\n` + `❌ Denied: ${trimList(denied) || "none"}`;
     }
 
     // ─── REFERENCE TOOL ─── See ai/tools.js:1902 for the schema and tests/ai/executors/listEmojis.test.ts:43 for the spec. ───
@@ -1617,8 +1785,20 @@ async function _executeToolInner(toolName, input, message) {
       if (!role) return `Couldn't find role "${input.role_name}"`;
       const members = role.members.filter((m) => !m.user.bot);
       if (!members.size) return `No one has the "${role.name}" role`;
-      const list = members.map((m) => m.user.tag).join(", ");
-      return `${members.size} members with "${role.name}": ${list}`;
+      // Truncate so we never overflow Discord's 2000-char message limit. A
+      // role with hundreds of members previously made the parent send fail.
+      const tags = [...members.values()].map((m) => m.user.tag);
+      const MAX_LIST_CHARS = 1500;
+      let used = 0;
+      const taken = [];
+      for (const tag of tags) {
+        if (used + tag.length + 2 > MAX_LIST_CHARS) break;
+        taken.push(tag);
+        used += tag.length + 2;
+      }
+      const remainder = members.size - taken.length;
+      const suffix = remainder > 0 ? ` (and ${remainder} more)` : "";
+      return `${members.size} members with "${role.name}": ${taken.join(", ")}${suffix}`;
     }
 
     // ─── Server Whitelist (bot-owner only) ────────────────────────────

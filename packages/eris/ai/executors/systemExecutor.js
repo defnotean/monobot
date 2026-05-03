@@ -105,10 +105,16 @@ export async function execute(toolName, input, message, _context) {
     }
 
     case "list_processes": {
-      const cmd = `powershell -Command "Get-Process | Sort-Object -Property CPU -Descending | Select-Object -First 15 Name,Id,CPU,WorkingSet | ConvertTo-Json"`;
+      // Optional name filter — schema documents `filter` so the model can
+      // narrow to e.g. "chrome" or "node". Whitelist alnum/dot/hyphen so we
+      // can't be coerced into PowerShell injection.
+      const rawFilter = String(input.filter || "").trim();
+      const safeFilter = /^[A-Za-z0-9._-]{1,40}$/.test(rawFilter) ? rawFilter : "";
+      const filterClause = safeFilter ? ` | Where-Object { $_.Name -like '*${safeFilter}*' }` : "";
+      const cmd = `powershell -Command "Get-Process${filterClause} | Sort-Object -Property CPU -Descending | Select-Object -First 15 Name,Id,CPU,WorkingSet | ConvertTo-Json"`;
       const ok = await db.queueLocalCommand(cmd, message.channel.id, message.author.id);
-      await audit(toolName, message, "list_processes", ok ? "queued" : "queue failed", false);
-      return ok ? "queued: process list request" : "failed to queue command";
+      await audit(toolName, message, `list_processes${safeFilter ? ` filter=${safeFilter}` : ""}`, ok ? "queued" : "queue failed", false);
+      return ok ? `queued: process list request${safeFilter ? ` (filter: ${safeFilter})` : ""}` : "failed to queue command";
     }
 
     case "launch_app": {
