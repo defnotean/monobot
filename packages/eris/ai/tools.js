@@ -31,11 +31,11 @@ export const EVERYONE_TOOLS = [
     name: "remember_fact",
     tags: ["fun"],
     description:
-      "Store a fact about a user for future reference. Use when someone shares personal info, preferences, or anything worth remembering. Set sensitivity based on how personal/vulnerable the info is: 'normal' for general facts (favorite game, timezone), 'sensitive' for personal things only they should know you remember (insecurities, crushes, personal struggles), 'secret' for things they explicitly trust you with or things that could embarrass/hurt them if revealed (deep confessions, 'you're my most prized possession', private feelings). Default to 'normal' — only escalate when the info genuinely warrants protection.",
+      "Store a fact about a user for future reference. Use when someone shares personal info, preferences, or anything worth remembering. Omit user_id to default to the message author (most common case). Set sensitivity based on how personal/vulnerable the info is: 'normal' for general facts (favorite game, timezone), 'sensitive' for personal things only they should know you remember (insecurities, crushes, personal struggles), 'secret' for things they explicitly trust you with or things that could embarrass/hurt them if revealed (deep confessions, 'you're my most prized possession', private feelings). Default to 'normal' — only escalate when the info genuinely warrants protection.",
     input_schema: {
       type: "object",
       properties: {
-        user_id: { type: "string", description: "Discord user ID to associate the fact with" },
+        user_id: { type: "string", description: "Discord user ID to associate the fact with — omit to use the message author" },
         fact: {
           type: "string",
           description: "The fact to remember, max 150 characters",
@@ -43,10 +43,11 @@ export const EVERYONE_TOOLS = [
         },
         sensitivity: {
           type: "string",
+          enum: ["normal", "sensitive", "secret"],
           description: "How sensitive this info is: 'normal' (anyone can know), 'sensitive' (only mention to this user), 'secret' (never reveal to anyone, protect fiercely)",
         },
       },
-      required: ["user_id", "fact"],
+      required: ["fact"],
     },
   },
   {
@@ -166,7 +167,7 @@ export const EVERYONE_TOOLS = [
     name: "create_meme",
     tags: ["fun"],
     description:
-      "Generate a unique, context-aware meme. You MUST think creatively about what would be genuinely funny and pick the perfect template. Use search_meme_templates first if you're not sure which template fits best or want to find something fresh. Match the template to the joke like a real meme lord would. Examples: 'drake' = preferring one thing over another, 'distracted-boyfriend' or 'db' = being tempted by something new, 'cmm' or 'change-my-mind' = hot takes, 'gru' = plan backfiring, 'fine' = this is fine/everything burning, 'stonks' = bad financial decisions, 'panik-kalm-panik' = panic-calm-panic cycle, 'fry' = not sure if X or Y, 'pigeon' = is this a X?, 'mordor' = one does not simply, 'slap' = batman slapping robin, 'drake' = yes/no preference, 'exit' = left exit 12 off ramp, 'buzz' = X everywhere, 'doge' = wow such X, 'harold' = hide the pain, 'rollsafe' = clever thinking, 'kombucha' = side-eyeing, 'leo' = pointing at screen, 'woman-cat' = woman yelling at cat, 'astronaut' = always has been, 'keanu' = breathtaking, 'spongebob' = mocking, 'michael-scott' = the office reactions, 'dwight' = false!, 'elmo' = elmo fire, 'kermit' = but that's none of my business, 'pooh' = fancy pooh, 'cheems' = sad cheems, 'khaby-lame' = obvious solution. If making a meme about a specific person, use their user_id to grab their avatar as the background. Full template list: aag, ackbar, afraid, agnes, aint-got-time, ams, ants, apcr, astronaut, atis, away, awesome, awesome-awkward, awkward, awkward-awesome, bad, badchoice, balloon, bd, because, bender, bihw, bilbo, biw, blb, boat, bongo, both, box, bs, bus, buzz, cake, captain, captain-america, cb, cbb, cbg, center, ch, chair, cheems, chosen, cmm, country, crazypills, crow, cryingfloor, db, dbg, dg, disastergirl, dodgson, doge, dragon, drake, drowning, drunk, ds, dsm, dwight, elf, elmo, ermg, exit, fa, facepalm, fbf, feelsgood, fetch, fine, firsttry, fmr, friends, fry, fwp, gandalf, gb, gears, genie, ggg, glasses, gone, grave, gru, grumpycat, hagrid, handshake, happening, harold, headaches, hipster, home, icanhas, imsorry, inigo, interesting, ive, iw, jd, jetpack, jim, joker, jw, keanu, kermit, khaby-lame, kk, kombucha, kramer, leo, light, live, ll, lrv, made, mb, michael-scott, midwit, millers, mini-keanu, mmm, money, mordor, morpheus, mouth, mw, nails, nice, noah, noidea, ntot, oag, officespace, older, oprah, panik-kalm-panik, patrick, perfection, persian, philosoraptor, pigeon, pooh, pool, ptj, puffin, red, regret, remembers, reveal, right, rollsafe, sad-biden, sad-boehner, sad-bush, sad-clinton, sad-obama, sadfrog, saltbae, same, sarcasticbear, say, sb, scc, seagull, sf, sk, ski, slap, snek, soa, sohappy, sohot, soup-nazi, sparta, spiderman, spirit, spongebob, ss, stew, stonks, stop, stop-it, success, tenguy, toohigh, touch, tried, trump, ugandanknuck, vince, wallet, waygd, wddth, whatyear, winter, wishes, wkh, woman-cat, wonka, worst, xy, yallgot, yodawg, yuno, zero-wing.",
+      "Generate a context-aware meme. Pick the template that fits the joke. Common picks: 'drake' = preferring X over Y, 'distracted-boyfriend' = tempted by something new, 'change-my-mind' / 'cmm' = hot takes, 'gru' = plan backfiring, 'fine' = everything burning, 'stonks' = bad financial decisions, 'panik-kalm-panik' = panic cycle, 'fry' = not sure if X or Y, 'mordor' = one does not simply, 'slap' = batman slap, 'harold' = hide the pain, 'spongebob' = mocking, 'astronaut' = always has been, 'pooh' = fancy pooh. If you don't know the right template, call search_meme_templates first. To make a meme about a specific person, pass their user_id to grab their avatar as the background. To use a custom format not in the catalog, pass image_url instead of template.",
     input_schema: {
       type: "object",
       properties: {
@@ -337,7 +338,7 @@ export const EVERYONE_TOOLS = [
   {
     name: "set_reminder",
     description:
-      "Set a timed reminder that will ping the user after a delay. Use when someone says 'remind me in...', wants a timer, or needs to be notified about something later.",
+      "Set a timed reminder that will ping the user after a delay. Use when someone says 'remind me in...', wants a timer, or needs to be notified about something later. Do NOT use for DISBOARD bump reminders — for those use configure_bump_reminder.",
     input_schema: {
       type: "object",
       properties: {
@@ -617,7 +618,7 @@ export const EVERYONE_TOOLS = [
       type: "object",
       properties: {
         amount: { type: "number", description: "Amount of coins to bet" },
-        choice: { type: "string", description: "heads or tails" },
+        choice: { type: "string", enum: ["heads", "tails"], description: "Either 'heads' or 'tails' (lowercase)" },
       },
       required: ["amount", "choice"],
     },
@@ -662,7 +663,7 @@ export const EVERYONE_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        action: { type: "string", description: "hit, stand, or double" },
+        action: { type: "string", enum: ["hit", "stand", "double"], description: "Exactly one of 'hit', 'stand', or 'double' (lowercase)" },
       },
       required: ["action"],
     },
@@ -829,7 +830,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "apply_curse",
-    description: "Apply a random funny cursed effect to a user — changes their nickname to something hilarious for 10 minutes. Use when someone says 'curse them', 'hex', or when chaos demands it. Requires Manage Nicknames permission.",
+    description: "Apply a random funny cursed effect to a user — changes their nickname to something hilarious for 10 minutes. Use when someone says 'curse them', 'hex', or when chaos demands it. Requires Manage Nicknames permission. Inverse: remove_curse to lift it early.",
     input_schema: {
       type: "object",
       properties: {
@@ -841,7 +842,7 @@ export const EVERYONE_TOOLS = [
 
   {
     name: "remove_curse",
-    description: "Remove an active curse from a user — restores their original nickname early. Use when someone says 'remove curse', 'uncurse', or when the boss tells you to. You CAN remove curses now.",
+    description: "Remove an active curse from a user — restores their original nickname early. Reverses apply_curse. Use when someone says 'remove curse', 'uncurse', or when the boss tells you to. You CAN remove curses now.",
     input_schema: {
       type: "object",
       properties: {
@@ -855,12 +856,12 @@ export const EVERYONE_TOOLS = [
 
   {
     name: "trivia_start",
-    description: "Start a trivia question with optional category and coin stakes. Use when someone says 'trivia', 'quiz me', 'ask me a question', 'test my knowledge'. Categories: general, science, gaming, anime, movies, history, music, sports, geography, computers.",
+    description: "Start a trivia question with optional category and coin stakes. Use when someone says 'trivia', 'quiz me', 'ask me a question', 'test my knowledge'.",
     input_schema: {
       type: "object",
       properties: {
-        category: { type: "string", description: "Category: general, science, gaming, anime, movies, history, music, sports, geography, computers" },
-        difficulty: { type: "string", description: "easy, medium, or hard" },
+        category: { type: "string", enum: ["general", "science", "gaming", "anime", "movies", "history", "music", "sports", "geography", "computers"], description: "Question category (lowercase)" },
+        difficulty: { type: "string", enum: ["easy", "medium", "hard"], description: "Question difficulty (lowercase)" },
         stake: { type: "number", description: "Coins to wager on getting it right" },
       },
     },
@@ -882,7 +883,7 @@ export const EVERYONE_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        choice: { type: "string", description: "rock, paper, or scissors" },
+        choice: { type: "string", enum: ["rock", "paper", "scissors"], description: "Exactly one of 'rock', 'paper', or 'scissors' (lowercase)" },
         stake: { type: "number", description: "Optional coins to wager" },
       },
       required: ["choice"],
@@ -1132,6 +1133,7 @@ export const EVERYONE_TOOLS = [
       properties: {
         action: {
           type: "string",
+          enum: ["add", "remove", "list", "clear"],
           description: "What to do: 'add', 'remove', 'list', or 'clear'",
         },
         role_ids: {
@@ -1213,8 +1215,8 @@ export const EVERYONE_TOOLS = [
   // ─── Transfer Tool ─────────────────────────────────────────────────────────
   {
     name: "give_coins",
-    description: "Send coins to another user (5% tax, minimum 10). Use when someone says 'give coins', 'send money', 'pay someone', 'transfer coins'.",
-    input_schema: { type: "object", properties: { user_id: { type: "string", description: "Discord user ID of recipient" }, amount: { type: "number", description: "Amount to send" } }, required: ["user_id", "amount"] },
+    description: "Send coins to another user (5% tax, minimum 10). Use when someone says 'give coins', 'send money', 'pay someone', 'transfer coins'. Pass either user_id (Discord snowflake) OR username (display name / mention) — both are accepted.",
+    input_schema: { type: "object", properties: { user_id: { type: "string", description: "Discord user ID of recipient" }, username: { type: "string", description: "Username, display name, or @mention of recipient (used if user_id missing)" }, amount: { type: "number", description: "Amount to send" } }, required: ["amount"] },
   },
   // ─── New Games ─────────────────────────────────────────────────────────────
   {
@@ -1251,8 +1253,8 @@ export const EVERYONE_TOOLS = [
   // ─── Marriage Tools ────────────────────────────────────────────────────────
   {
     name: "marry",
-    description: "Propose to a user (costs 500 coins each, needs Wedding Ring). Married couples get +10% coin earnings. Use when someone says 'marry', 'propose', 'get married'.",
-    input_schema: { type: "object", properties: { user_id: { type: "string", description: "Discord user ID to marry" } }, required: ["user_id"] },
+    description: "Propose to a user (costs 500 coins each, needs Wedding Ring). Married couples get +10% coin earnings. Use when someone says 'marry', 'propose', 'get married'. Pass either user_id or username.",
+    input_schema: { type: "object", properties: { user_id: { type: "string", description: "Discord user ID to marry" }, username: { type: "string", description: "Username/mention of who to marry (used if user_id missing)" } } },
   },
   {
     name: "divorce",
@@ -1277,19 +1279,19 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "trade_offer",
-    description: "Offer a trade to another user — items and/or coins. Use when someone says 'trade', 'swap items', 'offer trade'.",
-    input_schema: { type: "object", properties: { user_id: { type: "string", description: "Discord user ID to trade with" }, offer_item: { type: "string", description: "Item to offer (optional)" }, want_item: { type: "string", description: "Item you want (optional)" }, offer_coins: { type: "number", description: "Coins to offer (optional)" }, want_coins: { type: "number", description: "Coins you want (optional)" } }, required: ["user_id"] },
+    description: "Offer a trade to another user — items and/or coins. Use when someone says 'trade', 'swap items', 'offer trade'. Pass either user_id or username.",
+    input_schema: { type: "object", properties: { user_id: { type: "string", description: "Discord user ID to trade with" }, username: { type: "string", description: "Username/mention of trade partner (used if user_id missing)" }, offer_item: { type: "string", description: "Item to offer (optional)" }, want_item: { type: "string", description: "Item you want (optional)" }, offer_coins: { type: "number", description: "Coins to offer (optional)" }, want_coins: { type: "number", description: "Coins you want (optional)" } } },
   },
   // ─── Pet Battle Tools ──────────────────────────────────────────────────────
   {
     name: "pet_battle",
-    description: "Battle your pet against another user's pet (3 rounds, speed determines turn order). Pets gain XP. Use when someone says 'pet battle', 'pet fight', 'challenge their pet'.",
-    input_schema: { type: "object", properties: { user_id: { type: "string", description: "Discord user ID to battle" } }, required: ["user_id"] },
+    description: "Battle your pet against another user's pet (3 rounds, speed determines turn order). Pets gain XP. Use when someone says 'pet battle', 'pet fight', 'challenge their pet'. Pass either user_id or username.",
+    input_schema: { type: "object", properties: { user_id: { type: "string", description: "Discord user ID to battle" }, username: { type: "string", description: "Username/mention of opponent (used if user_id missing)" } } },
   },
   {
     name: "pet_train",
     description: "Train your pet's attack, defense, or speed (+1-3). Costs 100 coins, 1hr cooldown. Use when someone says 'train pet', 'pet train', 'level up pet'.",
-    input_schema: { type: "object", properties: { stat: { type: "string", description: "Stat to train: attack, defense, or speed" } }, required: ["stat"] },
+    input_schema: { type: "object", properties: { stat: { type: "string", enum: ["attack", "defense", "speed"], description: "Stat to train (lowercase)" } }, required: ["stat"] },
   },
   // ─── Item Usage ────────────────────────────────────────────────────────────
   {
@@ -1349,26 +1351,26 @@ export const OWNER_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        game: { type: "string", description: "Game to configure: coinflip, dice, blackjack, roulette, rps, trivia, global, or 'all' to list everything" },
+        game: { type: "string", enum: ["coinflip", "dice", "blackjack", "roulette", "rps", "trivia", "global", "all"], description: "Which game to configure (lowercase)" },
         setting: { type: "string", description: "Setting to change (e.g. baseOdds, payout, deathChance, botBias)" },
         value: { description: "New value for the setting" },
-        action: { type: "string", description: "list, set, or reset" },
+        action: { type: "string", enum: ["list", "set", "reset"], description: "What to do (lowercase)" },
       },
     },
   },
   {
     name: "minion_status",
-    description: "Check your minions — see workers, earnings, available slots. Minions earn coins passively while you're away.",
+    description: "Owner-only. Check defnotean's minions — workers, earnings, available slots. Minions earn coins passively while away.",
     input_schema: { type: "object", properties: {} },
   },
   {
     name: "minion_collect",
-    description: "Collect accumulated earnings from your minions.",
+    description: "Owner-only. Collect accumulated earnings from defnotean's minions.",
     input_schema: { type: "object", properties: {} },
   },
   {
     name: "minion_name",
-    description: "Rename one of your minions.",
+    description: "Owner-only. Rename one of defnotean's minions.",
     input_schema: {
       type: "object",
       properties: {
@@ -1384,11 +1386,11 @@ export const OWNER_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        action: { type: "string", description: "list, add, remove, or tweak" },
+        action: { type: "string", enum: ["list", "add", "remove", "tweak"], description: "What to do (lowercase)" },
         emoji: { type: "string", description: "For add/tweak: the emoji to use" },
         name: { type: "string", description: "Symbol name (for add/remove/tweak)" },
         weight: { type: "number", description: "Probability weight 1-50 (higher = more common)" },
-        tier: { type: "string", description: "junk, common, rare, legendary, or skull — affects payout multiplier" },
+        tier: { type: "string", enum: ["junk", "common", "rare", "legendary", "skull"], description: "Payout tier (lowercase)" },
       },
     },
   },

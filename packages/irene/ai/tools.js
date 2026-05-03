@@ -1346,7 +1346,7 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "setup_reaction_roles",
-    description: "Post an embed message with emoji REACTION roles - users react with emojis to get roles. Supports both multi-select (pick many) and exclusive mode (pick one, like color roles). Use this when the user says 'reaction roles', 'emoji roles', 'react roles', or specifies emojis. For button-based role pickers, use setup_role_picker instead.",
+    description: "Post a NEW embed message with emoji REACTION roles — users react with emojis to get roles. Supports both multi-select (pick many) and exclusive mode (pick one, like color roles). Use this when the user says 'reaction roles', 'emoji roles', 'react roles', or specifies emojis. For button-based role pickers, use setup_role_picker. To add a mapping to an EXISTING message, use add_reaction_role. To remove a mapping, use remove_reaction_role.",
     input_schema: {
       type: "object",
       properties: {
@@ -1373,7 +1373,7 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "add_reaction_role",
-    description: "Add a single reaction role to an EXISTING message AND react to it with the emoji. Also use this when asked to add reactions to an existing message for roles. Use find_message to locate the message if needed — NEVER ask the user for a message ID.",
+    description: "Add a single reaction-role mapping to an EXISTING message AND react with the emoji. Use find_message to locate the message if needed — NEVER ask for a message ID. To create a new reaction-role embed from scratch, use setup_reaction_roles. To add a plain emoji reaction (no role binding), use react_to_message.",
     input_schema: {
       type: "object",
       properties: {
@@ -2100,7 +2100,7 @@ export const EVERYONE_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        action: { type: "string", description: "What to ask Eris to do: 'remind', 'note', 'fact', 'mood', 'status'" },
+        action: { type: "string", enum: ["remind", "note", "fact", "mood", "status"], description: "What to ask Eris to do (lowercase): 'remind' (set a reminder), 'note' (save a note), 'fact' (remember a fact), 'mood' (check her mood), 'status' (check her health)" },
         user_id: { type: "string", description: "Discord user ID this is for" },
         channel_id: { type: "string", description: "Channel ID for context" },
         reminder_text: { type: "string", description: "For reminders: what to remind about" },

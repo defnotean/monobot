@@ -255,15 +255,29 @@ Output format: tool calls go in tool_calls field, NOT in text content.]`;
       tool_calls: msg.tool_calls,
     });
 
-    // Two-phase: classify every call (skip duplicates) then Promise.all the
-    // fresh ones. Lets the model fire N parallel web_searches in one turn
-    // without paying N× latency.
+    // Two-phase: classify every call (skip duplicates / malformed) then
+    // Promise.all the fresh ones. Lets the model fire N parallel web_searches
+    // in one turn without paying N× latency.
     let allDuplicates = true;
     const slots = msg.tool_calls.map((call) => {
       const fnName = call.function?.name;
       let fnArgs = {};
-      try { fnArgs = JSON.parse(call.function?.arguments || "{}"); }
-      catch (e) { log(`[NVIDIA] Bad tool args for ${fnName}: ${e.message}`); }
+      let parseError = null;
+      // Guard malformed calls — without this, an undefined fnName flows into
+      // executor(undefined, {}) and crashes or returns "unknown tool" with no
+      // signal to the model. Surface the issue via tool_result so it can
+      // self-correct on the next iteration.
+      if (!fnName) parseError = new Error("missing tool name");
+      try {
+        if (!parseError) fnArgs = JSON.parse(call.function?.arguments || "{}");
+      } catch (e) {
+        parseError = e;
+        log(`[NVIDIA] Bad tool args for ${fnName}: ${e.message}`);
+      }
+      if (parseError) {
+        allDuplicates = false;
+        return { call, fnName, fnArgs, duplicate: false, parseError };
+      }
       const signature = `${fnName}::${JSON.stringify(fnArgs)}`;
       if (calledSignatures.has(signature)) {
         log(`[NVIDIA] Skipping duplicate ${fnName} call (already executed)`);
@@ -274,7 +288,7 @@ Output format: tool calls go in tool_calls field, NOT in text content.]`;
       return { call, fnName, fnArgs, duplicate: false };
     });
 
-    const fresh = slots.filter((s) => !s.duplicate);
+    const fresh = slots.filter((s) => !s.duplicate && !s.parseError);
     if (fresh.length > 1) log(`[NVIDIA] running ${fresh.length} tool calls in parallel: ${fresh.map((s) => s.fnName).join(", ")}`);
     const execResults = await Promise.all(fresh.map(async ({ fnName, fnArgs }) => {
       log(`[NVIDIA] ${fnName}(${JSON.stringify(fnArgs).slice(0, 100)})`);
@@ -291,7 +305,13 @@ Output format: tool calls go in tool_calls field, NOT in text content.]`;
 
     // Append in the original tool_calls order so the model sees a coherent sequence.
     for (const s of slots) {
-      if (s.duplicate) {
+      if (s.parseError) {
+        messages.push({
+          role: "tool",
+          tool_call_id: s.call.id,
+          content: `Tool call was malformed: ${s.parseError.message}. Re-emit the tool call with a valid name and JSON arguments.`,
+        });
+      } else if (s.duplicate) {
         messages.push({
           role: "tool",
           tool_call_id: s.call.id,

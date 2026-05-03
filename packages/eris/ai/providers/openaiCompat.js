@@ -182,7 +182,11 @@ function stringifyToolContent(content, limit = 2500) {
 function appendGeminiStyleToolHistory(history, msg, slots) {
   if (!Array.isArray(history) || !slots?.length) return;
 
-  const assistantLines = [];
+  // Prefix the assistant turn with `[Eris said]` so when this history is
+  // replayed in a multi-user channel, the bot's tool-calling turn isn't
+  // misread as user speech (especially after Tier-C compression strips
+  // structural markers).
+  const assistantLines = ["[Eris said]"];
   const visibleText = textFromContent(msg?.content).trim();
   if (visibleText) assistantLines.push(visibleText);
   for (const slot of slots) {
@@ -191,13 +195,16 @@ function appendGeminiStyleToolHistory(history, msg, slots) {
   }
 
   history.push({ role: "model", parts: [{ text: assistantLines.join("\n").slice(0, 1900) }] });
+  // Tag the tool-result turn as a bot-side return value rather than ordinary
+  // user speech. Gemini requires user/model alternation so we have to push
+  // role:"user" here, but prefixing with `[tool runtime]` keeps the model
+  // from attributing the result text to whichever human spoke last.
   history.push({
     role: "user",
     parts: [{
-      text: slots
+      text: ("[tool runtime — not human speech]\n" + slots
         .map((slot) => `[tool result: ${slot.fnName || "unknown_tool"}] ${stringifyToolContent(slot.resultContent, 900)}`)
-        .join("\n")
-        .slice(0, 1900),
+        .join("\n")).slice(0, 1900),
     }],
   });
 }
@@ -426,6 +433,14 @@ export async function runOpenAICompatChat(_client, systemInstruction, tools, his
       finalText = msg.content || (toolsUsed.length ? "i already checked that, but got stuck finishing the answer. try again in a sec" : "");
       break;
     }
+  }
+
+  // Persist the final assistant text into the caller's history so the next
+  // turn doesn't see [tool_result] → [user] with no answer between them. Used
+  // to be missing — the model would re-call the same tool on the next message
+  // because it had no record of how the previous turn finally answered.
+  if (Array.isArray(history) && finalText) {
+    history.push({ role: "model", parts: [{ text: String(finalText).slice(0, 1900) }] });
   }
 
   return { text: finalText, toolsUsed };
