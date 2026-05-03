@@ -533,9 +533,15 @@ export function startPresenceAPI(client) {
             if (!requesterMember) {
               return j(404, { success: false, error: "requester is not a member of the guild" });
             }
+            // Build the synthetic message context with the REAL requester's
+            // identity. Hardcoding "twin-relay" used to leak into audit logs,
+            // moderation reasons, and embed footers — making it look like a
+            // user named "twin-relay" had taken the action.
+            const requesterUsername = requesterMember?.user?.username || "user";
+            const requesterDisplayName = requesterMember?.displayName || requesterMember?.nickname || requesterUsername;
             const fakeMessage = {
               guild, channel, client,
-              author: { id: requester_id, username: "twin-relay" },
+              author: { id: requester_id, username: requesterUsername, displayName: requesterDisplayName },
               member: requesterMember,
               reply: async (content) => channel.send(typeof content === "string" ? content : content.content).catch(() => {}),
             };
@@ -583,16 +589,21 @@ export function startPresenceAPI(client) {
             // "i can't do that" right after she just did, because the twin
             // path executes a tool without ever touching messageCreate's
             // conversation tracking.
+            //
+            // Push as `assistant` (was `user`) — pushing as user caused the
+            // next human message to be misattributed: Gemini saw the twin
+            // note as if the latest human said it, so the bot would try to
+            // address the action's content to that user.
             try {
               const channelKey = `ch-${channel_id}`;
               const argsStr = args && Object.keys(args).length
                 ? ` ${JSON.stringify(args).slice(0, 150)}`
                 : "";
-              const note = `[TWIN ACTION] eris asked me to ${command}${argsStr} — done: ${String(result).slice(0, 200)}`;
+              const note = `[Irene said] (twin action — eris asked) ${command}${argsStr} — done: ${String(result).slice(0, 200)}`;
               const { getConversations } = await import("./events/messageCreate.js");
               const convMap = getConversations();
               const history = convMap.get(channelKey) || [];
-              history.push({ role: "user", content: note });
+              history.push({ role: "assistant", content: note });
               if (history.length > 30) history.splice(0, history.length - 30);
               convMap.set(channelKey, history);
               db.saveConversation(channelKey, history);

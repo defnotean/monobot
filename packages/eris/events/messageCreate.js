@@ -645,8 +645,13 @@ export default async function messageCreate(message) {
 
       let crossChannelCtx = "";
       if (crossChannelData?.data?.length) {
+        // Prefix each snippet with "you said:" so the model can't conflate
+        // "this user said it elsewhere" with "this user IS the person they
+        // mentioned in the snippet". Without the prefix, a snippet like
+        // "alice told me X" gets re-injected and the bot starts addressing
+        // the speaker as alice.
         const summaries = crossChannelData.data.filter(m => !m.is_bot).map(m => m.content).slice(0, 3);
-        crossChannelCtx = `\n[CONTEXT: this user also recently said in other channels: ${spotlight(summaries.join(" | "), "cross_channel_snippet")}]`;
+        crossChannelCtx = `\n[CONTEXT: this user said in OTHER channels (not this one): ${summaries.map(s => `"${spotlight(s, "cross_channel_snippet")}"`).join(" | ")}]`;
       }
 
       // Resolve per-server name and personality
@@ -1011,10 +1016,15 @@ HOW TO INTERACT:
       const isGameMsg = /\b(bet|gamble|flip|slots?|spin|blackjack|hit|stand|double|roll|dice|daily|rob|steal|duel|challenge|accept|trivia|scramble|guess|roulette|rps|rock|paper|scissors|fortune|confess|curse|balance|coins?|leaderboard)\b/i.test(cleanMessage);
       const isSisterMsg = /\b(sister|twin|irene|talk to|tell her|tell your|ask her|ask your)\b/i.test(cleanMessage);
       if (!isTwinMsg && !isGameMsg && !isSisterMsg && looksLikeTask(cleanMessage)) {
-        const convClient = getConvClient();
-        // quickReply now static import (aliased as qr below)
-        if (!activeProviderNeedsGeminiClient() || convClient) {
-          quickReply(convClient, systemInstruction, cleanMessage, message).catch(() => {});
+        // Quick-reply is a Gemini-only acknowledgement pattern (fast flash model
+        // posting an ack while the slow worker call runs). On OpenRouter / NVIDIA
+        // the worker call IS the same model, and quickReply.context.reply() posts
+        // a second visible Discord reply — making the bot say "ok will do" while
+        // the tool-using path tries to do the actual work. Skip it entirely
+        // unless the active provider has a separate fast client.
+        if (activeProviderNeedsGeminiClient()) {
+          const convClient = getConvClient();
+          if (convClient) quickReply(convClient, systemInstruction, cleanMessage, message).catch(() => {});
         }
       }
 
@@ -1071,7 +1081,7 @@ HOW TO INTERACT:
           systemInstruction += `\n\n[MANDATORY_SEARCH — THIS MESSAGE REQUIRES RESEARCH]\nThe user's message is a factual question, assignment, or factual challenge. Your FIRST action this turn MUST be a web_search tool call. No "let me check" preamble — just call the tool. Fire multiple parallel web_search calls if the question has independent parts. After results arrive, answer in ONE short reply (≤ 250 chars) that pairs the answer with the reason from the search. Do NOT claim you "just checked" unless a web_search call appears in this turn's tool history.`;
         }
         _charBudget = isVent ? 400 : needsResearch ? 250 : 150;
-        systemInstruction += `\n\n[LENGTH BUDGET — this turn: reply MUST be ≤ ${_charBudget} characters. count your output chars. replies over this limit will be truncated by the system at the last sentence boundary. 1 short sentence if possible, 2 max. no preamble ("ok so", "anyway"), no trailing wrap-up ("pretty insane tbh"), no speculation past what you know for sure.]`;
+        systemInstruction += `\n\n[LENGTH BUDGET — this turn: VISIBLE reply text MUST be ≤ ${_charBudget} characters. count your output chars. replies over this limit will be truncated by the system at the last sentence boundary. 1 short sentence if possible, 2 max. no preamble ("ok so", "anyway"), no trailing wrap-up ("pretty insane tbh"), no speculation past what you know for sure. TOOL CALLS AND THEIR ARGUMENTS DO NOT COUNT — emit them whenever they're needed regardless of this budget.]`;
       }
 
       // ─── 4. AI CALL  +  5. TOOL DISPATCH (inline callback) ──────────────
@@ -1126,6 +1136,14 @@ HOW TO INTERACT:
         reply = reply.replace(/<tool_code>[\s\S]*?<\/tool_code>/gi, "").trim();
         reply = reply.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "").trim();
         reply = reply.replace(/<function_call>[\s\S]*?<\/function_call>/gi, "").trim();
+        // Strip leaked bracket-style tool call markers — `[tool call: name]{json}` with
+        // an optional balanced JSON or arg list. The provider's history converter
+        // (toMessages in providers/openaiCompat.js) renders past tool calls in this
+        // exact format, so the model learns to imitate it in fresh content.
+        reply = reply.replace(/\[tool[\s_-]?call:?\s*[^\]]+\]\s*(?:\{[\s\S]*?\}|\([^)]*\))?/gi, "").trim();
+        reply = reply.replace(/\[tool[\s_-]?result:?\s*[^\]]+\][^\n]*/gi, "").trim();
+        reply = reply.replace(/\[tool[\s_-]?runtime[^\]]*\]/gi, "").trim();
+        reply = reply.replace(/\[function[\s_-]?call:?\s*[^\]]+\]\s*(?:\{[\s\S]*?\})?/gi, "").trim();
         // Strip leaked code-style tool calls — print(tool_name()), tool_name(), etc.
         reply = reply.replace(/^\s*print\([^)]*\)\s*$/gim, "").trim();
         reply = reply.replace(/^\s*[a-z_]+\s*\(.*?\)\s*$/gim, "").trim();

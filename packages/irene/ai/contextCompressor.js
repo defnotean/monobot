@@ -110,7 +110,9 @@ function compressEntryTierC(entry) {
       : [];
     const firstSentence = text.match(/^[^.!?\n]+[.!?]?/)?.[0] || text.slice(0, 80);
     const toolSuffix = toolNames.length > 0 ? ` [tools: ${toolNames.join(",")}]` : "";
-    entry.content = firstSentence.slice(0, 100) + toolSuffix;
+    // Prefix "Irene said:" so multi-turn channels with multiple speakers don't
+    // misread compressed older bot text as user speech.
+    entry.content = `[Irene said] ${firstSentence.slice(0, 100)}${toolSuffix}`;
   }
 
   if (entry.role === "user") {
@@ -129,11 +131,19 @@ function compressEntryTierC(entry) {
       }).filter(Boolean);
       entry.content = summaries.length ? summaries.join(" ").slice(0, 200) : "[previous tool results]";
     } else if (typeof entry.content === "string") {
-      // Extract topic
-      const cleaned = entry.content.replace(/^\[\w+\]\n?/, "");
+      // Preserve any leading `[Name said]` speaker label — in a multi-user
+      // channel this is the only signal the model has for "who said what" in
+      // older turns. Stripping it caused the bot to address the wrong person.
+      const speakerMatch = entry.content.match(/^(\[[^\]]+(?:said|says)\])\s*/i)
+        || entry.content.match(/^(\[(?:User ID:[^\]]*\][^\n]*?)\])\s*/i);
+      const speakerLabel = speakerMatch ? speakerMatch[1] : "";
+      const body = speakerLabel ? entry.content.slice(speakerLabel.length).trimStart() : entry.content;
+      const cleaned = body.replace(/^\[\w+\]\n?/, "");
       if (cleaned.length > 100) {
         const firstSentence = cleaned.match(/^[^.!?\n]+[.!?]?/)?.[0] || cleaned.slice(0, 80);
-        entry.content = firstSentence.slice(0, 120);
+        entry.content = speakerLabel ? `${speakerLabel} ${firstSentence.slice(0, 120)}` : firstSentence.slice(0, 120);
+      } else if (speakerLabel && !entry.content.startsWith(speakerLabel)) {
+        entry.content = `${speakerLabel} ${cleaned}`;
       }
     }
   }

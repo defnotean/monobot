@@ -35,12 +35,22 @@ export async function execute(toolName, input, message, _context) {
         const embed = new EmbedBuilder()
           .setImage(gifUrl)
           .setColor(config.colors.gif || 0x2b2d31);
-        // Resolve @username mentions in caption to proper Discord <@id> pings
+        // Resolve @username mentions in caption to proper Discord <@id> pings.
+        // Refuse ambiguous names (two members both named "alex") and skip
+        // @everyone/@here so we don't accidentally mass-ping. Without these
+        // guards we'd ping whichever member the cache iterator yielded first.
         let resolvedCaption = input.caption || "";
         if (resolvedCaption && message.guild) {
           resolvedCaption = resolvedCaption.replace(/@(\w+)/g, (match, name) => {
-            const member = message.guild.members.cache.find(m => m.user.username.toLowerCase() === name.toLowerCase() || m.displayName.toLowerCase() === name.toLowerCase());
-            return member ? `<@${member.id}>` : match;
+            const lower = name.toLowerCase();
+            if (lower === "everyone" || lower === "here") return name; // strip the @
+            const matches = message.guild.members.cache.filter(m =>
+              m.user.username.toLowerCase() === lower
+              || m.displayName.toLowerCase() === lower
+              || m.user.globalName?.toLowerCase() === lower
+            );
+            if (matches.size === 1) return `<@${matches.first().id}>`;
+            return match; // 0 or 2+ matches — keep literal text, don't ping
           });
         }
         const sendOpts = resolvedCaption ? { content: resolvedCaption, embeds: [embed] } : { embeds: [embed] };

@@ -80,18 +80,28 @@ function compressTierC(entry) {
   if (!text) return text;
 
   if (entry.role === "model") {
-    // Bot: just keep the first sentence, no label prefix
+    // Bot replies: keep an "Eris said:" prefix so multi-turn channels with
+    // many speakers don't lose track of which turn was the bot's. Without
+    // this, compressed older bot text gets misread as user speech.
     const firstSentence = text.match(/^[^.!?\n]+[.!?]?/)?.[0] || text.slice(0, 80);
-    return firstSentence.slice(0, 100);
+    return `[Eris said] ${firstSentence.slice(0, 100)}`;
   }
 
-  // User: extract the core request/topic
-  const topic = extractTopic(text);
-  return topic;
+  // User: extract the core request/topic but PRESERVE the speaker label.
+  // In a 5-user channel the only signal the model has for "who said what"
+  // in older turns is this `[Name said]` prefix; stripping it caused the
+  // bot to address the wrong person.
+  const speakerMatch = text.match(/^(\[(?:User ID:[^\]]*\]\s*)?[^\]]+(?:said|says)\])\s*/i)
+    || text.match(/^(\[[^\]]+\])\s*/);
+  const speakerLabel = speakerMatch ? speakerMatch[1] : "";
+  const body = speakerLabel ? text.slice(speakerLabel.length).trimStart() : text;
+  const topic = extractTopic(body);
+  return speakerLabel ? `${speakerLabel} ${topic}` : topic;
 }
 
 function extractTopic(text) {
-  // Strip User ID prefix if present
+  // Strip the older `[User ID: 123] alice says:` shape if it survived the
+  // outer label match.
   const cleaned = text.replace(/^\[User ID: \d+\]\s*\w+\s*says:\s*/i, "");
 
   if (cleaned.length <= 100) return cleaned;

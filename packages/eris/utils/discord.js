@@ -90,11 +90,20 @@ export function getFeatureChannel(guild, db, feature) {
 /**
  * Resolve a user-supplied target string to a GuildMember.
  * Handles mentions (<@123>, <@!123>), raw IDs, usernames, and display names.
- * Returns null if no match found.
+ * Returns null if no match found OR if multiple members share the name —
+ * caller must surface a "be more specific / use mention" error in the
+ * ambiguous case rather than guessing.
  *
  * Replaces the broken pattern where `guild.members.fetch({ query })` was
  * called with a numeric ID (Discord's query searches by name, not ID).
  */
+function _normalizeNameKey(name) {
+  if (!name) return "";
+  let n = String(name);
+  try { n = n.normalize("NFKC"); } catch { /* keep raw */ }
+  return n.toLowerCase().trim();
+}
+
 export async function resolveMember(guild, raw) {
   if (!guild || !raw) return null;
   const cleaned = String(raw).replace(/[<@!>]/g, "").trim();
@@ -108,12 +117,20 @@ export async function resolveMember(guild, raw) {
   }
 
   try {
-    const members = await guild.members.fetch({ query: cleaned, limit: 5 });
-    const lower = cleaned.toLowerCase();
-    return members.find(m =>
-      m.user.username.toLowerCase() === lower ||
-      m.displayName.toLowerCase() === lower
-    ) || null;
+    const members = await guild.members.fetch({ query: cleaned, limit: 10 });
+    const key = _normalizeNameKey(cleaned);
+    const matches = [...members.values()].filter(m =>
+      _normalizeNameKey(m.user.username) === key
+      || _normalizeNameKey(m.displayName) === key
+      || _normalizeNameKey(m.user.globalName) === key
+      || _normalizeNameKey(m.nickname) === key
+    );
+    // Refuse to silently pick when two members share the name — caller should
+    // ask the user to disambiguate via @mention or ID. Previously we'd return
+    // whichever member iteration happened to yield first, which sometimes
+    // pinged/banned/affected the wrong "alex".
+    if (matches.length > 1) return null;
+    return matches[0] || null;
   } catch {
     return null;
   }
