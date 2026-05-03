@@ -199,25 +199,116 @@ function appendAnthropicToolHistory(history, msg, slots) {
   });
 }
 
+// Convert a single past turn into one or more OpenAI-shape messages.
+// Critical: when an assistant turn has Anthropic `tool_use` blocks (or Gemini
+// `functionCall` parts), reconstruct proper `assistant.tool_calls` + `role:"tool"`
+// pairs instead of stringifying as `[tool call: name]` prose. Stringification
+// taught the model to emit text-shaped tool calls in fresh content — the actual
+// `tool_calls` field stayed empty, so the action never ran.
+function turnToMessages(turn) {
+  const out = [];
+  const role = turn.role === "model" || turn.role === "assistant" ? "assistant" : "user";
+
+  // Anthropic-shape: { role, content: [block, block, ...] }
+  if (Array.isArray(turn.content)) {
+    const textParts = [];
+    const toolCalls = [];
+    const toolResults = [];
+    for (const block of turn.content) {
+      if (!block) continue;
+      if (typeof block === "string") { textParts.push(block); continue; }
+      if (block.type === "text" && block.text) textParts.push(block.text);
+      else if (block.type === "image") textParts.push("[image attached]");
+      else if (block.type === "tool_use") {
+        toolCalls.push({
+          id: String(block.id || `${block.name || "tool"}_${toolCalls.length}`),
+          type: "function",
+          function: {
+            name: block.name || "unknown_tool",
+            arguments: JSON.stringify(block.input || {}),
+          },
+        });
+      } else if (block.type === "tool_result") {
+        toolResults.push({
+          role: "tool",
+          tool_call_id: String(block.tool_use_id || block.id || `${block.tool_name || "tool"}_result`),
+          content: stringifyToolContent(block.content),
+        });
+      } else if (block.text) {
+        textParts.push(block.text);
+      }
+    }
+    if (role === "assistant") {
+      // Assistant turns can carry text + tool_calls together.
+      if (textParts.length || toolCalls.length) {
+        const msg = { role: "assistant", content: textParts.join("\n") || null };
+        if (toolCalls.length) msg.tool_calls = toolCalls;
+        out.push(msg);
+      }
+    } else {
+      // User turns of pure tool_results emit only role:"tool" messages so the
+      // OpenAI server-side validator can match each against the prior assistant
+      // call. Mixed turns push text first, then tool messages.
+      if (textParts.length && !toolResults.length) {
+        out.push({ role: "user", content: textParts.join("\n") });
+      } else if (textParts.length) {
+        out.push({ role: "user", content: textParts.join("\n") });
+      }
+    }
+    for (const tr of toolResults) out.push(tr);
+    return out;
+  }
+
+  // Gemini-shape: { role, parts: [{ text } | { functionCall } | { functionResponse }] }
+  if (Array.isArray(turn.parts)) {
+    const textParts = [];
+    const toolCalls = [];
+    const toolResults = [];
+    let i = 0;
+    for (const part of turn.parts) {
+      if (!part) continue;
+      if (part.text) textParts.push(part.text);
+      else if (part.functionCall) {
+        toolCalls.push({
+          id: `${part.functionCall.name || "tool"}_${i++}`,
+          type: "function",
+          function: {
+            name: part.functionCall.name || "unknown_tool",
+            arguments: JSON.stringify(part.functionCall.args || {}),
+          },
+        });
+      } else if (part.functionResponse) {
+        const resp = part.functionResponse.response || {};
+        toolResults.push({
+          role: "tool",
+          tool_call_id: `${part.functionResponse.name || "tool"}_${i++}`,
+          content: stringifyToolContent(resp.result ?? resp),
+        });
+      }
+    }
+    if (role === "assistant") {
+      if (textParts.length || toolCalls.length) {
+        const msg = { role: "assistant", content: textParts.join("\n") || null };
+        if (toolCalls.length) msg.tool_calls = toolCalls;
+        out.push(msg);
+      }
+    } else if (textParts.length) {
+      out.push({ role: "user", content: textParts.join("\n") });
+    }
+    for (const tr of toolResults) out.push(tr);
+    return out;
+  }
+
+  // String content fallback.
+  const text = textFromContent(turn.content);
+  if (text) out.push({ role, content: text });
+  return out;
+}
+
 function toMessages(systemInstruction, history, userMessage) {
   const messages = [{ role: "system", content: systemInstruction || "" }];
   for (const turn of history || []) {
-    const role = turn.role === "model" || turn.role === "assistant" ? "assistant" : "user";
-    let content = "";
-    if (turn.parts) {
-      content = turn.parts
-        .map((part) => {
-          if (part.text) return part.text;
-          if (part.functionCall) return `[tool call: ${part.functionCall.name}]`;
-          if (part.functionResponse) return `[tool result: ${part.functionResponse.name}] ${JSON.stringify(part.functionResponse.response || {})}`;
-          return "";
-        })
-        .filter(Boolean)
-        .join("\n");
-    } else {
-      content = textFromContent(turn.content);
-    }
-    if (content) messages.push({ role, content });
+    for (const m of turnToMessages(turn)) messages.push(m);
   }
 
   const last = messages[messages.length - 1];

@@ -276,10 +276,27 @@ describe("OpenAI-compatible provider (Irene)", () => {
       executor,
     });
 
+    // The next request body should reconstruct proper OpenAI-shape tool_calls
+    // from the Anthropic blocks, NOT stringify them as `[tool call: ...]` prose.
+    // The prose form taught the model to emit text-shaped tool calls in fresh
+    // content while leaving the real tool_calls field empty.
     const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
-    const promptText = body.messages.map((m: any) => m.content).filter(Boolean).join("\n");
-    expect(promptText).toContain("[tool result: send_gif]");
-    expect(promptText).toContain("how about hit the quan for me");
+    const assistantWithToolCalls = body.messages.find(
+      (m: any) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
+    );
+    expect(assistantWithToolCalls).toBeTruthy();
+    expect(assistantWithToolCalls.tool_calls[0].id).toBe("call_dab");
+    expect(assistantWithToolCalls.tool_calls[0].function.name).toBe("send_gif");
+
+    const toolResultMsg = body.messages.find(
+      (m: any) => m.role === "tool" && m.tool_call_id === "call_dab",
+    );
+    expect(toolResultMsg).toBeTruthy();
+
+    const userTurn = body.messages.find(
+      (m: any) => m.role === "user" && typeof m.content === "string" && m.content.includes("hit the quan"),
+    );
+    expect(userTurn).toBeTruthy();
   });
 
   it("guards duplicate tool calls and returns a visible fallback", async () => {

@@ -182,55 +182,150 @@ function stringifyToolContent(content, limit = 2500) {
 function appendGeminiStyleToolHistory(history, msg, slots) {
   if (!Array.isArray(history) || !slots?.length) return;
 
-  // Prefix the assistant turn with `[Eris said]` so when this history is
-  // replayed in a multi-user channel, the bot's tool-calling turn isn't
-  // misread as user speech (especially after Tier-C compression strips
-  // structural markers).
-  const assistantLines = ["[Eris said]"];
+  // Push STRUCTURED Gemini parts so the next turn's history converter
+  // (toMessages below) can reconstruct proper OpenAI tool_calls instead of
+  // stringifying as `[tool call: name]` prose. Stringifying taught the model
+  // to imitate that text format in fresh content while leaving the actual
+  // structured tool_calls field empty — the visible reply looked like a
+  // tool call but no action ever ran.
+  const assistantParts = [];
   const visibleText = textFromContent(msg?.content).trim();
-  if (visibleText) assistantLines.push(visibleText);
+  if (visibleText) assistantParts.push({ text: `[Eris said]\n${visibleText}`.slice(0, 1900) });
+  else assistantParts.push({ text: "[Eris said]" });
+
   for (const slot of slots) {
-    const args = slot.parseError ? "{malformed arguments}" : stableStringify(slot.fnArgs || {});
-    assistantLines.push(`[tool call: ${slot.fnName || "unknown_tool"}] ${args}`);
+    if (slot.parseError) continue; // can't reconstruct a malformed call
+    assistantParts.push({
+      functionCall: {
+        name: slot.fnName || "unknown_tool",
+        args: slot.fnArgs || {},
+        // Preserve the original tool_call id so the matching functionResponse
+        // can reference it. Stored on the part so toMessages can reuse it.
+        _id: String(slot.call?.id || `${slot.fnName || "tool"}_${Date.now()}`),
+      },
+    });
   }
 
-  history.push({ role: "model", parts: [{ text: assistantLines.join("\n").slice(0, 1900) }] });
-  // Tag the tool-result turn as a bot-side return value rather than ordinary
-  // user speech. Gemini requires user/model alternation so we have to push
-  // role:"user" here, but prefixing with `[tool runtime]` keeps the model
-  // from attributing the result text to whichever human spoke last.
-  history.push({
-    role: "user",
-    parts: [{
-      text: ("[tool runtime — not human speech]\n" + slots
-        .map((slot) => `[tool result: ${slot.fnName || "unknown_tool"}] ${stringifyToolContent(slot.resultContent, 900)}`)
-        .join("\n")).slice(0, 1900),
-    }],
-  });
+  history.push({ role: "model", parts: assistantParts });
+
+  // The matching functionResponse parts — one per slot. toMessages converts
+  // these into role:"tool" messages with the same tool_call_id so the OpenAI
+  // server-side validator can pair them with the assistant.tool_calls above.
+  const responseParts = slots.map((slot) => ({
+    functionResponse: {
+      name: slot.fnName || "unknown_tool",
+      response: { result: stringifyToolContent(slot.resultContent, 900) },
+      _id: String(slot.call?.id || `${slot.fnName || "tool"}_${Date.now()}`),
+    },
+  }));
+  history.push({ role: "user", parts: responseParts });
+}
+
+// Convert a single past turn into one or more OpenAI-shape messages.
+// Critical: when an assistant turn has Gemini `functionCall` parts (or
+// Anthropic `tool_use` blocks if a future caller sends them), reconstruct
+// proper `assistant.tool_calls` + `role:"tool"` pairs instead of stringifying
+// as `[tool call: name]` prose. Stringification taught the model to emit
+// text-shaped tool calls in fresh content — the actual `tool_calls` field
+// stayed empty, so the action never ran.
+function turnToMessages(turn) {
+  const out = [];
+  const role = turn.role === "model" || turn.role === "assistant" ? "assistant" : "user";
+
+  // Gemini-shape: { role, parts: [{ text } | { functionCall, _id } | { functionResponse, _id }] }
+  if (Array.isArray(turn.parts)) {
+    const textParts = [];
+    const toolCalls = [];
+    const toolResults = [];
+    let i = 0;
+    for (const part of turn.parts) {
+      if (!part) continue;
+      if (part.text) textParts.push(part.text);
+      else if (part.functionCall) {
+        const fc = part.functionCall;
+        toolCalls.push({
+          id: String(fc._id || `${fc.name || "tool"}_${i++}`),
+          type: "function",
+          function: {
+            name: fc.name || "unknown_tool",
+            arguments: JSON.stringify(fc.args || {}),
+          },
+        });
+      } else if (part.functionResponse) {
+        const fr = part.functionResponse;
+        const resp = fr.response || {};
+        toolResults.push({
+          role: "tool",
+          tool_call_id: String(fr._id || `${fr.name || "tool"}_${i++}`),
+          content: stringifyToolContent(resp.result ?? resp, 900),
+        });
+      }
+    }
+    if (role === "assistant") {
+      if (textParts.length || toolCalls.length) {
+        const msg = { role: "assistant", content: textParts.join("\n") || null };
+        if (toolCalls.length) msg.tool_calls = toolCalls;
+        out.push(msg);
+      }
+    } else if (textParts.length) {
+      out.push({ role: "user", content: textParts.join("\n") });
+    }
+    for (const tr of toolResults) out.push(tr);
+    return out;
+  }
+
+  // Anthropic-shape blocks (in case a future history entry uses this form).
+  if (Array.isArray(turn.content)) {
+    const textParts = [];
+    const toolCalls = [];
+    const toolResults = [];
+    for (const block of turn.content) {
+      if (!block) continue;
+      if (typeof block === "string") { textParts.push(block); continue; }
+      if (block.type === "text" && block.text) textParts.push(block.text);
+      else if (block.type === "image") textParts.push("[image attached]");
+      else if (block.type === "tool_use") {
+        toolCalls.push({
+          id: String(block.id || `${block.name || "tool"}_${toolCalls.length}`),
+          type: "function",
+          function: {
+            name: block.name || "unknown_tool",
+            arguments: JSON.stringify(block.input || {}),
+          },
+        });
+      } else if (block.type === "tool_result") {
+        toolResults.push({
+          role: "tool",
+          tool_call_id: String(block.tool_use_id || block.id || `${block.tool_name || "tool"}_result`),
+          content: stringifyToolContent(block.content),
+        });
+      } else if (block.text) {
+        textParts.push(block.text);
+      }
+    }
+    if (role === "assistant") {
+      if (textParts.length || toolCalls.length) {
+        const msg = { role: "assistant", content: textParts.join("\n") || null };
+        if (toolCalls.length) msg.tool_calls = toolCalls;
+        out.push(msg);
+      }
+    } else if (textParts.length) {
+      out.push({ role: "user", content: textParts.join("\n") });
+    }
+    for (const tr of toolResults) out.push(tr);
+    return out;
+  }
+
+  // String content fallback.
+  const text = textFromContent(turn.content);
+  if (text) out.push({ role, content: text });
+  return out;
 }
 
 function toMessages(systemInstruction, history, userMessage) {
   const messages = [{ role: "system", content: systemInstruction || "" }];
-
   for (const turn of history || []) {
-    const role = turn.role === "model" || turn.role === "assistant" ? "assistant" : "user";
-    let content = "";
-
-    if (turn.parts) {
-      content = turn.parts
-        .map((part) => {
-          if (part.text) return part.text;
-          if (part.functionCall) return `[tool call: ${part.functionCall.name}]`;
-          if (part.functionResponse) return `[tool result: ${part.functionResponse.name}] ${JSON.stringify(part.functionResponse.response || {})}`;
-          return "";
-        })
-        .filter(Boolean)
-        .join("\n");
-    } else {
-      content = textFromContent(turn.content);
-    }
-
-    if (content) messages.push({ role, content });
+    for (const m of turnToMessages(turn)) messages.push(m);
   }
 
   const last = messages[messages.length - 1];

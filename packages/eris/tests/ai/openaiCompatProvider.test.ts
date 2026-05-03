@@ -213,7 +213,7 @@ describe("OpenAI-compatible provider (Eris)", () => {
     });
   });
 
-  it("persists tool call summaries so later turns do not replay old actions", async () => {
+  it("persists tool calls as structured Gemini parts so later turns replay as proper OpenAI tool_calls (not prose)", async () => {
     const history: any[] = [{ role: "user", parts: [{ text: "[defnotean said]\nAlright Eris, dab for me" }] }];
     const executor = vi.fn(async (_name, args) => ({ ok: true, sent: args.query }));
 
@@ -242,8 +242,24 @@ describe("OpenAI-compatible provider (Eris)", () => {
     );
 
     expect(first).toEqual({ text: "", toolsUsed: ["send_gif"] });
-    expect(history[1].parts[0].text).toContain("[tool call: send_gif]");
-    expect(history[2].parts[0].text).toContain("[tool result: send_gif]");
+
+    // Assistant turn must carry a structured functionCall part — NOT a text-only
+    // `[tool call: ...]` prose serialization. The prose form taught the model
+    // to imitate it as text content while leaving the real tool_calls field empty.
+    const assistantTurn = history[1];
+    expect(assistantTurn.role).toBe("model");
+    const callPart = assistantTurn.parts.find((p: any) => p.functionCall);
+    expect(callPart?.functionCall?.name).toBe("send_gif");
+    expect(callPart?.functionCall?.args).toEqual({ query: "dab meme", caption: "" });
+    expect(callPart?.functionCall?._id).toBe("call_dab");
+
+    // Tool-result turn carries a structured functionResponse part with the
+    // matching _id so the next-turn converter can pair it with the assistant call.
+    const resultTurn = history[2];
+    expect(resultTurn.role).toBe("user");
+    const resultPart = resultTurn.parts.find((p: any) => p.functionResponse);
+    expect(resultPart?.functionResponse?.name).toBe("send_gif");
+    expect(resultPart?.functionResponse?._id).toBe("call_dab");
 
     history.push({ role: "user", parts: [{ text: "[defnotean said]\nhow about hit the quan for me" }] });
     mockFetchResponses(chatMessage({ role: "assistant", content: "fresh turn" }));
@@ -257,10 +273,26 @@ describe("OpenAI-compatible provider (Eris)", () => {
       executor,
     );
 
+    // The next request body should contain a real assistant.tool_calls field
+    // referencing the previous call, plus a role:"tool" message with the
+    // matching tool_call_id — NOT a stringified `[tool call: ...]` prose blob.
     const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
-    const promptText = body.messages.map((m: any) => m.content).filter(Boolean).join("\n");
-    expect(promptText).toContain("[tool result: send_gif]");
-    expect(promptText).toContain("how about hit the quan for me");
+    const assistantWithToolCalls = body.messages.find(
+      (m: any) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
+    );
+    expect(assistantWithToolCalls).toBeTruthy();
+    expect(assistantWithToolCalls.tool_calls[0].id).toBe("call_dab");
+    expect(assistantWithToolCalls.tool_calls[0].function.name).toBe("send_gif");
+
+    const toolResultMsg = body.messages.find(
+      (m: any) => m.role === "tool" && m.tool_call_id === "call_dab",
+    );
+    expect(toolResultMsg).toBeTruthy();
+
+    const userTurn = body.messages.find(
+      (m: any) => m.role === "user" && typeof m.content === "string" && m.content.includes("hit the quan"),
+    );
+    expect(userTurn).toBeTruthy();
   });
 
   it("does not open the main chat circuit when quick replies time out", async () => {
