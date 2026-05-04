@@ -26,7 +26,7 @@ export async function execute(toolName, input, message, ctx) {
 
   switch (toolName) {
     case "set_welcome_channel": {
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       setWelcomeChannel(guild.id, ch.id, input.welcome_message || null);
       return `Welcome channel set to #${ch.name}`;
@@ -151,7 +151,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "set_log_channel": {
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       setLogChannel(guild.id, ch.id);
       return `Mod log channel set to #${ch.name}`;
@@ -195,7 +195,7 @@ export async function execute(toolName, input, message, ctx) {
       }
 
       if (input.channel_name) {
-        const channel = findChannel(guild, input.channel_name);
+        const channel = findChannel(guild, input.channel_id || input.channel_name);
         if (!channel) return `Channel #${input.channel_name} not found`;
         config.channel_id = channel.id;
       }
@@ -297,7 +297,7 @@ export async function execute(toolName, input, message, ctx) {
       }
 
       if (input.channel_name) {
-        const channel = findChannel(guild, input.channel_name);
+        const channel = findChannel(guild, input.channel_id || input.channel_name);
         if (!channel) return `Channel #${input.channel_name} not found`;
         twitchConfig.channel_id = channel.id;
       }
@@ -380,7 +380,7 @@ export async function execute(toolName, input, message, ctx) {
 
       if (input.add_channel) {
         if (!input.channel_name) return "Please also specify channel_name (the Discord channel to post in).";
-        const ch = findChannel(guild, input.channel_name);
+        const ch = findChannel(guild, input.channel_id || input.channel_name);
         if (!ch) return `Channel #${input.channel_name} not found`;
         const result = addYoutubeFeed(guild.id, input.add_channel, ch.id);
         if (!result.success) return result.error;
@@ -435,7 +435,7 @@ export async function execute(toolName, input, message, ctx) {
 
       if (input.add_repo) {
         if (!input.channel_name) return "Please also specify channel_name (the Discord channel to post in).";
-        const ch = findChannel(guild, input.channel_name);
+        const ch = findChannel(guild, input.channel_id || input.channel_name);
         if (!ch) return `Channel #${input.channel_name} not found`;
         const branch = input.branch || "main";
         const result = addGithubFeed(guild.id, input.add_repo, ch.id, branch);
@@ -497,7 +497,7 @@ export async function execute(toolName, input, message, ctx) {
       if (!isOwner && !isAdmin) {
         return "Only admins (Manage Server) can teach me the rules.";
       }
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}" — try the channel name or #mention.`;
       if (!ch.isTextBased?.()) return `#${ch.name} isn't a text channel.`;
 
@@ -841,7 +841,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "setup_reaction_roles": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       if (!input.roles?.length) return "No roles provided";
 
@@ -926,7 +926,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "setup_starboard": {
-      const sbCh = findChannel(guild, input.channel_name);
+      const sbCh = findChannel(guild, input.channel_id || input.channel_name);
       if (!sbCh) return `Couldn't find channel "${input.channel_name}"`;
       const threshold = Math.max(1, Math.floor(input.threshold ?? 3));
       setStarboard(guild.id, sbCh.id, threshold);
@@ -934,7 +934,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "setup_role_picker": {
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       if (!input.roles?.length) return "No roles provided";
 
@@ -987,7 +987,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "setup_dropdown_roles": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       if (!input.roles?.length) return "No roles provided";
       if (input.roles.length > 25) return "Max 25 roles per dropdown menu";
@@ -1098,7 +1098,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "setup_color_roles": {
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
 
       const colors = input.colors ?? [];
@@ -1227,7 +1227,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "sticky_message": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
 
       const { setStickyMessage, updateStickyMessageId } = await import("../../database.js");
@@ -1259,7 +1259,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "remove_sticky": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       const { getStickyMessage, removeStickyMessage } = await import("../../database.js");
       const existing = getStickyMessage(guild.id, ch.id);

@@ -282,7 +282,7 @@ export async function execute(toolName, input, message, ctx) {
 
     case "configure_suggestions": {
       const { initSuggestionData, getSuggestionData } = await import("../../commands/utility/suggest.js");
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `couldn't find channel "${input.channel_name}"`;
       const { suggestionData } = await import("../../commands/utility/suggest.js");
       if (!suggestionData.has(guild.id)) suggestionData.set(guild.id, { channelId: null, suggestions: [], nextId: 1 });

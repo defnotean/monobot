@@ -91,25 +91,24 @@ export const NEW_EVERYONE_TOOLS = [
   },
   {
     name: "forget_memory",
-    description: "Forget a specific memory about a user. Use when someone says 'forget that', 'don't remember that', 'delete that memory', etc. Call recall_memories first to find the index, then call this to delete it.",
+    description: "Forget a specific memory about a user. Use when someone says 'forget that', 'don't remember that', 'delete memory at index N'. If `user` is omitted it defaults to the message author — most common case is the speaker asking you to forget THEIR own memory. Call recall_memories first if you need the index.",
     input_schema: {
       type: "object",
       properties: {
-        user: { type: "string", description: "Username whose memory to forget" },
+        user: { type: "string", description: "Username, mention, or Discord ID whose memory to forget — omit to use the message author (default)" },
         index: { type: "number", description: "1-based index of the memory to remove (from recall_memories list)" },
       },
-      required: ["user", "index"],
+      required: ["index"],
     },
   },
   {
     name: "clear_all_memories",
-    description: "Wipe ALL memories about a user. Use when someone says 'forget everything about me', 'clear my data', 'erase all my info', etc. This is permanent.",
+    description: "Wipe ALL memories about a user. Call this directly when someone says 'forget everything about me', 'clear my memories', 'erase all my data', 'wipe my info'. The `user` arg defaults to the message author when omitted (the most common case — speakers asking you to forget their own data). Permanent — the bot trusts the user's request and respects privacy without confirmation.",
     input_schema: {
       type: "object",
       properties: {
-        user: { type: "string", description: "Username whose memories to wipe completely" },
+        user: { type: "string", description: "Username, mention, or Discord ID — omit to use the message author (default)" },
       },
-      required: ["user"],
     },
   },
   {
@@ -184,13 +183,13 @@ export const NEW_ADMIN_TOOLS = [
   },
   {
     name: "set_level_channel",
-    description: "Set the text channel used for level-up announcements.",
+    description: "Set the text channel used for level-up announcements. Pass either channel_name or channel_id.",
     input_schema: {
       type: "object",
       properties: {
         channel_name: { type: "string", description: "Channel name for announcements" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
       },
-      required: ["channel_name"],
     },
   },
   {
@@ -230,7 +229,7 @@ export const NEW_ADMIN_TOOLS = [
   },
   {
     name: "list_invites",
-    description: "List all active server invites with their code, channel, inviter, and use count.",
+    description: "List all ACTIVE server invite codes with their channel, inviter, and use count. Use when the user says 'list invites', 'show server invites', 'what invite codes exist'. Do NOT use this for invite-tracking analytics (use invite_stats for that).",
     input_schema: {
       type: "object",
       properties: {},
@@ -249,7 +248,7 @@ export const NEW_ADMIN_TOOLS = [
   },
   {
     name: "invite_stats",
-    description: "View invite tracking data — who invited who, leaderboard of top inviters, or recent joins. Tracks which invite link each member used to join and whether they stayed or left.",
+    description: "View invite TRACKING data — leaderboard of top inviters, who invited whom, recent joins linked to invite codes. This is analytics about which member used which invite link to join, NOT a list of active invite codes (for that use list_invites). Use when the user says 'who's inviting people', 'invite leaderboard', 'invite tracker', 'top inviters'.",
     input_schema: {
       type: "object",
       properties: {

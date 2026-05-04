@@ -16,7 +16,7 @@ export async function execute(toolName, input, message, ctx) {
     case "edit_message": {
       try {
         const channel = input.channel_name
-          ? findChannel(guild, input.channel_name)
+          ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
 
@@ -37,7 +37,7 @@ export async function execute(toolName, input, message, ctx) {
     case "delete_message": {
       try {
         const channel = input.channel_name
-          ? findChannel(guild, input.channel_name)
+          ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
         const target = await channel.messages.fetch(input.message_id).catch(() => null);
@@ -53,7 +53,7 @@ export async function execute(toolName, input, message, ctx) {
     case "read_messages": {
       try {
         const channel = input.channel_name
-          ? findChannel(guild, input.channel_name)
+          ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
 
@@ -112,7 +112,7 @@ export async function execute(toolName, input, message, ctx) {
     case "search_messages": {
       try {
         const channel = input.channel_name
-          ? findChannel(guild, input.channel_name)
+          ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
 
@@ -145,7 +145,7 @@ export async function execute(toolName, input, message, ctx) {
     case "pin_message": {
       try {
         const channel = input.channel_name
-          ? findChannel(guild, input.channel_name)
+          ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
 
@@ -162,7 +162,7 @@ export async function execute(toolName, input, message, ctx) {
     case "unpin_message": {
       try {
         const channel = input.channel_name
-          ? findChannel(guild, input.channel_name)
+          ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
 
@@ -179,7 +179,7 @@ export async function execute(toolName, input, message, ctx) {
     case "list_pins": {
       try {
         const channel = input.channel_name
-          ? findChannel(guild, input.channel_name)
+          ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
 
@@ -203,7 +203,7 @@ export async function execute(toolName, input, message, ctx) {
     case "react_to_message": {
       try {
         const channel = input.channel_name
-          ? findChannel(guild, input.channel_name)
+          ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
 
@@ -220,7 +220,7 @@ export async function execute(toolName, input, message, ctx) {
     case "remove_reaction": {
       try {
         const channel = input.channel_name
-          ? findChannel(guild, input.channel_name)
+          ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
 

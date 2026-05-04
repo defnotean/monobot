@@ -34,7 +34,7 @@ export async function execute(toolName, input, message, ctx) {
 
     case "set_level_channel": {
       const { setLevelSettings, getLevelSettings } = await import("../../utils/leveling.js");
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `couldn't find channel "${input.channel_name}"`;
       const current = getLevelSettings(guild.id);
       setLevelSettings(guild.id, { ...current, announceChannel: ch.id });

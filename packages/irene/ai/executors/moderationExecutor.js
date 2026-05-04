@@ -411,7 +411,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "find_message": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
 
       const maxScan = Math.min(Math.max(input.limit || 200, 1), 500);
@@ -463,7 +463,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "purge_messages": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
 
       const maxScan = Math.min(Math.max(input.count || 100, 1), 500);

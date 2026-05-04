@@ -68,52 +68,60 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "delete_channel",
-    description: "Delete a channel from the server",
+    description: "Permanently delete a text or voice channel from the server. Pass either name or channel_id (snowflake). Cannot be undone.",
     input_schema: {
       type: "object",
-      properties: { name: { type: "string", description: "Channel name to delete" } },
-      required: ["name"],
+      properties: {
+        name: { type: "string", description: "Channel name (e.g. 'general')" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
+      },
     },
   },
   {
     name: "nuke_channel",
-    description: "Nuke/reset a channel — clones it and deletes the old one, wiping ALL messages. Defaults to current channel.",
-    input_schema: {
-      type: "object",
-      properties: { channel_name: { type: "string", description: "Channel name to nuke (optional — defaults to current)" } },
-    },
-  },
-  {
-    name: "rename_channel",
-    description: "Rename an existing channel. Use this only when the user wants the channel's displayed name changed, not when configuring channel permissions or VC systems.",
-    input_schema: {
-      type: "object",
-      properties: {
-        channel_name: { type: "string", description: "Current channel name" },
-        new_name: { type: "string", description: "New channel name to apply" },
-      },
-      required: ["channel_name", "new_name"],
-    },
-  },
-  {
-    name: "set_channel_topic",
-    description: "Set a text channel's topic/description",
+    description: "Nuke/reset a channel — clones it and deletes the old one, wiping ALL messages. Pass either channel_name or channel_id; defaults to current channel if neither given.",
     input_schema: {
       type: "object",
       properties: {
         channel_name: { type: "string", description: "Channel name (optional — defaults to current)" },
-        topic: { type: "string", description: "The new topic" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
+      },
+    },
+  },
+  {
+    name: "rename_channel",
+    description: "Rename an existing channel. Use this only when the user wants the channel's displayed name changed — not for permissions, not for VC systems. Pass either channel_name or channel_id to identify the target.",
+    input_schema: {
+      type: "object",
+      properties: {
+        channel_name: { type: "string", description: "Current channel name" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
+        new_name: { type: "string", description: "New channel name to apply" },
+      },
+      required: ["new_name"],
+    },
+  },
+  {
+    name: "set_channel_topic",
+    description: "Set a text channel's topic/description (the line that appears under the channel name). Pass either channel_name or channel_id; defaults to the current channel if neither is given.",
+    input_schema: {
+      type: "object",
+      properties: {
+        channel_name: { type: "string", description: "Channel name — optional, defaults to current channel" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
+        topic: { type: "string", description: "The new topic text" },
       },
       required: ["topic"],
     },
   },
   {
     name: "set_slowmode",
-    description: "Set slowmode on a channel",
+    description: "Set slowmode (per-user message cooldown) on a channel. Pass either channel_name or channel_id; defaults to current channel.",
     input_schema: {
       type: "object",
       properties: {
         channel_name: { type: "string", description: "Channel name (optional — defaults to current)" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
         seconds: { type: "number", description: "Slowmode seconds (0 = off, max 21600)" },
       },
       required: ["seconds"],
@@ -121,51 +129,59 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "lock_channel",
-    description: "Lock a channel — members can't send messages",
+    description: "Lock a text channel — members can't send messages. Pass either channel_name or channel_id; defaults to current channel.",
     input_schema: {
       type: "object",
-      properties: { channel_name: { type: "string", description: "Channel name (optional — defaults to current)" } },
+      properties: {
+        channel_name: { type: "string", description: "Channel name (optional — defaults to current)" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
+      },
     },
   },
   {
     name: "unlock_channel",
-    description: "Unlock a channel — members can send messages again",
+    description: "Unlock a text channel — members can send messages again. Pass either channel_name or channel_id; defaults to current channel.",
     input_schema: {
       type: "object",
-      properties: { channel_name: { type: "string", description: "Channel name (optional — defaults to current)" } },
+      properties: {
+        channel_name: { type: "string", description: "Channel name (optional — defaults to current)" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
+      },
     },
   },
   {
     name: "move_channel",
-    description: "Move a channel to a different category",
+    description: "Move a channel to a different category. Pass either channel_name or channel_id to identify which channel.",
     input_schema: {
       type: "object",
       properties: {
-        channel_name: { type: "string", description: "Channel to move" },
+        channel_name: { type: "string", description: "Channel to move (name)" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
         category_name: { type: "string", description: "Destination category" },
       },
-      required: ["channel_name", "category_name"],
+      required: ["category_name"],
     },
   },
   {
     name: "clone_channel",
-    description: "Clone/duplicate a channel with all its settings and permissions",
+    description: "Clone/duplicate a channel with all its settings and permissions. Pass either channel_name or channel_id to identify the source.",
     input_schema: {
       type: "object",
       properties: {
-        channel_name: { type: "string", description: "Channel to clone" },
+        channel_name: { type: "string", description: "Source channel name" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
         new_name: { type: "string", description: "Name for the clone (optional)" },
       },
-      required: ["channel_name"],
     },
   },
   {
     name: "set_channel_permissions",
-    description: "Set per-channel permission overrides for a role or user. This is how you lock channels to specific roles, hide channels, restrict who can send/speak, etc. Note: this sets CHANNEL-LEVEL overrides only, not global role permissions (those are set in Server Settings > Roles manually). Use null to reset/inherit a permission from the role's default.",
+    description: "Set per-channel permission OVERRIDES for a role or user — applies to ONE specific channel only. Use when the user says 'lock #x to the staff role', 'hide #x from everyone except', 'let only X send messages in #y'. Do NOT use this for: server-wide role permissions (use set_role_permissions); for unlocking the speaker's temp VC (use vc_unlock); for the simple 'lock channel' / 'unlock channel' commands (use lock_channel / unlock_channel which apply to @everyone). Use null to reset/inherit a permission from the role's default.",
     input_schema: {
       type: "object",
       properties: {
         channel_name: { type: "string", description: "Channel name to set permissions on (defaults to current channel)" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
         target: { type: "string", description: "Role name or username to set permissions for" },
         target_type: { type: "string", enum: ["user", "role"], description: "Whether target is a user or role" },
         reset: { type: "boolean", description: "If true, removes all permission overrides for this target on this channel (reset to default)" },
@@ -209,7 +225,7 @@ export const ADMIN_TOOLS = [
   // ─── Role Management ────────────────────────────────────────────────
   {
     name: "set_role_permissions",
-    description: "Set global server-wide permissions for a role — what that role can do anywhere in the server by default. These are the same permissions shown in Server Settings > Roles. Pass true to grant, false to deny, or omit to leave unchanged.",
+    description: "Set GLOBAL server-wide permissions for a ROLE — what that role can do anywhere in the server by default. These are the permissions shown in Server Settings → Roles. Use when the user says 'set permissions for the X role', 'give the Member role permission to send messages', 'change role permissions for X'. Do NOT use set_channel_permissions — that's for per-channel overrides on a SPECIFIC channel, not the role's global perms. Pass true to grant, false to deny, or omit to leave unchanged.",
     input_schema: {
       type: "object",
       properties: {
@@ -395,11 +411,11 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "kick_user",
-    description: "Kick a user from the server",
+    description: "Kick a user from the server. Pass username, mention <@id>, or bare Discord ID — findMember resolves all three.",
     input_schema: {
       type: "object",
       properties: {
-        username: { type: "string", description: "Username to kick" },
+        username: { type: "string", description: "Username, @mention, or Discord ID of the person to kick" },
         reason: { type: "string", description: "Reason for audit logs or moderation record" },
       },
       required: ["username"],
@@ -570,10 +586,10 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "disconnect_user_from_voice",
-    description: "Disconnect a user from their current voice channel",
+    description: "Disconnect a user from their current voice channel. Pass username, mention <@id>, or bare Discord ID — findMember resolves all three.",
     input_schema: {
       type: "object",
-      properties: { username: { type: "string", description: "Target Discord username or mention" } },
+      properties: { username: { type: "string", description: "Username, @mention, or Discord ID of the user to disconnect" } },
       required: ["username"],
     },
   },
@@ -1028,11 +1044,11 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "set_vc_default_limit",
-    description: "Set the default user limit for newly created temp VCs. 0 = unlimited.",
+    description: "Set the SERVER-WIDE default user limit applied to every NEW temp VC created from now on. Admin/setup tool — do NOT use for the speaker's own current VC (that's vc_lock). 0 = unlimited.",
     input_schema: {
       type: "object",
       properties: {
-        limit: { type: "number", description: "Max users per VC (0 = unlimited)" },
+        limit: { type: "number", description: "Max users per newly-created temp VC (0 = unlimited)" },
       },
       required: ["limit"],
     },
@@ -1062,14 +1078,14 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "set_afk_channel",
-    description: "Set the AFK voice channel - users who self-deafen for too long get auto-moved there. Do not use this for join-to-create setup; use set_create_vc_channel.",
+    description: "Set the AFK voice channel — users who self-deafen for too long get auto-moved there. Pass either channel_name or channel_id. Do not use this for join-to-create setup; use set_create_vc_channel.",
     input_schema: {
       type: "object",
       properties: {
-        channel_name: { type: "string", description: "Voice channel to use as AFK channel" },
+        channel_name: { type: "string", description: "Voice channel name to use as AFK channel" },
+        channel_id: { type: "string", description: "Voice channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
         timeout_minutes: { type: "number", description: "Minutes of inactivity before the AFK check fires (default: 30)" },
       },
-      required: ["channel_name"],
     },
   },
   // ═══════════════════════════════════════════════════════════════════
@@ -1078,11 +1094,11 @@ export const ADMIN_TOOLS = [
   // ─── Messaging / Content ────────────────────────────────────────────
   {
     name: "send_message",
-    description: "Send a rich embed or message to a channel — optionally with BUTTONS and/or a DROPDOWN attached. This is the most versatile tool: combine embeds + buttons + dropdowns in ONE message for info panels, role pickers, navigation menus, welcome screens, etc. Chain multiple send_message calls to build entire channel layouts. Embed descriptions support FULL Discord markdown: # headers, -# subtext, **bold**, > blockquotes, [masked links](url), ||spoilers||, `code`, and decorative unicode separators. Use \\n for newlines.",
+    description: "Send a rich embed or message to a channel — optionally with BUTTONS and/or a DROPDOWN attached. Pass either channel_name or channel_id to target the channel. This is the most versatile tool: combine embeds + buttons + dropdowns in ONE message for info panels, role pickers, navigation menus, welcome screens, etc. Chain multiple send_message calls to build entire channel layouts. Embed descriptions support FULL Discord markdown: # headers, -# subtext, **bold**, > blockquotes, [masked links](url), ||spoilers||, `code`, and decorative unicode separators. Use \\n for newlines.",
     input_schema: {
       type: "object",
       properties: {
-        channel_name: { type: "string", description: "Channel to send to" },
+        channel_name: { type: "string", description: "Channel to send to — name OR ID; the executor accepts both via findChannel" },
         content: { type: "string", description: "Plain text above the embed (optional if embed is used)" },
         embed_title: { type: "string", description: "Embed title — keep short and iconic, use decorative unicode (⊹ ✦ ꒰꒱ ──)" },
         embed_description: { type: "string", description: "Main embed body — supports full Discord markdown: # ## ### headers, -# subtext (small muted text), **bold**, > blockquotes, [text](url) masked links, ||spoilers||, `code`. Use \\n for newlines, \\n\\n for spacing. Use decorative separators (━━━, ── ⊹ ──) and unicode bullets (✦ » ▸ ›) for visual hierarchy" },
@@ -1256,14 +1272,14 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "set_leave_channel",
-    description: "Set the channel and message for leave notifications when members leave the server",
+    description: "Set the channel and message for leave notifications when members leave the server. Pass either channel_name or channel_id.",
     input_schema: {
       type: "object",
       properties: {
-        channel_name: { type: "string", description: "Channel to post leave messages in" },
+        channel_name: { type: "string", description: "Channel name to post leave messages in" },
+        channel_id: { type: "string", description: "Channel ID (Discord snowflake) — preferred when the user gives an ID directly" },
         message: { type: "string", description: "Leave message (supports {username}, {user}, {server}, {membercount})" },
       },
-      required: ["channel_name"],
     },
   },
   {
@@ -1752,7 +1768,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "now_playing",
-    description: "Show what song is currently playing.",
+    description: "Show the SONG currently playing in the music player (title, artist, duration). Use whenever the user asks 'what's playing', 'what song is this', 'now playing'. Do NOT use vc_info for this — that's for voice channel members/info, not the music track.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -1883,7 +1899,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "get_user_info",
-    description: "Get info about a user (join date, roles, etc.)",
+    description: "Get GENERAL profile info about a user — join date, roles, status, account creation, avatar. Do NOT use for birthdays or ages — use get_birthday for anything age/birthday related (birthdays are stored separately and get_birthday returns the exact age).",
     input_schema: {
       type: "object",
       properties: { username: { type: "string", description: "Username to look up" } },
@@ -1957,7 +1973,7 @@ export const EVERYONE_TOOLS = [
   // ─── Temp VC Controls (for channel owners) ─────────────────────────
   {
     name: "vc_info",
-    description: "Show info about the voice channel you're currently in — members, what they're playing, owner, limit, bitrate",
+    description: "Show info about the voice channel the SPEAKER is currently in — members in the channel, the games each person is playing, owner, user limit, bitrate. Do NOT use this for the music player — for the currently-playing SONG use now_playing. Do NOT use this to rename — use vc_rename.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -1972,7 +1988,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "vc_lock",
-    description: "Lock your VC's user limit. If no limit given, locks to the current member count.",
+    description: "Lock the user limit on the SPEAKER'S OWN temp voice channel — they must already be in a temp VC they own. Use when the user says 'lock my vc to N', 'cap my channel at N', 'no more than N people'. Do NOT use for server-wide defaults (that's set_vc_default_limit) or for permission locks (lock_channel).",
     input_schema: {
       type: "object",
       properties: {
@@ -1982,15 +1998,15 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "vc_unlock",
-    description: "Remove the user limit from your temp VC so anyone can join",
+    description: "Remove the user-count limit from the SPEAKER'S OWN temp voice channel so anyone can join (no permissions changed). Use when the user says 'unlock my vc', 'remove the limit', 'open my channel'. Do NOT use set_channel_permissions for this — that's for permanent permission overrides on regular channels, not temp VCs.",
     input_schema: { type: "object", properties: {} },
   },
   {
     name: "vc_rename",
-    description: "Rename your temp voice channel",
+    description: "RENAMES the SPEAKER'S OWN temp voice channel. The channel is identified by the speaker's current voice state — no channel name/ID needed in args. Use ONLY when the user wants to CHANGE the name of their voice channel ('rename my vc to X', 'call my channel X', 'change my vc name'). Do NOT confuse with vc_info (which only DISPLAYS info) or with rename_channel (which renames any non-temp channel).",
     input_schema: {
       type: "object",
-      properties: { name: { type: "string", description: "New channel name" } },
+      properties: { name: { type: "string", description: "New name to set on the speaker's current temp VC" } },
       required: ["name"],
     },
   },
@@ -2005,12 +2021,12 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "vc_kick",
-    description: "Kick someone out of your temp voice channel. Optionally ban them from rejoining.",
+    description: "Kick someone out of the SPEAKER'S OWN temp voice channel — owner-only action. Use when the user says 'kick X from my vc', 'boot X out of my channel'. Do NOT confuse with disconnect_user_from_voice (a moderation tool that kicks anyone from any voice channel; admin-only). Optionally ban them from rejoining your VC. Pass username, mention, or Discord ID.",
     input_schema: {
       type: "object",
       properties: {
-        username: { type: "string", description: "Username to kick" },
-        ban: { type: "boolean", description: "Prevent them from rejoining (default: false)" },
+        username: { type: "string", description: "Username, @mention, or Discord ID of the user to kick from your VC" },
+        ban: { type: "boolean", description: "Prevent them from rejoining your VC (default: false)" },
       },
       required: ["username"],
     },
@@ -2047,7 +2063,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "reminder_cancel",
-    description: "Cancel a previously set reminder by ID",
+    description: "Cancel a USER-SET REMINDER by its reminder ID — the kind set with reminder_set. Use whenever the user says 'cancel reminder N', 'remove my reminder', 'forget that reminder'. Do NOT use cancel_scheduled_task for this — that's for recurring/automated bot tasks, reminders are a separate system.",
     input_schema: {
       type: "object",
       properties: {
@@ -2076,7 +2092,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "cancel_scheduled_task",
-    description: "Cancel a pending scheduled task by its ID before it fires.",
+    description: "Cancel a pending SCHEDULED TASK (a recurring/automated bot action) by its ID. Do NOT use this for reminders — use reminder_cancel for cancelling a user-set reminder. Scheduled tasks and reminders are separate systems.",
     input_schema: {
       type: "object",
       properties: {
@@ -2145,7 +2161,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "web_read",
-    description: "Fetch and read the text content of a web page URL. Use after web_search to get detailed info from a specific result, or when a user shares a link and asks about it.",
+    description: "Fetch and read the FULL TEXT of a SPECIFIC web page given its URL. Use when the user provides an explicit URL and asks you to read/scrape/summarize that page. Do NOT use web_search for this — web_search returns a list of results from a query string, web_read fetches the actual text of one URL.",
     input_schema: {
       type: "object",
       properties: {

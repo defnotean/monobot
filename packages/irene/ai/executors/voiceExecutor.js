@@ -30,7 +30,7 @@ export async function execute(toolName, input, message, ctx) {
       const member = findMember(guild, input.username);
       if (!member) return `Couldn't find user "${input.username}"`;
       if (!member.voice.channel) return `${member.user.tag} is not in a voice channel`;
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find voice channel "${input.channel_name}"`;
       await member.voice.setChannel(ch, `Moved ${by}`);
       return `Moved ${member.user.tag} to ${ch.name}`;

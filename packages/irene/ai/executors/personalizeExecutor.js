@@ -63,7 +63,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "set_channel_personality": {
-      const personalityCh = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const personalityCh = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!personalityCh) return `Couldn't find channel "${input.channel_name}"`;
       setChannelPersonality(guild.id, personalityCh.id, input.prompt || null);
       return input.prompt
@@ -79,7 +79,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "set_leave_channel": {
-      const leaveCh = findChannel(guild, input.channel_name);
+      const leaveCh = findChannel(guild, input.channel_id || input.channel_name);
       if (!leaveCh) return `Couldn't find channel "${input.channel_name}"`;
       setLeaveChannel(guild.id, leaveCh.id, input.message || null);
       return `Leave messages will be posted in #${leaveCh.name}${input.message ? " with the custom message" : ""}`;

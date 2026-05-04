@@ -54,7 +54,9 @@ export async function execute(toolName, input, message, ctx) {
 
     case "forget_memory": {
       const { removeMemory, getMemories } = await import("../memory.js");
-      const target = findMember(guild, input.user);
+      // Default to the message author when `user` is omitted — the most common
+      // case is the speaker asking to forget their own memory.
+      let target = input.user ? findMember(guild, input.user) : message.member;
       if (!target) return `couldn't find user "${input.user}"`;
       if (target.id !== message.author.id && !message.member?.permissions?.has?.("Administrator")) {
         return "you can only forget your own memories — admins can forget anyone's";
@@ -70,7 +72,9 @@ export async function execute(toolName, input, message, ctx) {
 
     case "clear_all_memories": {
       const { clearMemories } = await import("../memory.js");
-      const target = findMember(guild, input.user);
+      // Default to the message author when `user` is omitted — most common
+      // case is the speaker asking to clear their own memories.
+      let target = input.user ? findMember(guild, input.user) : message.member;
       if (!target) return `couldn't find user "${input.user}"`;
       if (target.id !== message.author.id && !message.member?.permissions?.has?.("Administrator")) {
         return "you can only clear your own memories — admins can clear anyone's";
@@ -80,7 +84,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "summarize_channel": {
-      const channel = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const channel = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!channel) return `couldn't find channel "${input.channel_name}"`;
       const count = Math.min(input.message_count || 50, 200);
       try {

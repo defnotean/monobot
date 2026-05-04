@@ -474,13 +474,13 @@ export const EVERYONE_TOOLS = [
   {
     name: "untrack_game",
     description:
-      "Stop tracking game updates for a specific watch. Use when someone says 'stop tracking X', 'remove game watch', 'unwatch X'. Call list_game_watches first if you need the watch ID.",
+      "Stop tracking game updates. Call this directly when the user names a game ('stop tracking marvel rivals', 'unwatch valorant'); the executor accepts a game name as well as a watch ID. Do NOT call list_game_watches first unless the user asks to see them.",
     input_schema: {
       type: "object",
       properties: {
-        watch_id: { type: "string", description: "The watch ID to remove (get it from list_game_watches)" },
+        watch_id: { type: "string", description: "The watch ID to remove (from list_game_watches)" },
+        game: { type: "string", description: "Game name to unwatch — used when the user named a game directly without listing first" },
       },
-      required: ["watch_id"],
     },
   },
   {
@@ -575,13 +575,13 @@ export const EVERYONE_TOOLS = [
   {
     name: "unwatch_price",
     description:
-      "Stop watching a product's price by its watch ID. Use when someone no longer cares about a price they were tracking.",
+      "Stop watching a product's price. Pass either watch_id (from check_prices) OR product_name — the executor matches on either. Use when someone says 'stop watching the laptop price', 'cancel my price watch', etc. Do NOT call check_prices first unless the user asks to see them.",
     input_schema: {
       type: "object",
       properties: {
-        watch_id: { type: "string", description: "The unique ID of the price watch to remove" },
+        watch_id: { type: "string", description: "The unique ID of the price watch (from check_prices)" },
+        product_name: { type: "string", description: "Product name to match against — used when the user named the product directly without listing first" },
       },
-      required: ["watch_id"],
     },
   },
 
@@ -735,16 +735,16 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "list_roles_by_category",
-    description: "List all server roles that match a given category, based on their ACTUAL Discord permissions (not role names). Use this when someone asks vague things like 'who are the mods here', 'who's staff', 'ping all admins', etc — you'll get only the roles that actually carry that power, ignoring cosmetic roles that just happen to be named similar things (someone's pink 'Moderator' vanity role won't leak in). Categories: 'admin' (Administrator or ManageGuild), 'moderator' (Ban/Kick/Timeout/ManageRoles/ManageChannels), 'helper' (ManageMessages/MuteMembers/ViewAuditLog etc.), 'bot' (integration roles), 'everyone' (@everyone), 'cosmetic' (no dangerous perms). Meta-categories: 'staff' (admin + moderator), 'trusted' (admin + moderator + helper).",
+    description: "List all server roles grouped by power category, based on their ACTUAL Discord permissions (not role names). Use when someone asks 'who are the mods', 'who's staff', 'ping all admins', or just 'list roles by category'. If no category is given, returns ALL categories (default: 'all'). Specific categories: 'admin' (Administrator or ManageGuild), 'moderator' (Ban/Kick/Timeout/ManageRoles/ManageChannels), 'helper' (ManageMessages/MuteMembers/ViewAuditLog), 'bot' (integration roles), 'everyone' (@everyone), 'cosmetic' (no dangerous perms). Meta: 'staff' (admin + moderator), 'trusted' (admin + moderator + helper).",
     input_schema: {
       type: "object",
       properties: {
         category: {
           type: "string",
-          description: "One of: admin, moderator, helper, bot, everyone, cosmetic, staff, trusted.",
+          enum: ["all", "admin", "moderator", "helper", "bot", "everyone", "cosmetic", "staff", "trusted"],
+          description: "Which category to list (default: 'all' — returns every category)",
         },
       },
-      required: ["category"],
     },
   },
   {
@@ -953,8 +953,8 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "shop_buy",
-    description: "Buy an item from the shop with coins. Use when someone says 'buy X', 'purchase', 'I want to buy'.",
-    input_schema: { type: "object", properties: { item: { type: "string", description: "Name of the item to buy" } }, required: ["item"] },
+    description: "Buy a SPECIFIC named item from the shop with coins. Call this DIRECTLY whenever the user names an item to buy — 'buy a Lucky Charm', 'buy Wedding Ring', 'purchase Fishing Rod', 'I want a Loot Box'. Do NOT call shop_browse first if the user already named the item — go straight to shop_buy. shop_browse is only for 'what can i buy' / 'show me the shop' (browsing without a named item).",
+    input_schema: { type: "object", properties: { item: { type: "string", description: "Name of the item to buy (e.g. 'Lucky Charm', 'Wedding Ring')" } }, required: ["item"] },
   },
   {
     name: "inventory_check",
@@ -1588,11 +1588,11 @@ export const OWNER_TOOLS = [
   {
     name: "launch_app",
     description:
-      "Launch an application or script on the host machine. Owner-only. Use when defnotean wants to start a program, open a tool, or kick off a background process.",
+      "Launch a desktop application by name on the host machine — Chrome, Notepad, Spotify, Discord, etc. Owner-only. ALWAYS prefer this over execute_terminal for opening apps: 'open chrome', 'launch spotify', 'start notepad', 'run discord' all map to launch_app. execute_terminal is for shell commands (ls, git, docker), NOT for opening user-facing apps.",
     input_schema: {
       type: "object",
       properties: {
-        app: { type: "string", description: "Application name or path to executable" },
+        app: { type: "string", description: "Application name or path to executable (e.g. 'chrome', 'notepad', 'C:/Program Files/X/x.exe')" },
         args: { type: "string", description: "Optional command-line arguments to pass to the application" },
       },
       required: ["app"],
@@ -1730,16 +1730,35 @@ export const OWNER_TOOLS = [
   },
   {
     name: "ask_irene",
-    description: "Tell your twin sister Irene to execute a server management command via API. Only works for the creator or trusted users (the tool checks permissions internally, you just call it). Use when someone says 'clean chat', 'purge', 'delete messages', 'lock channel', 'unlock', 'slowmode', 'tell irene to...', 'ask your sister to...', 'clean up'. DO NOT refuse to try — just call the tool and it will check permissions itself. Commands: purge, lock, unlock, slowmode, nickname, announce.",
+    description: "Delegate ANY server-management action to your twin sister Irene via the twin API. Permission checks happen inside the tool — DO NOT refuse to try, just call it. Supported commands: purge (delete messages), lock/unlock (channel), slowmode, nickname (set someone's nick), announce (post a message), create_channel (new text/voice channel), set_log_channel, set_welcome_channel, create_role, give_role, remove_role, set_topic, ban, kick, warn, timeout. Use whenever someone says 'tell irene to X', 'ask your sister to X', 'have irene X', or any server-management ask that isn't your own job.",
     input_schema: {
       type: "object",
       properties: {
-        command: { type: "string", description: "Command to execute: purge, lock, unlock, slowmode, nickname, announce" },
-        count: { type: "number", description: "For purge: number of messages to delete (1-100)" },
-        seconds: { type: "number", description: "For slowmode: seconds of slowmode (0 to disable)" },
-        target_username: { type: "string", description: "For nickname: username of the person to rename" },
-        nickname: { type: "string", description: "For nickname: the new nickname to set (omit to reset)" },
-        announcement: { type: "string", description: "For announce: the message to send" },
+        command: {
+          type: "string",
+          enum: [
+            "purge", "lock", "unlock", "slowmode", "nickname", "announce",
+            "create_channel", "set_log_channel", "set_welcome_channel",
+            "create_role", "give_role", "remove_role", "set_topic",
+            "ban", "kick", "warn", "timeout",
+          ],
+          description: "Which command Irene should run",
+        },
+        count: { type: "number", description: "For purge: number of messages (1-100)" },
+        seconds: { type: "number", description: "For slowmode: seconds (0 to disable)" },
+        target_username: { type: "string", description: "For nickname/give_role/remove_role/ban/kick/warn/timeout: who to act on (username, mention, or ID)" },
+        nickname: { type: "string", description: "For nickname: new nick (omit to reset)" },
+        announcement: { type: "string", description: "For announce: the message to post" },
+        channel_name: { type: "string", description: "For create_channel: the channel's name" },
+        channel_id: { type: "string", description: "For set_log_channel/set_welcome_channel: the channel ID (defaults to current channel)" },
+        category: { type: "string", description: "For create_channel: optional category name" },
+        type: { type: "string", enum: ["text", "voice"], description: "For create_channel: 'text' or 'voice' (default text)" },
+        private: { type: "boolean", description: "For create_channel: whether the channel should be private" },
+        role_name: { type: "string", description: "For create_role/give_role/remove_role: the role's name" },
+        color: { type: "string", description: "For create_role: hex color or color name" },
+        topic: { type: "string", description: "For set_topic: the channel topic text" },
+        reason: { type: "string", description: "For ban/kick/warn/timeout: reason for the action" },
+        duration: { type: "string", description: "For timeout: how long (e.g. '5m', '1h', '1d')" },
       },
       required: ["command"],
     },

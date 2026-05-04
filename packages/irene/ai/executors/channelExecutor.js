@@ -85,17 +85,19 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "delete_channel": {
-      const ch = findChannel(guild, input.name);
-      if (!ch) return `Couldn't find channel "${input.name}"`;
+      const target = input.channel_id || input.name || input.channel_name;
+      const ch = findChannel(guild, target);
+      if (!ch) return `Couldn't find channel "${target}"`;
       const name = ch.name;
       await ch.delete(`Deleted ${by}`);
-      logAudit(guild.id, "delete_channel", message.author.id, input.name);
+      logAudit(guild.id, "delete_channel", message.author.id, target);
       return `Deleted channel #${name}`;
     }
 
     case "nuke_channel": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
-      if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const target = input.channel_id || input.channel_name;
+      const ch = target ? findChannel(guild, target) : message.channel;
+      if (!ch) return `Couldn't find channel "${target}"`;
       if (!ch.isTextBased()) return "Can only nuke text channels";
       const name = ch.name;
       const clone = await ch.clone({ reason: `Nuked ${by}` });
@@ -103,12 +105,12 @@ export async function execute(toolName, input, message, ctx) {
       await ch.delete(`Nuked ${by}`);
       await clone.send(`Channel has been reset by ${message.author}.`);
       await sendModLog(guild, modEmbed("Channel Nuked", `**Channel:** #${name}\n**By:** ${message.author.tag}`));
-      logAudit(guild.id, "nuke_channel", message.author.id, input.channel_name);
+      logAudit(guild.id, "nuke_channel", message.author.id, name);
       return `Nuked #${name} — all messages wiped`;
     }
 
     case "rename_channel": {
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       const old = ch.name;
       await ch.setName(input.new_name, `Renamed ${by}`);
@@ -116,14 +118,14 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "set_channel_topic": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       await ch.setTopic(input.topic, `Set ${by}`);
       return `Set topic for #${ch.name}`;
     }
 
     case "set_slowmode": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       const seconds = Math.min(Math.max(Math.floor(input.seconds ?? 0), 0), 21600);
       await ch.setRateLimitPerUser(seconds, `Set ${by}`);
@@ -131,21 +133,21 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "lock_channel": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       await ch.permissionOverwrites.edit(guild.id, { SendMessages: false }, { reason: `Locked ${by}` });
       return `Locked #${ch.name}`;
     }
 
     case "unlock_channel": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       await ch.permissionOverwrites.edit(guild.id, { SendMessages: null }, { reason: `Unlocked ${by}` });
       return `Unlocked #${ch.name}`;
     }
 
     case "move_channel": {
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       const cat = guild.channels.cache.find((c) => c.name.toLowerCase() === input.category_name.toLowerCase() && c.type === ChannelType.GuildCategory);
       if (!cat) return `Couldn't find category "${input.category_name}"`;
@@ -154,14 +156,14 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "clone_channel": {
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       const clone = await ch.clone({ name: input.new_name || `${ch.name}-copy`, reason: `Cloned ${by}` });
       return `Cloned #${ch.name} as #${clone.name}`;
     }
 
     case "set_channel_permissions": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       let target;
       if (input.target_type === "user") {

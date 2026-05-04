@@ -171,17 +171,27 @@ export async function execute(toolName, input, message, _context) {
     case "list_roles_by_category": {
       if (!message.guild) return "role categorization only works in servers";
       const { getRolesByCategory, categorizeRole } = await import("@defnotean/shared/roleCategorizer");
-      const category = String(input?.category || "").trim().toLowerCase();
-      if (!category) return "pass a category — one of: admin, moderator, helper, bot, everyone, cosmetic, staff, trusted.";
-      const matches = getRolesByCategory(message.guild, category);
-      if (!matches.length) return `no roles in this server are categorized as **${category}**. (categorization is based on actual permissions — cosmetic roles with no power are skipped on purpose.)`;
-      const lines = matches.map((r) => {
+      const category = String(input?.category || "all").trim().toLowerCase();
+      const formatRole = (r) => {
         const cat = categorizeRole(r, message.guild);
         const perms = r.permissions.toArray();
         const permSummary = perms.length <= 3 ? perms.join(", ") : `${perms.length} perms`;
         return `• **${r.name}** (\`${r.id}\`) — ${cat}${perms.length ? ` [${permSummary}]` : ""}`;
-      });
-      return `roles categorized as **${category}** (${matches.length}):\n${lines.join("\n")}`;
+      };
+      // Default behavior: dump every category. Lets the model call the tool
+      // without forcing the user to pick one upfront.
+      if (category === "all") {
+        const cats = ["admin", "moderator", "helper", "bot", "cosmetic"];
+        const sections = [];
+        for (const cat of cats) {
+          const matches = getRolesByCategory(message.guild, cat);
+          if (matches.length) sections.push(`**${cat}** (${matches.length}):\n${matches.map(formatRole).join("\n")}`);
+        }
+        return sections.length ? sections.join("\n\n") : "no roles found in any category";
+      }
+      const matches = getRolesByCategory(message.guild, category);
+      if (!matches.length) return `no roles in this server are categorized as **${category}**. (categorization is based on actual permissions — cosmetic roles with no power are skipped on purpose.)`;
+      return `roles categorized as **${category}** (${matches.length}):\n${matches.map(formatRole).join("\n")}`;
     }
 
     case "save_directive": {

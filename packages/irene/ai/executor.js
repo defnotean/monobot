@@ -361,7 +361,7 @@ const TOOL_ALIASES = {
   giveaway: "manage_giveaway", start_giveaway: "manage_giveaway",
   welcome: "customize_welcome", test_welcome: "send_test_welcome",
   birthday: "get_birthday", bday: "get_birthday", set_birthday: "set_birthday", birthdays: "list_birthdays",
-  starboard: "setup_starboard", stats: "setup_stats_channels",
+  starboard: "setup_starboard", set_starboard: "setup_starboard", stats: "setup_stats_channels",
   ticket: "setup_ticket", verify: "setup_verification",
   autorole: "set_autorole", log_channel: "set_log_channel",
   leveling: "toggle_leveling", xp: "toggle_leveling", levels: "toggle_leveling",
@@ -719,7 +719,7 @@ async function _executeToolInner(toolName, input, message) {
     }
 
     case "set_afk_channel": {
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       if (ch.type !== ChannelType.GuildVoice) return `"${ch.name}" isn't a voice channel`;
       const minutes = input.timeout_minutes || 30;
@@ -775,7 +775,7 @@ async function _executeToolInner(toolName, input, message) {
       if (directive.length > 500) return "directive is too long (max 500 chars)";
       let channelId = null;
       if (input.channel_name) {
-        const ch = findChannel(guild, input.channel_name);
+        const ch = findChannel(guild, input.channel_id || input.channel_name);
         if (ch) channelId = ch.id;
       }
       const result = addDirective(guild.id, directive, channelId, message.author.id);
@@ -842,7 +842,7 @@ async function _executeToolInner(toolName, input, message) {
 
     // ─── Messaging ───────────────────────────────────────────────────
     case "send_message": {
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       const hasEmbed = input.embed_title || input.embed_description || input.embed_image || input.embed_fields;
       if (hasEmbed) {
@@ -948,7 +948,7 @@ async function _executeToolInner(toolName, input, message) {
     }
 
     case "send_animated_message": {
-      const ch = findChannel(guild, input.channel_name);
+      const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       const {
         animateEmbed, typewriterFrames, progressBarFrames, countdownFrames,
@@ -1008,7 +1008,7 @@ async function _executeToolInner(toolName, input, message) {
     }
 
     case "create_thread": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       const thread = await ch.threads.create({ name: input.name, autoArchiveDuration: parseInt(input.auto_archive) || 1440, reason: `Created ${by}` });
       return `Created thread "${thread.name}" in #${ch.name}`;
@@ -1029,7 +1029,7 @@ async function _executeToolInner(toolName, input, message) {
 
     // ─── Invites ─────────────────────────────────────────────────────
     case "create_invite": {
-      const ch = input.channel_name ? findChannel(guild, input.channel_name) : message.channel;
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       const invite = await ch.createInvite({
         maxUses: input.max_uses || 0,
@@ -1269,7 +1269,7 @@ async function _executeToolInner(toolName, input, message) {
         return "Birthday announcements disabled.";
       }
       if (!input.channel_name) return "Please provide a channel name.";
-      const channel = findChannel(guild, input.channel_name);
+      const channel = findChannel(guild, input.channel_id || input.channel_name);
       if (!channel) return `Channel #${input.channel_name} not found`;
       setBirthdayChannel(guild.id, channel.id);
       const parts = [`Birthday channel set to #${channel.name}`];

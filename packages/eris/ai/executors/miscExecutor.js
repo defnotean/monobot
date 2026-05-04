@@ -147,11 +147,19 @@ export async function execute(toolName, input, message, _context) {
       const guildId = message.guild?.id;
       if (!guildId) return "game watches only work in servers";
       const id = input.watch_id || input.id;
-      if (!id) return "give me the watch ID — use list_game_watches to find it";
+      const gameName = (input.game || input.game_name || input.name || "").trim().toLowerCase();
       const watches = getWatches(guildId);
-      const watch = watches.find(w => w.id === id);
-      if (!watch) return `no watch found with id \`${id}\``;
-      removeWatch(guildId, id);
+      // Accept either a watch ID or a game name — matches the schema.
+      let watch = id ? watches.find(w => w.id === id) : null;
+      if (!watch && gameName) {
+        watch = watches.find(w => String(w.gameName || "").toLowerCase() === gameName)
+             || watches.find(w => String(w.gameName || "").toLowerCase().includes(gameName));
+      }
+      if (!watch) {
+        if (!id && !gameName) return "give me the watch ID or game name to stop tracking";
+        return `no watch found matching "${id || gameName}"`;
+      }
+      removeWatch(guildId, watch.id);
       return `stopped tracking **${watch.gameName}**`;
     }
 
@@ -321,8 +329,20 @@ export async function execute(toolName, input, message, _context) {
     }
 
     case "unwatch_price": {
-      const id = input.id || input.watch_id;
-      if (!id) return "no price watch id provided";
+      let id = input.id || input.watch_id;
+      const productName = String(input.product_name || input.name || "").trim().toLowerCase();
+      // Resolve a product name to a watch ID via the user's existing watches.
+      if (!id && productName) {
+        const watches = await db.getPriceWatches(message.author.id).catch(() => []);
+        const list = Array.isArray(watches) ? watches : [];
+        const match = list.find(w => String(w.product_name || w.productName || "").toLowerCase() === productName)
+                   || list.find(w => String(w.product_name || w.productName || "").toLowerCase().includes(productName));
+        if (match) id = match.id;
+      }
+      if (!id) {
+        if (!productName) return "give me the watch id or product name to stop watching";
+        return `no price watch found matching "${productName}"`;
+      }
       const ok = await db.removePriceWatch(message.author.id, id);
       return ok ? "stopped watching that price" : "failed to unwatch (wrong id or not yours)";
     }
