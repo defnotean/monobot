@@ -113,6 +113,7 @@ export async function execute(client) {
   // ── Gatekeep sweep: leave any unauthorized servers on startup ──────────
   // Catches servers the bot was added to before the gatekeep existed,
   // or servers that were un-whitelisted while the bot was offline.
+  log(`[WHITELIST] startup sweep — ${client.guilds.cache.size} guilds in cache`);
   for (const guild of client.guilds.cache.values()) {
     const ownerIsGuildOwner = guild.ownerId === config.userId;
     const whitelisted       = isWhitelisted(guild.id);

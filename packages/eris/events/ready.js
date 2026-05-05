@@ -57,6 +57,7 @@ export default async function ready(client) {
   }
 
   // ─── Gatekeep sweep: leave unauthorized servers (shared whitelist with Irene) ───
+  log(`[WHITELIST] startup sweep — ${client.guilds.cache.size} guilds in cache`);
   for (const guild of client.guilds.cache.values()) {
     const ownerIsGuildOwner = guild.ownerId === config.ownerId;
     const whitelisted = await db.isWhitelisted(guild.id);
