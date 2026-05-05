@@ -1803,7 +1803,10 @@ async function _executeToolInner(toolName, input, message) {
 
     // ─── Server Whitelist (bot-owner only) ────────────────────────────
     case "whitelist_server": {
-      if (message.author.id !== config.userId) return "Only the bot owner can manage the whitelist.";
+      if (message.author.id !== config.userId) {
+        log(`[WHITELIST] denied whitelist_server — author=${message.author.id} userId=${config.userId}`);
+        return "Only the bot owner can manage the whitelist.";
+      }
       const raw = input.invite_or_id?.trim();
       if (!raw) return "Provide a Discord invite link or guild ID.";
 
@@ -1852,7 +1855,10 @@ async function _executeToolInner(toolName, input, message) {
     }
 
     case "unwhitelist_server": {
-      if (message.author.id !== config.userId) return "Only the bot owner can manage the whitelist.";
+      if (message.author.id !== config.userId) {
+        log(`[WHITELIST] denied unwhitelist_server — author=${message.author.id} userId=${config.userId}`);
+        return "Only the bot owner can manage the whitelist.";
+      }
       const raw = input.guild_id?.trim();
       if (!raw) return "Provide a guild ID or server name.";
 
@@ -1884,7 +1890,10 @@ async function _executeToolInner(toolName, input, message) {
     }
 
     case "list_whitelist": {
-      if (message.author.id !== config.userId) return "Only the bot owner can view the whitelist.";
+      if (message.author.id !== config.userId) {
+        log(`[WHITELIST] denied list_whitelist — author=${message.author.id} userId=${config.userId}`);
+        return "Only the bot owner can view the whitelist.";
+      }
       const wl = getWhitelist();
       const entries = Object.entries(wl);
       if (!entries.length) return "Whitelist is empty — the bot will only stay in servers you're a member of.";

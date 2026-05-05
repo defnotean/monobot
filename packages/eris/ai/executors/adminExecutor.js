@@ -381,7 +381,10 @@ export async function execute(toolName, input, message, _context) {
     // ─── Whitelist ──────────────────────────────────────────────────────
 
     case "whitelist_server": {
-      if (!isOwner(message.author.id)) return denyMessage();
+      if (!isOwner(message.author.id)) {
+        log(`[WHITELIST] denied whitelist_server — author=${message.author.id} ownerId=${config.ownerId}`);
+        return denyMessage();
+      }
       let guildId = input.guild_id || input.server_id || "";
       let serverName = input.name || "Unknown";
 
@@ -405,7 +408,10 @@ export async function execute(toolName, input, message, _context) {
     }
 
     case "unwhitelist_server": {
-      if (!isOwner(message.author.id)) return denyMessage();
+      if (!isOwner(message.author.id)) {
+        log(`[WHITELIST] denied unwhitelist_server — author=${message.author.id} ownerId=${config.ownerId}`);
+        return denyMessage();
+      }
       const guildId = input.guild_id || input.server_id;
       if (!guildId) return "need a guild/server ID";
       const ok = await db.removeFromWhitelist(guildId);
@@ -413,7 +419,10 @@ export async function execute(toolName, input, message, _context) {
     }
 
     case "list_whitelist": {
-      if (!isOwner(message.author.id)) return denyMessage();
+      if (!isOwner(message.author.id)) {
+        log(`[WHITELIST] denied list_whitelist — author=${message.author.id} ownerId=${config.ownerId}`);
+        return denyMessage();
+      }
       const wl = await db.getWhitelist();
       const entries = Object.entries(wl);
       const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${config.clientId}&permissions=8&scope=bot%20applications.commands`;
