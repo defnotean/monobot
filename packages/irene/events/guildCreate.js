@@ -1,5 +1,5 @@
 import { log } from "../utils/logger.js";
-import { setLogChannel, setWelcomeChannel, getGuildSettings, isWhitelisted } from "../database.js";
+import { setLogChannel, setWelcomeChannel, getGuildSettings, isWhitelisted, addToWhitelist } from "../database.js";
 import config from "../config.js";
 
 const LOG_CHANNEL_NAMES = [
@@ -52,6 +52,19 @@ export async function execute(guild) {
     } catch {}
     await guild.leave();
     return;
+  }
+
+  // Auto-track in whitelist — boss wants the whitelist to be a complete record
+  // of every server the bot is currently in (not just an entry-control list).
+  // Skip if already present so we don't clobber the original invited_by/added_at.
+  if (!isWhitelisted(guild.id)) {
+    addToWhitelist(guild.id, {
+      name:       guild.name,
+      icon_url:   guild.iconURL?.({ size: 128 }) ?? null,
+      members:    guild.memberCount ?? null,
+      invited_by: "auto-tracked-on-join",
+    });
+    log(`[WHITELIST] auto-tracked "${guild.name}" (${guild.id}) on join`);
   }
 
   // Fetch channels so the cache is warm before scanning

@@ -1,6 +1,6 @@
 import { log } from "../utils/logger.js";
 import config from "../config.js";
-import { isWhitelisted } from "../database.js";
+import { isWhitelisted, addToWhitelist } from "../database.js";
 
 // ─── Owner-only gatekeep (shared whitelist with Irene) ─────────────────
 // The bot stays in a server only if ONE of these is true:
@@ -20,7 +20,20 @@ async function isGuildAllowed(guild) {
 export default async function guildCreate(guild) {
   log(`[BOT] Joined new server: "${guild.name}" (${guild.memberCount} members) — ID: ${guild.id}`);
 
-  if (await isGuildAllowed(guild)) return;
+  if (await isGuildAllowed(guild)) {
+    // Auto-track in whitelist — boss wants the whitelist to be a complete
+    // record of every server the bot is currently in. Skip if already there.
+    if (!(await isWhitelisted(guild.id))) {
+      await addToWhitelist(guild.id, {
+        name:       guild.name,
+        icon_url:   guild.iconURL?.({ size: 128 }) ?? null,
+        members:    guild.memberCount ?? null,
+        invited_by: "auto-tracked-on-join",
+      });
+      log(`[WHITELIST] auto-tracked "${guild.name}" (${guild.id}) on join`);
+    }
+    return;
+  }
 
   log(`[GATEKEEP] Unauthorized server "${guild.name}" (${guild.id}) — owner: ${guild.ownerId}. Leaving.`);
 

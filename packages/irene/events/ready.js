@@ -6,7 +6,7 @@ import { checkStreams } from "../utils/twitch.js";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
 import { setBotIcon } from "../utils/embeds.js";
-import { getGuildSettings, setLogChannel, setWelcomeChannel, getReminders, removeReminder, getServerPersona, isWhitelisted, getAllTempVcs, deleteTempVc, getLockdown, clearLockdown, getAutoSlowmodes, clearSlowmode, getGiveawayDb, getHighlightDb, getSupabase, getMood } from "../database.js";
+import { getGuildSettings, setLogChannel, setWelcomeChannel, getReminders, removeReminder, getServerPersona, isWhitelisted, addToWhitelist, getAllTempVcs, deleteTempVc, getLockdown, clearLockdown, getAutoSlowmodes, clearSlowmode, getGiveawayDb, getHighlightDb, getSupabase, getMood } from "../database.js";
 import { cacheInvites } from "../utils/invites.js";
 import { updateStatsChannels } from "../utils/stats.js";
 
@@ -123,6 +123,18 @@ export async function execute(client) {
     if (!ownerIsGuildOwner && !whitelisted && !ownerMember) {
       log(`[GATEKEEP] Startup sweep — leaving unauthorized server "${guild.name}" (${guild.id})`);
       await guild.leave().catch((err) => log(`[GATEKEEP] Failed to leave "${guild.name}": ${err.message}`));
+      continue;
+    }
+    // Backfill — boss wants the whitelist to track every server the bot is
+    // currently in, including ones grandfathered in via boss-as-member.
+    if (!whitelisted) {
+      addToWhitelist(guild.id, {
+        name:       guild.name,
+        icon_url:   guild.iconURL?.({ size: 128 }) ?? null,
+        members:    guild.memberCount ?? null,
+        invited_by: "auto-tracked-on-startup",
+      });
+      log(`[WHITELIST] auto-tracked "${guild.name}" (${guild.id}) on startup`);
     }
   }
 

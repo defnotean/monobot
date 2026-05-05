@@ -1862,31 +1862,46 @@ async function _executeToolInner(toolName, input, message) {
       const raw = input.guild_id?.trim();
       if (!raw) return "Provide a guild ID or server name.";
 
+      // Resolve target — first try the whitelist data, then fall back to
+      // current guild memberships. Boss's intent on "unwhitelist X" is
+      // usually "kick the bot out of X"; if X isn't on the whitelist but
+      // the bot is sitting in it (often because boss is a member, which
+      // bypasses the gatekeep at events/ready.js), still leave it.
       let targetId = null;
       let targetName = null;
+      let wasOnWhitelist = false;
 
+      const wl = getWhitelist();
       if (/^\d{17,20}$/.test(raw)) {
-        const wl = getWhitelist();
-        if (!wl[raw]) return `Guild \`${raw}\` wasn't on the whitelist.`;
-        targetId = raw;
-        targetName = wl[raw].name;
+        if (wl[raw]) { targetId = raw; targetName = wl[raw].name; wasOnWhitelist = true; }
+        else {
+          const g = message.client.guilds.cache.get(raw);
+          if (g) { targetId = raw; targetName = g.name; }
+        }
       } else {
-        const wl = getWhitelist();
         const lower = raw.toLowerCase();
-        const match = Object.entries(wl).find(([, info]) => info.name.toLowerCase().includes(lower));
-        if (!match) return `No whitelisted server matching "${raw}".`;
-        targetId = match[0];
-        targetName = match[1].name;
+        const wlMatch = Object.entries(wl).find(([, info]) => info.name?.toLowerCase().includes(lower));
+        if (wlMatch) { targetId = wlMatch[0]; targetName = wlMatch[1].name; wasOnWhitelist = true; }
+        else {
+          const g = [...message.client.guilds.cache.values()].find((x) => x.name?.toLowerCase().includes(lower));
+          if (g) { targetId = g.id; targetName = g.name; }
+        }
       }
 
-      removeFromWhitelist(targetId);
+      if (!targetId) return `No whitelisted server matching "${raw}", and the bot isn't in any server with that name/ID.`;
+
+      if (wasOnWhitelist) removeFromWhitelist(targetId);
 
       const targetGuild = message.client.guilds.cache.get(targetId);
       if (targetGuild) {
         await targetGuild.leave().catch(() => {});
-        return `✅ **${targetName}** (\`${targetId}\`) removed from whitelist and left the server.`;
+        return wasOnWhitelist
+          ? `✅ **${targetName}** (\`${targetId}\`) removed from whitelist and left the server.`
+          : `✅ Left **${targetName}** (\`${targetId}\`). It wasn't on the whitelist, just kicked the bot out.`;
       }
-      return `✅ **${targetName}** (\`${targetId}\`) removed from whitelist.`;
+      return wasOnWhitelist
+        ? `✅ **${targetName}** (\`${targetId}\`) removed from whitelist.`
+        : `Nothing to do — \`${targetId}\` wasn't on the whitelist and the bot isn't in that server.`;
     }
 
     case "list_whitelist": {

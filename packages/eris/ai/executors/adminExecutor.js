@@ -412,10 +412,48 @@ export async function execute(toolName, input, message, _context) {
         log(`[WHITELIST] denied unwhitelist_server — author=${message.author.id} ownerId=${config.ownerId}`);
         return denyMessage();
       }
-      const guildId = input.guild_id || input.server_id;
-      if (!guildId) return "need a guild/server ID";
-      const ok = await db.removeFromWhitelist(guildId);
-      return ok ? `server ${guildId} removed from whitelist \u2014 both twins will leave it on next restart` : "failed to update whitelist";
+      const raw = String(input.guild_id || input.server_id || "").trim();
+      if (!raw) return "need a guild/server ID or name";
+
+      // Mirror Irene's behavior: try whitelist row first, fall back to current
+      // memberships. Boss saying "unwhitelist X" means "kick the bot out of X"
+      // even when X was never on the whitelist (e.g., grandfathered in via
+      // boss-as-member at the gatekeep sweep).
+      const wl = await db.getWhitelist();
+      let targetId = null;
+      let targetName = null;
+      let wasOnWhitelist = false;
+
+      if (/^\d{17,20}$/.test(raw)) {
+        if (wl[raw]) { targetId = raw; targetName = wl[raw]?.name || "Unknown"; wasOnWhitelist = true; }
+        else {
+          const g = message.client.guilds.cache.get(raw);
+          if (g) { targetId = raw; targetName = g.name; }
+        }
+      } else {
+        const lower = raw.toLowerCase();
+        const wlMatch = Object.entries(wl).find(([, info]) => (info?.name || "").toLowerCase().includes(lower));
+        if (wlMatch) { targetId = wlMatch[0]; targetName = wlMatch[1]?.name || "Unknown"; wasOnWhitelist = true; }
+        else {
+          const g = [...message.client.guilds.cache.values()].find((x) => x.name?.toLowerCase().includes(lower));
+          if (g) { targetId = g.id; targetName = g.name; }
+        }
+      }
+
+      if (!targetId) return `nothing matching "${raw}" \u2014 not on the whitelist and not in any current server`;
+
+      if (wasOnWhitelist) await db.removeFromWhitelist(targetId);
+
+      const targetGuild = message.client.guilds.cache.get(targetId);
+      if (targetGuild) {
+        await targetGuild.leave().catch(() => {});
+        return wasOnWhitelist
+          ? `server **${targetName}** (${targetId}) removed from whitelist and left the server`
+          : `left **${targetName}** (${targetId}) \u2014 wasn't on the whitelist, just kicked us out`;
+      }
+      return wasOnWhitelist
+        ? `server **${targetName}** (${targetId}) removed from whitelist`
+        : `nothing to do \u2014 \`${targetId}\` wasn't on the whitelist and we're not in that server`;
     }
 
     case "list_whitelist": {
