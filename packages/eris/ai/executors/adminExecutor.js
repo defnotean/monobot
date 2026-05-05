@@ -462,6 +462,7 @@ export async function execute(toolName, input, message, _context) {
         return denyMessage();
       }
       const wl = await db.getWhitelist();
+      log(`[WHITELIST] list_whitelist read — ${Object.keys(wl).length} entries: [${Object.keys(wl).join(", ") || "(empty)"}]`);
       const entries = Object.entries(wl);
       const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${config.clientId}&permissions=8&scope=bot%20applications.commands`;
       if (!entries.length) return `whitelist is empty \u2014 only servers where you're the owner are allowed\n\ninvite link: ${inviteUrl}`;

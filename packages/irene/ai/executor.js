@@ -1910,6 +1910,7 @@ async function _executeToolInner(toolName, input, message) {
         return "Only the bot owner can view the whitelist.";
       }
       const wl = getWhitelist();
+      log(`[WHITELIST] list_whitelist read — ${Object.keys(wl).length} entries: [${Object.keys(wl).join(", ") || "(empty)"}]`);
       const entries = Object.entries(wl);
       if (!entries.length) return "Whitelist is empty — the bot will only stay in servers you're a member of.";
 

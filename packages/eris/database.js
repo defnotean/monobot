@@ -506,11 +506,13 @@ export async function getDeployWatches() {
 // ─── SHARED WHITELIST (reads from Irene's bot_data table) ───
 // Both twins share the same server whitelist so they stay in sync
 export async function getWhitelist() {
-  if (!supabase) return {};
-  try {
-    const { data: row } = await supabase.from("bot_data").select("data").eq("id", "main").single();
-    return row?.data?.server_whitelist || {};
-  } catch { return {}; }
+  if (!supabase) { log(`[WHITELIST] getWhitelist: supabase not configured`); return {}; }
+  const { data: row, error } = await supabase.from("bot_data").select("data").eq("id", "main").single();
+  if (error && error.code !== "PGRST116") {
+    log(`[WHITELIST] getWhitelist failed: ${error.message} (code=${error.code})`);
+    return {};
+  }
+  return row?.data?.server_whitelist || {};
 }
 
 export async function isWhitelisted(guildId) {
@@ -519,34 +521,46 @@ export async function isWhitelisted(guildId) {
 }
 
 export async function addToWhitelist(guildId, info) {
-  if (!supabase) return false;
-  try {
-    const { data: row } = await supabase.from("bot_data").select("data").eq("id", "main").single();
-    const botData = row?.data || {};
-    if (!botData.server_whitelist) botData.server_whitelist = {};
-    botData.server_whitelist[guildId] = {
-      name: info.name || "Unknown",
-      icon_url: info.icon_url || null,
-      members: info.members || null,
-      invited_by: info.invited_by || null,
-      added_at: new Date().toISOString(),
-    };
-    await supabase.from("bot_data").upsert({ id: "main", data: botData });
-    return true;
-  } catch { return false; }
+  if (!supabase) { log(`[WHITELIST] addToWhitelist: supabase not configured`); return false; }
+  const { data: row, error: selectErr } = await supabase.from("bot_data").select("data").eq("id", "main").single();
+  if (selectErr && selectErr.code !== "PGRST116") {
+    log(`[WHITELIST] addToWhitelist select failed: ${selectErr.message} (code=${selectErr.code})`);
+    return false;
+  }
+  const botData = row?.data || {};
+  if (!botData.server_whitelist) botData.server_whitelist = {};
+  botData.server_whitelist[guildId] = {
+    name: info.name || "Unknown",
+    icon_url: info.icon_url || null,
+    members: info.members || null,
+    invited_by: info.invited_by || null,
+    added_at: new Date().toISOString(),
+  };
+  const { error: upsertErr } = await supabase.from("bot_data").upsert({ id: "main", data: botData });
+  if (upsertErr) {
+    log(`[WHITELIST] addToWhitelist upsert failed for ${guildId}: ${upsertErr.message} (code=${upsertErr.code})`);
+    return false;
+  }
+  return true;
 }
 
 export async function removeFromWhitelist(guildId) {
-  if (!supabase) return false;
-  try {
-    const { data: row } = await supabase.from("bot_data").select("data").eq("id", "main").single();
-    const botData = row?.data || {};
-    if (botData.server_whitelist?.[guildId]) {
-      delete botData.server_whitelist[guildId];
-      await supabase.from("bot_data").upsert({ id: "main", data: botData });
+  if (!supabase) { log(`[WHITELIST] removeFromWhitelist: supabase not configured`); return false; }
+  const { data: row, error: selectErr } = await supabase.from("bot_data").select("data").eq("id", "main").single();
+  if (selectErr && selectErr.code !== "PGRST116") {
+    log(`[WHITELIST] removeFromWhitelist select failed: ${selectErr.message} (code=${selectErr.code})`);
+    return false;
+  }
+  const botData = row?.data || {};
+  if (botData.server_whitelist?.[guildId]) {
+    delete botData.server_whitelist[guildId];
+    const { error: upsertErr } = await supabase.from("bot_data").upsert({ id: "main", data: botData });
+    if (upsertErr) {
+      log(`[WHITELIST] removeFromWhitelist upsert failed for ${guildId}: ${upsertErr.message} (code=${upsertErr.code})`);
+      return false;
     }
-    return true;
-  } catch { return false; }
+  }
+  return true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -24,13 +24,13 @@ export default async function guildCreate(guild) {
     // Auto-track in whitelist — boss wants the whitelist to be a complete
     // record of every server the bot is currently in. Skip if already there.
     if (!(await isWhitelisted(guild.id))) {
-      await addToWhitelist(guild.id, {
+      const ok = await addToWhitelist(guild.id, {
         name:       guild.name,
         icon_url:   guild.iconURL?.({ size: 128 }) ?? null,
         members:    guild.memberCount ?? null,
         invited_by: "auto-tracked-on-join",
       });
-      log(`[WHITELIST] auto-tracked "${guild.name}" (${guild.id}) on join`);
+      log(`[WHITELIST] ${ok ? "auto-tracked" : "FAILED to track"} "${guild.name}" (${guild.id}) on join`);
     }
     return;
   }

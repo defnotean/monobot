@@ -72,13 +72,13 @@ export default async function ready(client) {
     // Backfill — boss wants the whitelist to track every server the bot is
     // currently in, including ones grandfathered in via boss-as-member.
     if (!whitelisted) {
-      await db.addToWhitelist(guild.id, {
+      const ok = await db.addToWhitelist(guild.id, {
         name:       guild.name,
         icon_url:   guild.iconURL?.({ size: 128 }) ?? null,
         members:    guild.memberCount ?? null,
         invited_by: "auto-tracked-on-startup",
       });
-      log(`[WHITELIST] auto-tracked "${guild.name}" (${guild.id}) on startup`);
+      log(`[WHITELIST] ${ok ? "auto-tracked" : "FAILED to track"} "${guild.name}" (${guild.id}) on startup`);
     }
   }
 
