@@ -1149,6 +1149,7 @@ HOW TO INTERACT:
          "start_duel", "pet_battle", "boss_attack", "boss_spawn", "heist_start",
          "fish", "hunt", "dig", "work", "beg", "search_location",
          "adventure_start", "adventure_choice", "word_scramble_start", "number_guess_start",
+         "send_gif", "create_meme"
         ].includes(t)
       );
       if (result.text && gameEmbedSent) {

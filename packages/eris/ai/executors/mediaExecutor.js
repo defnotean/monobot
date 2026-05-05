@@ -112,7 +112,13 @@ export async function execute(toolName, input, message, _context) {
         const topText = input.top_text || input.top || "";
         const bottomText = input.bottom_text || input.bottom || "";
         const caption = input.caption || "";
-        let template = input.template || "drake";
+        const aliases = {
+          "distracted-boyfriend": "db",
+          "distracted boyfriend": "db",
+          "cmm": "change-my-mind"
+        };
+        let template = (input.template || "drake").toLowerCase();
+        template = aliases[template] || template;
 
         function encMeme(text) {
           if (!text) return "_";
@@ -133,21 +139,23 @@ export async function execute(toolName, input, message, _context) {
         try {
           const imgRes = await fetch(memeUrl);
           if (imgRes.ok) {
+            const ct = imgRes.headers.get("content-type") || "";
+            if (!ct.startsWith("image/")) throw new Error("Memegen returned non-image (maybe a bad template)");
             const buffer = Buffer.from(await imgRes.arrayBuffer());
+            if (buffer.length < 1000) throw new Error("Memegen returned tiny placeholder image");
+            
             const { AttachmentBuilder } = await import("discord.js");
             const attachment = new AttachmentBuilder(buffer, { name: "meme.png" });
             const sendOpts = { files: [attachment] };
             if (caption) sendOpts.content = caption;
             await message.channel.send(sendOpts);
             return "meme sent";
+          } else {
+            throw new Error(`Memegen API error: ${imgRes.status}`);
           }
-        } catch {}
-
-        // Fallback: embed the URL directly if download fails
-        const sendOpts = { embeds: [{ color: 0x2b2d31, image: { url: memeUrl } }] };
-        if (caption) sendOpts.content = caption;
-        await message.channel.send(sendOpts);
-        return "meme sent";
+        } catch (downloadErr) {
+          throw new Error(`Failed to download meme: ${downloadErr.message}`);
+        }
       } catch (e) {
         return `meme creation failed: ${e.message}`;
       }

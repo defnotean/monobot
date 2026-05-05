@@ -167,11 +167,11 @@ export const EVERYONE_TOOLS = [
     name: "create_meme",
     tags: ["fun"],
     description:
-      "Generate a context-aware meme. Pick the template that fits the joke. Common picks: 'drake' = preferring X over Y, 'distracted-boyfriend' = tempted by something new, 'change-my-mind' / 'cmm' = hot takes, 'gru' = plan backfiring, 'fine' = everything burning, 'stonks' = bad financial decisions, 'panik-kalm-panik' = panic cycle, 'fry' = not sure if X or Y, 'mordor' = one does not simply, 'slap' = batman slap, 'harold' = hide the pain, 'spongebob' = mocking, 'astronaut' = always has been, 'pooh' = fancy pooh. If you don't know the right template, call search_meme_templates first. To make a meme about a specific person, pass their user_id to grab their avatar as the background. To use a custom format not in the catalog, pass image_url instead of template.",
+      "Generate a context-aware meme. Pick the template that fits the joke. Common picks: 'drake' = preferring X over Y, 'db' = distracted boyfriend tempted by something new, 'change-my-mind' / 'cmm' = hot takes, 'gru' = plan backfiring, 'fine' = everything burning, 'stonks' = bad financial decisions, 'panik-kalm-panik' = panic cycle, 'fry' = not sure if X or Y, 'mordor' = one does not simply, 'slap' = batman slap, 'harold' = hide the pain, 'spongebob' = mocking, 'astronaut' = always has been, 'pooh' = fancy pooh. If you don't know the right template, call search_meme_templates first. To make a meme about a specific person, pass their user_id to grab their avatar as the background. To use a custom format not in the catalog, pass image_url instead of template.",
     input_schema: {
       type: "object",
       properties: {
-        template: { type: "string", description: "Meme template name (e.g. 'drake', 'distracted-boyfriend', 'change-my-mind'). Pick the one that fits the joke best" },
+        template: { type: "string", description: "Meme template name (e.g. 'drake', 'db', 'change-my-mind'). Pick the one that fits the joke best" },
         top_text: { type: "string", description: "Text for the top of the meme — this is the setup" },
         bottom_text: { type: "string", description: "Text for the bottom of the meme — this is the punchline" },
         image_url: { type: "string", description: "Custom background image URL. Use when someone wants a meme format not in the standard templates — web_search for the meme image, grab the URL, pass it here" },
