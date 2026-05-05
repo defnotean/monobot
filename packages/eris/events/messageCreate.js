@@ -1105,6 +1105,15 @@ HOW TO INTERACT:
         if (needsResearch) {
           systemInstruction += `\n\n[MANDATORY_SEARCH — THIS MESSAGE REQUIRES RESEARCH]\nThe user's message is a factual question, assignment, or factual challenge. Your FIRST action this turn MUST be a web_search tool call. No "let me check" preamble — just call the tool. Fire multiple parallel web_search calls if the question has independent parts. After results arrive, answer in ONE short reply (≤ 250 chars) that pairs the answer with the reason from the search. Do NOT claim you "just checked" unless a web_search call appears in this turn's tool history.`;
         }
+        // Whitelist owner-action force — same hallucination pattern as Irene:
+        // weaker models refuse owner-only whitelist tools in prose ("only the
+        // bot owner can manage the whitelist") instead of calling the tool,
+        // even when boss is the requester. Force a structured call.
+        const whitelistVerb = /\b(whitelist|unwhitelist|delist)\b/i.test(t)
+          && /\b(remove|delete|drop|kick|off|out|unwhitelist|delist|add|whitelist|list|show|view)\b/i.test(t);
+        if (isOwner && whitelistVerb) {
+          systemInstruction += `\n\n[MANDATORY_WHITELIST_ACTION — boss is asking about the server whitelist]\nThe user (verified Discord ID ${message.author.id}) IS the bot owner. Your owner-only tools — list_whitelist, whitelist_server, unwhitelist_server — ARE callable for them THIS turn. Emit a structured tool call right now. Do NOT respond in prose with "only the bot owner can manage the whitelist" or any variant — that text is FACTUALLY WRONG because the requester IS the owner. If they named a server (e.g. "jett") without an ID, call list_whitelist first to get the guild ID, then unwhitelist_server with that ID.`;
+        }
         _charBudget = isVent ? 400 : needsResearch ? 250 : 150;
         systemInstruction += `\n\n[LENGTH BUDGET — this turn: VISIBLE reply text MUST be ≤ ${_charBudget} characters. count your output chars. replies over this limit will be truncated by the system at the last sentence boundary. 1 short sentence if possible, 2 max. no preamble ("ok so", "anyway"), no trailing wrap-up ("pretty insane tbh"), no speculation past what you know for sure. TOOL CALLS AND THEIR ARGUMENTS DO NOT COUNT — emit them whenever they're needed regardless of this budget.]`;
       }
