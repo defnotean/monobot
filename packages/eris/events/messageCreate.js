@@ -764,6 +764,8 @@ export default async function messageCreate(message) {
       // Look for explicit cries for help, self-harm language, or deeply distressing statements
       if (/\b(wanna die|want to die|kill myself|kms|end it all|can't take it|no reason to live|what's the point|i give up on everything|nobody cares about me|everyone hates me|i hate myself|self harm|cutting myself|hurting myself|i can't do this anymore|suicidal)\b/i.test(cleanMessage)) {
         systemInstruction += "\n[CONTEXT: user expressed something genuinely alarming — be gentle, warm, and supportive. don't be preachy or clinical. just be a caring friend. if it sounds serious, gently suggest they talk to someone they trust or a helpline, but don't force it]";
+      } else if (/\b(depressed|sad|lonely|anxious|stressed|crying|upset)\b/i.test(cleanMessage)) {
+        systemInstruction += "\n[ANTI-THERAPY-BOT: user mentioned a negative emotion word, but unless they are explicitly venting or asking for help, DO NOT go into crisis/therapy mode. Answer their actual question casually. Do not ask 'are you okay' or 'what's on your mind' if they just asked a hypothetical or casual question.]";
       }
       if (/\b(bet|gamble|coins?|slots?|flip|daily|rob)\b/i.test(cleanMessage)) {
         systemInstruction += "\n[CONTEXT: user wants to gamble/play a game. IMMEDIATELY call the appropriate tool (blackjack_start, coinflip_bet, slots_spin, etc.) with the amount they specified. Do NOT ask for an amount — if they said one, use it; if they said \"all\" or \"all in\", check their balance first then bet it all; if no amount specified, default to 10 coins and start immediately. NEVER ask for an amount. NEVER just chat about gambling without actually starting the game.]";
