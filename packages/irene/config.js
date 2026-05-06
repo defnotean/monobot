@@ -182,6 +182,8 @@ const openaiCompatApiKeys = unique([
   ...envList(getOpenAICompatKeyListVars(selectedAiProvider)),
   openaiCompatApiKey,
 ]);
+const KIMI_K26_MODEL = "moonshotai/kimi-k2.6";
+const selectedKimiOnNvidia = selectedAiProvider === "kimi";
 
 const config = {
   token: env("DISCORD_BOT_TOKEN"),
@@ -218,12 +220,13 @@ const config = {
   nvidia: {
     apiKey: env("NVIDIA_API_KEY"),
     baseUrl: env("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-    model: env("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct"),
-    fastModel: env("NVIDIA_FAST_MODEL", "meta/llama-3.3-70b-instruct"),
-    maxTokens: parseInt(env("NVIDIA_MAX_TOKENS", "4096")),
-    temperature: parseFloat(env("NVIDIA_TEMPERATURE", "0.4")),
-    topP: parseFloat(env("NVIDIA_TOP_P", "0.95")),
-    thinking: env("NVIDIA_THINKING", "false") === "true",
+    model: env("NVIDIA_MODEL", selectedKimiOnNvidia ? KIMI_K26_MODEL : "meta/llama-3.3-70b-instruct"),
+    fastModel: env("NVIDIA_FAST_MODEL", env("NVIDIA_MODEL", selectedKimiOnNvidia ? KIMI_K26_MODEL : "meta/llama-3.3-70b-instruct")),
+    maxTokens: parseInt(env("NVIDIA_MAX_TOKENS", selectedKimiOnNvidia ? "16384" : "4096")),
+    temperature: parseFloat(env("NVIDIA_TEMPERATURE", selectedKimiOnNvidia ? "1.0" : "0.4")),
+    topP: parseFloat(env("NVIDIA_TOP_P", selectedKimiOnNvidia ? "1.0" : "0.95")),
+    thinking: env("NVIDIA_THINKING", selectedKimiOnNvidia ? "true" : "false") === "true",
+    toolStrictness: env("NVIDIA_TOOL_STRICTNESS", selectedKimiOnNvidia ? "balanced" : "strict"),
   },
 
   // Generic OpenAI-compatible chat completions provider.
@@ -467,8 +470,8 @@ if (config.aiProvider === "gemini" && !config.geminiKeys.length) {
   console.error("[FATAL] At least one GEMINI_API_KEY is required when AI_PROVIDER=gemini");
   process.exit(1);
 }
-if (config.aiProvider === "nvidia" && !config.nvidia.apiKey) {
-  console.error("[FATAL] NVIDIA_API_KEY is required when AI_PROVIDER=nvidia");
+if ((config.aiProvider === "nvidia" || config.aiProvider === "kimi") && !config.nvidia.apiKey) {
+  console.error("[FATAL] NVIDIA_API_KEY is required when AI_PROVIDER=nvidia/kimi");
   process.exit(1);
 }
 if (OPENAI_COMPAT_PROVIDERS.has(config.aiProvider) && !config.openaiCompat.allowNoApiKey && !config.openaiCompat.apiKeys.length) {

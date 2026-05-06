@@ -168,6 +168,10 @@ ALWAYS call a tool when the user asks for ANY of these:
 Only respond with plain text for: casual chitchat, opinions, jokes, answering questions from memory.
 
 Output format: tool calls go in tool_calls field, NOT in text content.]`;
+    if (NV.toolStrictness !== "strict") {
+      sysPrompt += `\n\n[BALANCED TOOL JUDGMENT]
+Kimi is allowed to use judgment. Call tools for clear actions, live lookups, saved state, Discord side effects, moderation, music controls, and games. For casual chat, jokes, opinions, reassurance, or vague vibes, answer naturally without forcing a tool. If a requested action is ambiguous, ask one short clarifying question instead of guessing.`;
+    }
   }
 
   // Convert Gemini-style history to OpenAI messages format

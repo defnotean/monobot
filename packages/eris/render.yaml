@@ -16,7 +16,27 @@ services:
       - key: CLIENT_ID
         sync: false
       - key: AI_PROVIDER
-        value: openrouter
+        value: kimi
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      - key: NVIDIA_MODEL
+        value: moonshotai/kimi-k2.6
+      - key: NVIDIA_FAST_MODEL
+        value: moonshotai/kimi-k2.6
+      - key: NVIDIA_MAX_TOKENS
+        value: "16384"
+      - key: NVIDIA_TEMPERATURE
+        value: "1.0"
+      - key: NVIDIA_TOP_P
+        value: "1.0"
+      - key: NVIDIA_THINKING
+        value: "true"
+      - key: NVIDIA_TOOL_STRICTNESS
+        value: balanced
+      - key: TIMEOUT_WORKER
+        value: "120000"
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_API_KEYS

@@ -210,6 +210,10 @@ DO NOT use ask_irene for things you can do yourself. Browse YOUR tool list FIRST
 - Set a channel → use configure_feature (your tool), NOT ask_irene
 
 Output format reminder: tool calls go in the tool_calls field, NOT in the text content.]`;
+    if (NV.toolStrictness !== "strict") {
+      sysPrompt += `\n\n[BALANCED TOOL JUDGMENT]
+Kimi is allowed to use judgment. Call tools for clear actions, live lookups, saved state, Discord side effects, and games. For casual chat, jokes, opinions, reassurance, or vague vibes, answer naturally without forcing a tool. If a requested action is ambiguous, ask one short clarifying question instead of guessing.`;
+    }
   }
 
   // Convert Gemini-style history to OpenAI messages format

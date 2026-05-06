@@ -46,6 +46,57 @@ afterEach(() => {
 });
 
 describe("NVIDIA → Gemini fallback (Eris)", () => {
+  it("sends Kimi K2.6 NVIDIA settings with balanced tool judgment", async () => {
+    const savedNvidia = { ...config.nvidia };
+    Object.assign(config.nvidia, {
+      apiKey: "test-nvidia-key",
+      model: "moonshotai/kimi-k2.6",
+      fastModel: "moonshotai/kimi-k2.6",
+      maxTokens: 16384,
+      temperature: 1,
+      topP: 1,
+      thinking: true,
+      toolStrictness: "balanced",
+    });
+    mockNvidiaResponse(200, {
+      choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+    });
+
+    const result = await nvidia.runGeminiChat(
+      null,
+      "you are a test bot",
+      [{
+        name: "web_search",
+        description: "Search the web",
+        input_schema: {
+          type: "object",
+          properties: { query: { type: "string", description: "Search query" } },
+          required: ["query"],
+        },
+      }],
+      [{ role: "user", parts: [{ text: "hi" }] }],
+      "hi",
+      vi.fn(async () => "tool result"),
+      { useFastModel: false },
+    );
+
+    const [, init] = (globalThis.fetch as any).mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(result.text).toBe("ok");
+    expect(init.headers.Authorization).toBe("Bearer test-nvidia-key");
+    expect(body.model).toBe("moonshotai/kimi-k2.6");
+    expect(body.max_tokens).toBe(16384);
+    expect(body.temperature).toBe(1);
+    expect(body.top_p).toBe(1);
+    expect(body.stream).toBe(false);
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking: true });
+    expect(body.tool_choice).toBe("auto");
+    expect(body.tools[0].function.name).toBe("web_search");
+    expect(body.messages[0].content).toContain("[BALANCED TOOL JUDGMENT]");
+
+    Object.assign(config.nvidia, savedNvidia);
+  });
+
   it("falls back to Gemini when NVIDIA returns 503", async () => {
     mockNvidiaResponse(503, "Service Unavailable");
     (dual.runGeminiChat as any).mockResolvedValue({

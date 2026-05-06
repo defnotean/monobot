@@ -184,6 +184,8 @@ const openAICompatApiKeys = unique([
   openAICompatApiKey,
   ...envList(getOpenAICompatKeyListVars(selectedAIProvider)),
 ]);
+const KIMI_K26_MODEL = "moonshotai/kimi-k2.6";
+const selectedKimiOnNvidia = selectedAIProvider === "kimi";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG OBJECT — every runtime knob lives on this single object. Sections
@@ -221,25 +223,25 @@ const config = {
   // Voyage AI (embeddings for semantic memory search)
   voyageApiKey: env("VOYAGE_API_KEY"),
 
-  // ─── NVIDIA AI (Qwen 3.5 122B A10B — MoE model with strong tool calling) ──
+  // ─── NVIDIA AI (Kimi K2.6 / other NVIDIA-hosted chat models) ─────────────
   // API key is env-only now — the previous hardcoded fallback was a credential
   // leak risk (visible in git history even in private repos). Set
-  // NVIDIA_API_KEY in .env to use this provider.
+  // NVIDIA_API_KEY in .env to use this provider. AI_PROVIDER=kimi selects
+  // Kimi K2.6 defaults; AI_PROVIDER=nvidia keeps the generic NVIDIA defaults.
   nvidia: {
     apiKey: env("NVIDIA_API_KEY"),
     baseUrl: env("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-    // Llama 3.3 70B has industry-leading tool calling, handles 100+ tools
-    // reliably. Qwen 3.5 122B A10B kept choosing chat over tool calls even
-    // with explicit directives. Llama 3.3 = better function-calling training.
-    model: env("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct"),
-    fastModel: env("NVIDIA_FAST_MODEL", "meta/llama-3.3-70b-instruct"),
-    maxTokens: parseInt(env("NVIDIA_MAX_TOKENS", "4096")),
-    temperature: parseFloat(env("NVIDIA_TEMPERATURE", "0.4")),
-    topP: parseFloat(env("NVIDIA_TOP_P", "0.95")),
-    // Thinking mode OFF by default — Qwen with thinking burns tokens
-    // reasoning before calling tools, which means with 143 tools and a 12k
-    // system prompt it often hits max_tokens before emitting any tool call.
-    thinking: env("NVIDIA_THINKING", "false") === "true",
+    model: env("NVIDIA_MODEL", selectedKimiOnNvidia ? KIMI_K26_MODEL : "meta/llama-3.3-70b-instruct"),
+    fastModel: env("NVIDIA_FAST_MODEL", env("NVIDIA_MODEL", selectedKimiOnNvidia ? KIMI_K26_MODEL : "meta/llama-3.3-70b-instruct")),
+    maxTokens: parseInt(env("NVIDIA_MAX_TOKENS", selectedKimiOnNvidia ? "16384" : "4096")),
+    temperature: parseFloat(env("NVIDIA_TEMPERATURE", selectedKimiOnNvidia ? "1.0" : "0.4")),
+    topP: parseFloat(env("NVIDIA_TOP_P", selectedKimiOnNvidia ? "1.0" : "0.95")),
+    // Kimi K2.6 exposes reasoning through chat_template_kwargs.thinking.
+    // Other NVIDIA models keep thinking off unless explicitly enabled.
+    thinking: env("NVIDIA_THINKING", selectedKimiOnNvidia ? "true" : "false") === "true",
+    // Kimi is strong enough to use judgment around tool calls. Keep older
+    // NVIDIA models stricter unless explicitly relaxed.
+    toolStrictness: env("NVIDIA_TOOL_STRICTNESS", selectedKimiOnNvidia ? "balanced" : "strict"),
   },
 
   // Generic OpenAI-compatible chat completions provider.
@@ -600,7 +602,7 @@ if ((configuredAIProvider === "gemini" || configuredAIProvider === "google") && 
   process.exit(1);
 }
 if ((configuredAIProvider === "nvidia" || configuredAIProvider === "kimi") && !config.nvidia.apiKey) {
-  console.error("[FATAL] NVIDIA_API_KEY is required when AI_PROVIDER=nvidia");
+  console.error("[FATAL] NVIDIA_API_KEY is required when AI_PROVIDER=nvidia/kimi");
   process.exit(1);
 }
 if (
