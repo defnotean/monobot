@@ -80,6 +80,52 @@ describe("OpenAI-compatible provider (Irene)", () => {
     );
   });
 
+  it("sends Owl Alpha tools without unsupported tool_choice", async () => {
+    Object.assign(config.openaiCompat, {
+      model: "openrouter/owl-alpha",
+      fastModel: "openrouter/owl-alpha",
+      maxTokens: 8192,
+      temperature: 0.9,
+      topP: 1,
+      toolChoice: "none",
+    });
+    mockFetchResponses(chatMessage({ role: "assistant", content: "ready" }));
+
+    const result = await provider.runGeminiChat({
+      systemInstruction: "system",
+      history: [],
+      tools: [
+        {
+          name: "search_meme_templates",
+          description: "search meme templates",
+          input_schema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        },
+      ],
+      message: { userMessage: "make a meme" },
+      executor: vi.fn(),
+      useFastModel: false,
+    });
+
+    const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(body).toMatchObject({
+      model: "openrouter/owl-alpha",
+      max_tokens: 8192,
+      temperature: 0.9,
+      top_p: 1,
+    });
+    expect(body.tools).toHaveLength(1);
+    expect(body.tools[0]).toMatchObject({
+      type: "function",
+      function: { name: "search_meme_templates" },
+    });
+    expect(body).not.toHaveProperty("tool_choice");
+    expect(result).toEqual({ text: "ready", toolsUsed: [] });
+  });
+
   it("rotates to the next configured key when OpenRouter rate-limits one", async () => {
     Object.assign(config.openaiCompat, {
       apiKey: "test-key-1",

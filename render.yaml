@@ -25,15 +25,17 @@ services:
       - key: OPENROUTER_API_KEYS
         sync: false
       - key: OPENAI_COMPAT_MODEL
-        value: qwen/qwen3-coder:free
+        value: openrouter/owl-alpha
       - key: OPENAI_COMPAT_FAST_MODEL
-        value: qwen/qwen3-coder:free
+        value: openrouter/owl-alpha
       - key: OPENAI_COMPAT_MAX_TOKENS
         value: "8192"
       - key: OPENAI_COMPAT_TEMPERATURE
         value: "0.9"
       - key: OPENAI_COMPAT_TOP_P
         value: "1.0"
+      - key: OPENAI_COMPAT_TOOL_CHOICE
+        value: none
       - key: OPENAI_COMPAT_PROVIDER_NAME
         value: OpenRouter
       - key: OPENAI_COMPAT_HTTP_REFERER
@@ -78,15 +80,17 @@ services:
       - key: OPENROUTER_API_KEYS
         sync: false
       - key: OPENAI_COMPAT_MODEL
-        value: qwen/qwen3-coder:free
+        value: openrouter/owl-alpha
       - key: OPENAI_COMPAT_FAST_MODEL
-        value: qwen/qwen3-coder:free
+        value: openrouter/owl-alpha
       - key: OPENAI_COMPAT_MAX_TOKENS
         value: "8192"
       - key: OPENAI_COMPAT_TEMPERATURE
         value: "0.9"
       - key: OPENAI_COMPAT_TOP_P
         value: "1.0"
+      - key: OPENAI_COMPAT_TOOL_CHOICE
+        value: none
       - key: OPENAI_COMPAT_PROVIDER_NAME
         value: OpenRouter
       - key: OPENAI_COMPAT_HTTP_REFERER

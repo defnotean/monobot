@@ -323,9 +323,9 @@ function buildBody({ model, messages, tools }) {
   if (Number.isFinite(OC.maxTokens) && OC.maxTokens > 0) body.max_tokens = OC.maxTokens;
   if (Number.isFinite(OC.temperature)) body.temperature = OC.temperature;
   if (Number.isFinite(OC.topP)) body.top_p = OC.topP;
-  if (tools?.length && OC.toolChoice !== "none") {
+  if (tools?.length) {
     body.tools = tools;
-    body.tool_choice = OC.toolChoice || "auto";
+    if (OC.toolChoice !== "none") body.tool_choice = OC.toolChoice || "auto";
   }
   return body;
 }
