@@ -42,7 +42,7 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
-      const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
+      const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5&extra_snippets=true`, {
         headers: {
           "Accept": "application/json",
           "Accept-Encoding": "gzip",
@@ -52,7 +52,13 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
       }).finally(() => clearTimeout(timer));
       if (res.ok) {
         const json = await res.json();
-        const results = (json.web?.results || []).slice(0, 5).map((r, i) => `${i + 1}. ${r.title}\n   ${r.description}\n   ${r.url}`);
+        const results = (json.web?.results || []).slice(0, 5).map((r, i) => {
+          let snips = [r.description];
+          if (r.extra_snippets && r.extra_snippets.length > 0) {
+            snips.push(...r.extra_snippets);
+          }
+          return `${i + 1}. ${r.title}\n   ${snips.join("\n   ")}\n   ${r.url}`;
+        });
         if (results.length) return results.join("\n\n");
       }
     } catch (e) {
