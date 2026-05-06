@@ -548,7 +548,8 @@ export async function execute(toolName, input, message, ctx) {
       }
 
       // ── Tier 2: Gemini Google Search grounding (always available when we have Gemini keys) ──
-      const client = getGroundingClient();
+      const allowGrounding = config.aiProvider === "gemini" || process.env.WEB_SEARCH_GEMINI_GROUNDING === "1";
+      const client = allowGrounding ? getGroundingClient() : null;
       if (client) {
         try {
           const resp = await Promise.race([
@@ -576,25 +577,23 @@ export async function execute(toolName, input, message, ctx) {
         }
       }
 
-      // ── Tier 3: DuckDuckGo instant answer (last resort) ──
+      // ── Tier 3: DuckDuckGo HTML scraping (last resort, can break when DDG changes markup) ──
       try {
-        const ddgUrl = `https://api.duckduckgo.com/?q=${encoded}&format=json&no_html=1&skip_disambig=1`;
-        const res = await safeFetch(ddgUrl, { timeoutMs: 8_000 });
-        const data = JSON.parse(res.text);
-
-        const parts = [];
-        if (data.AbstractText) parts.push(`**${data.AbstractSource}**: ${data.AbstractText}`);
-        if (data.Answer) parts.push(`**Answer**: ${data.Answer}`);
-        if (data.RelatedTopics?.length) {
-          const topics = data.RelatedTopics.slice(0, 5)
-            .filter((t) => t.Text)
-            .map((t, i) => `${i + 1}. ${t.Text}${t.FirstURL ? ` — ${t.FirstURL}` : ""}`);
-          if (topics.length) parts.push(`**Related**:\n${topics.join("\n")}`);
-        }
-        if (parts.length) return wrapWebOutput(`🔍 "${input.query}":\n\n${parts.join("\n\n")}`, userId);
-
-        const liteUrl = `https://lite.duckduckgo.com/lite/?q=${encoded}`;
-        return `No results found. Try searching directly: ${liteUrl}`;
+        const res = await safeFetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(input.query)}`, {
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+          timeoutMs: 10_000,
+        });
+        const cheerio = await import("cheerio");
+        const $ = cheerio.load(res.text);
+        const results = [];
+        $(".result__body").each((i, el) => {
+          if (i >= 5) return false;
+          const title = $(el).find(".result__a").text().trim();
+          const snippet = $(el).find(".result__snippet").text().trim();
+          const href = $(el).find(".result__a").attr("href") || "";
+          results.push(`${i + 1}. ${title}\n   ${snippet}\n   ${href}`);
+        });
+        return results.length ? wrapWebOutput(`🔍 "${input.query}":\n\n${results.join("\n\n")}`, userId) : `No results found for "${input.query}".`;
       } catch (err) {
         return `Search failed: ${err.message}`;
       }

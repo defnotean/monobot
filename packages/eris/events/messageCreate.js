@@ -757,6 +757,12 @@ export default async function messageCreate(message) {
       }
 
       // Proactive engagement hints
+      try {
+        const { getSlangGuardContext } = await import("@defnotean/shared/slangGuard.js");
+        const slangCtx = getSlangGuardContext(cleanMessage);
+        if (slangCtx) systemInstruction += slangCtx;
+      } catch (e) { log(`[SlangGuard] Import failed: ${e.message}`); }
+
       if (/```|function\s|const\s|import\s|class\s/.test(cleanMessage)) {
         systemInstruction += "\n[CONTEXT: user shared code — consider offering a review or commenting on it]";
       }
@@ -1105,7 +1111,7 @@ HOW TO INTERACT:
         const needsResearch = !isGreeting && !isMusicShare && t.length >= 5 && (factualQ || whQuestion || challenge || studyCtx);
         const isVent = /(im sad|i'?m sad|venting|im upset|i'?m upset|had a bad day|something happened|my day|just need to talk|i feel like)/i.test(t);
         if (needsResearch) {
-          systemInstruction += `\n\n[MANDATORY_SEARCH — THIS MESSAGE REQUIRES RESEARCH]\nThe user's message is a factual question, assignment, or factual challenge. Your FIRST action this turn MUST be a web_search tool call. No "let me check" preamble — just call the tool. Fire multiple parallel web_search calls if the question has independent parts. After results arrive, answer in ONE short reply (≤ 250 chars) that pairs the answer with the reason from the search. Do NOT claim you "just checked" unless a web_search call appears in this turn's tool history.`;
+          systemInstruction += `\n\n[MANDATORY_SEARCH — THIS MESSAGE REQUIRES RESEARCH]\nThe user's message has been flagged as a factual question, assignment, or factual challenge. Your FIRST action this turn MUST be a web_search tool call. You are forbidden from outputting ANY text, disclaimer, hedge, or answer BEFORE the search results come back. No "let me check" preamble — just call the tool. If the question has multiple independent parts, fire multiple parallel web_search calls in this same turn. After the search results arrive, answer in ONE short reply (under ~250 chars) that pairs the answer with the reason drawn from the search results. Do NOT claim you "just checked" unless a web_search call appears in this turn's tool history. If no useful results came back, say honestly "couldnt find solid info on that" — do not fill in from memory.`;
         }
         // Whitelist owner-action force — same hallucination pattern as Irene:
         // weaker models refuse owner-only whitelist tools in prose ("only the

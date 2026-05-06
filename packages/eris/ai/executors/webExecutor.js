@@ -49,7 +49,8 @@ export async function execute(toolName, input, message, _context) {
       const userId = message?.author?.id;
 
       // ── Tier 1: Gemini Google Search grounding — reliable, uses real Google results ──
-      const client = getGroundingClient();
+      const allowGrounding = config.aiProvider === "gemini" || process.env.WEB_SEARCH_GEMINI_GROUNDING === "1";
+      const client = allowGrounding ? getGroundingClient() : null;
       if (client) {
         try {
           const resp = await Promise.race([
