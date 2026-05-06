@@ -16,35 +16,21 @@ services:
       - key: DISCORD_CLIENT_ID
         sync: false
       - key: AI_PROVIDER
-        value: kimi
-      - key: NVIDIA_API_KEY
-        sync: false
-      - key: NVIDIA_BASE_URL
-        value: https://integrate.api.nvidia.com/v1
-      - key: NVIDIA_MODEL
-        value: moonshotai/kimi-k2.6
-      - key: NVIDIA_FAST_MODEL
-        value: moonshotai/kimi-k2.6
-      - key: NVIDIA_MAX_TOKENS
-        value: "16384"
-      - key: NVIDIA_TEMPERATURE
-        value: "1.0"
-      - key: NVIDIA_TOP_P
-        value: "1.0"
-      - key: NVIDIA_THINKING
-        value: "true"
-      - key: NVIDIA_TOOL_STRICTNESS
-        value: balanced
-      - key: TIMEOUT_WORKER
-        value: "120000"
+        value: openrouter
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_API_KEYS
         sync: false
       - key: OPENAI_COMPAT_MODEL
-        value: openai/gpt-oss-120b:free
+        value: qwen/qwen3-coder:free
       - key: OPENAI_COMPAT_FAST_MODEL
-        value: openai/gpt-oss-120b:free
+        value: qwen/qwen3-coder:free
+      - key: OPENAI_COMPAT_MAX_TOKENS
+        value: "8192"
+      - key: OPENAI_COMPAT_TEMPERATURE
+        value: "0.9"
+      - key: OPENAI_COMPAT_TOP_P
+        value: "1.0"
       - key: OPENAI_COMPAT_PROVIDER_NAME
         value: OpenRouter
       - key: OPENAI_COMPAT_HTTP_REFERER
