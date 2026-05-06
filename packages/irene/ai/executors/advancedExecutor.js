@@ -580,7 +580,9 @@ export async function execute(toolName, input, message, ctx) {
       // ── Tier 3: DuckDuckGo Lite POST (last resort, bypasses anti-bot 202 responses) ──
       try {
         const body = `q=${encodeURIComponent(input.query)}`;
-        const res = await safeFetch(`https://lite.duckduckgo.com/lite/`, {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        const res = await fetch(`https://lite.duckduckgo.com/lite/`, {
           method: "POST",
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
@@ -588,10 +590,13 @@ export async function execute(toolName, input, message, ctx) {
             "Content-Length": Buffer.byteLength(body).toString()
           },
           body: body,
-          timeoutMs: 10_000,
-        });
+          signal: controller.signal
+        }).finally(() => clearTimeout(timer));
+        
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const html = await res.text();
         const cheerio = await import("cheerio");
-        const $ = cheerio.load(res.text);
+        const $ = cheerio.load(html);
         const results = [];
         $("tr").each((i, el) => {
           if (results.length >= 5) return false;
