@@ -62,6 +62,36 @@ describe("webSearchEngine Brave support", () => {
     expect((init.headers as Record<string, string>)["X-Subscription-Token"]).toBe("search-key");
   });
 
+  it("does not spend the full tool timeout waiting for slow Brave Answers", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        web: {
+          results: [{
+            title: "Fast search fallback",
+            description: "Search results came back quickly.",
+            url: "https://example.test/fast",
+          }],
+        },
+      }), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const started = Date.now();
+    const out = await performWebSearch("crack someone slang", {
+      braveAnswersApiKey: "answers-key",
+      braveSearchApiKey: "search-key",
+      braveAnswersTimeoutMs: 20,
+      braveSearchTimeoutMs: 500,
+    }, 1000);
+
+    expect(Date.now() - started).toBeLessThan(900);
+    expect(out).toContain("Fast search fallback");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("formats Brave payloads without empty snippet noise", () => {
     expect(formatBraveAnswerPayload({
       choices: [{ message: { content: "<answer>short answer</answer><usage>ignore</usage>" } }],

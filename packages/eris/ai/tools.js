@@ -184,7 +184,7 @@ export const EVERYONE_TOOLS = [
     name: "web_search",
     tags: ["fun"],
     description:
-      "Search the web for current information. Use when someone asks a question you don't know the answer to, needs up-to-date info, or wants to look something up (news, docs, trivia, etc.).",
+      "Search the web for current information. Use when someone asks a question you don't know the answer to, needs up-to-date info, or wants to look something up (news, docs, trivia, etc.). One precise query is usually enough; don't run near-duplicate searches unless the first result clearly failed or the user asked for deeper cross-checking.",
     input_schema: {
       type: "object",
       properties: {

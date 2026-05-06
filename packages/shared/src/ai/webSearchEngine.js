@@ -19,6 +19,12 @@ function withTimeout(timeoutMs) {
   return { controller, timer };
 }
 
+function timeoutFor(config, key, fallbackMs, ceilingMs) {
+  const configured = Number(config?.[key]);
+  const value = Number.isFinite(configured) && configured > 0 ? configured : fallbackMs;
+  return Math.max(500, Math.min(value, ceilingMs));
+}
+
 function braveHeaders(apiKey, extra = {}) {
   return {
     Accept: "application/json",
@@ -71,7 +77,7 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // 1. Brave Answers API: direct web-grounded answer for Discord-style Q&A.
   if (config.braveAnswersApiKey) {
     try {
-      const { controller, timer } = withTimeout(timeoutMs);
+      const { controller, timer } = withTimeout(timeoutFor(config, "braveAnswersTimeoutMs", 5000, timeoutMs));
       const res = await fetch(BRAVE_ANSWERS_URL, {
         method: "POST",
         headers: braveHeaders(config.braveAnswersApiKey, { "Content-Type": "application/json" }),
@@ -99,7 +105,7 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // by lower tiers, so it is safe to request whenever a Brave key is present.
   if (config.braveSearchApiKey) {
     try {
-      const { controller, timer } = withTimeout(timeoutMs);
+      const { controller, timer } = withTimeout(timeoutFor(config, "braveSearchTimeoutMs", 3500, timeoutMs));
       const url = `${BRAVE_SEARCH_URL}?q=${encodeURIComponent(query)}&count=5&text_decorations=false&extra_snippets=true`;
       const res = await fetch(url, {
         headers: braveHeaders(config.braveSearchApiKey),
@@ -118,7 +124,7 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   if (config.searxngQueryUrl) {
     try {
       const url = config.searxngQueryUrl.replace("<query>", encodeURIComponent(query));
-      const { controller, timer } = withTimeout(timeoutMs);
+      const { controller, timer } = withTimeout(timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs));
       const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
       if (res.ok) {
         const json = await res.json();
@@ -133,7 +139,7 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // 4. Tavily
   if (config.tavilyApiKey) {
     try {
-      const { controller, timer } = withTimeout(timeoutMs);
+      const { controller, timer } = withTimeout(timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs));
       const res = await fetch("https://api.tavily.com/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -153,7 +159,7 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // 5. Serper API
   if (config.serperApiKey) {
     try {
-      const { controller, timer } = withTimeout(timeoutMs);
+      const { controller, timer } = withTimeout(timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs));
       const res = await fetch("https://google.serper.dev/search", {
         method: "POST",
         headers: {
@@ -176,7 +182,7 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // 6. Google Custom Search
   if (config.googleSearchKey && config.googleSearchCx) {
     try {
-      const { controller, timer } = withTimeout(timeoutMs);
+      const { controller, timer } = withTimeout(timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs));
       const res = await fetch(`https://www.googleapis.com/customsearch/v1?key=${config.googleSearchKey}&cx=${config.googleSearchCx}&q=${encodeURIComponent(query)}&num=5`, {
         signal: controller.signal
       }).finally(() => clearTimeout(timer));
@@ -193,7 +199,7 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // 7. DuckDuckGo Lite POST (Built-in Final Fallback)
   try {
     const body = `q=${encodeURIComponent(query)}`;
-    const { controller, timer } = withTimeout(timeoutMs);
+    const { controller, timer } = withTimeout(timeoutFor(config, "ddgTimeoutMs", 5000, timeoutMs));
     const res = await fetch(`https://lite.duckduckgo.com/lite/`, {
       method: "POST",
       headers: {

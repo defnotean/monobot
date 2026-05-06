@@ -2150,7 +2150,7 @@ export const EVERYONE_TOOLS = [
   // ─── Web Search & Read ───────────────────────────────────────────────
   {
     name: "web_search",
-    description: "Search the internet and return top results with titles, URLs, and snippets. Use for current events, fact-checking, looking up formulas, definitions, prices, stats, news, or anything that needs up-to-date information. ALWAYS use this when you're unsure about a fact or the user asks about something current.",
+    description: "Search the internet and return top results with titles, URLs, and snippets. Use for current events, fact-checking, looking up formulas, definitions, prices, stats, news, or anything that needs up-to-date information. ALWAYS use this when you're unsure about a fact or the user asks about something current. One precise query is usually enough; don't run near-duplicate searches unless the first result clearly failed or the user asked for deeper cross-checking.",
     input_schema: {
       type: "object",
       properties: {
