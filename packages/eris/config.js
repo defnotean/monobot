@@ -299,6 +299,15 @@ const config = {
     get enabled() { return !!(this.clientId && this.clientSecret && this.refreshToken); },
   },
 
+  webSearch: {
+    searxngQueryUrl: env("SEARXNG_QUERY_URL"),
+    tavilyApiKey: env("TAVILY_API_KEY"),
+    braveSearchApiKey: env("BRAVE_SEARCH_API_KEY"),
+    serperApiKey: env("SERPER_API_KEY"),
+    googleSearchKey: env("GOOGLE_SEARCH_KEY"),
+    googleSearchCx: env("GOOGLE_SEARCH_CX"),
+  },
+
   // ═══════════════════════════════════════════════════════════════════════════
   // BOT PERSONALITY — assembled from prompts/*.md at startup. The huge inline
   // string below is the fallback used when the prompt files can't be read; it

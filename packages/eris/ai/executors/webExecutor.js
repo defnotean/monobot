@@ -77,39 +77,11 @@ export async function execute(toolName, input, message, _context) {
         }
       }
 
-      // ── Tier 2: DuckDuckGo Lite POST (last resort, bypasses anti-bot 202 responses) ──
+      // ── Tier 2: Universal Web Search (Brave, Tavily, SearxNG, Serper, Google, or DDG fallback) ──
       try {
-        const body = `q=${encodeURIComponent(query)}`;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10000);
-        const res = await fetch(`https://lite.duckduckgo.com/lite/`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Content-Length": Buffer.byteLength(body).toString()
-          },
-          body: body,
-          signal: controller.signal
-        }).finally(() => clearTimeout(timer));
-        
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const html = await res.text();
-        const cheerio = await import("cheerio");
-        const $ = cheerio.load(html);
-        const results = [];
-        $("tr").each((i, el) => {
-          if (results.length >= 5) return false;
-          const snippetEl = $(el).find(".result-snippet");
-          if (snippetEl.length) {
-            const snippet = snippetEl.text().trim();
-            const titleEl = $(el).prev("tr").find(".result-title");
-            const title = titleEl.text().trim();
-            const href = titleEl.attr("href") || "";
-            results.push(`${results.length + 1}. ${title}\n   ${snippet}\n   ${href}`);
-          }
-        });
-        return results.length ? wrapWebOutput(results.join("\n\n"), userId) : "no results found";
+        const { performWebSearch } = await import("@defnotean/shared/webSearchEngine.js");
+        const results = await performWebSearch(query, config.webSearch, 10000);
+        return wrapWebOutput(results, userId);
       } catch (e) {
         return `search failed: ${e.message}`;
       }

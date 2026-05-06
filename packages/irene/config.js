@@ -276,6 +276,15 @@ const config = {
     return !!(this.supabaseUrl && this.supabaseKey && !this.supabaseUrl.includes("your-"));
   },
 
+  webSearch: {
+    searxngQueryUrl: env("SEARXNG_QUERY_URL"),
+    tavilyApiKey: env("TAVILY_API_KEY"),
+    braveSearchApiKey: env("BRAVE_SEARCH_API_KEY"),
+    serperApiKey: env("SERPER_API_KEY"),
+    googleSearchKey: env("GOOGLE_SEARCH_KEY"),
+    googleSearchCx: env("GOOGLE_SEARCH_CX"),
+  },
+
   twitchClientId: env("TWITCH_CLIENT_ID"),
   twitchClientSecret: env("TWITCH_CLIENT_SECRET"),
 

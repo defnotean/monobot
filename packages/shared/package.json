@@ -13,7 +13,8 @@
     "./safeFetch": "./src/safeFetch.js",
     "./firewall": "./src/ai/firewall.js",
     "./firewallPatterns": "./src/ai/firewallPatterns.js",
-    "./slangGuard.js": "./src/ai/slangGuard.js"
+    "./slangGuard.js": "./src/ai/slangGuard.js",
+    "./webSearchEngine": "./src/ai/webSearchEngine.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json --noEmit",
