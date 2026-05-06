@@ -446,11 +446,37 @@ export async function runOpenAICompatChat(arg1, ...rest) {
 
     if (!msg.tool_calls?.length) {
       finalText = msg.content || "";
-      if (!finalText) finalText = fallbackForFinishReason(finishReason, toolsUsed.length > 0);
-      if (finishReason && !["stop", "tool_calls", "function_call"].includes(finishReason)) {
-        log(`[${OC.providerName || "OpenAICompat"}] finish_reason=${finishReason}`);
+      
+      // Rescue hallucinated tool calls (common with weaker models)
+      const trimmed = finalText.trim();
+      if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          const fnName = parsed.tool || parsed.name || parsed.function || (parsed.query ? "web_search" : null);
+          const fnArgs = parsed.arguments || parsed.args || parsed.parameters || (parsed.query ? parsed : {});
+          if (fnName && openaiTools?.some((t) => t.function.name === fnName)) {
+            msg.tool_calls = [{
+              id: `call_hallucinated_${Date.now()}`,
+              type: "function",
+              function: {
+                name: fnName,
+                arguments: typeof fnArgs === "string" ? fnArgs : JSON.stringify(fnArgs)
+              }
+            }];
+            msg.content = null;
+            finalText = "";
+            log(`[${OC.providerName || "OpenAICompat"}] rescued hallucinated tool call for ${fnName}`);
+          }
+        } catch (e) { /* ignore */ }
       }
-      break;
+
+      if (!msg.tool_calls?.length) {
+        if (!finalText) finalText = fallbackForFinishReason(finishReason, toolsUsed.length > 0);
+        if (finishReason && !["stop", "tool_calls", "function_call"].includes(finishReason)) {
+          log(`[${OC.providerName || "OpenAICompat"}] finish_reason=${finishReason}`);
+        }
+        break;
+      }
     }
 
     messages.push({ role: "assistant", content: msg.content || null, tool_calls: msg.tool_calls });
