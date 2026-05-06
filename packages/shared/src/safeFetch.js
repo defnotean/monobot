@@ -144,7 +144,9 @@ export async function safeFetch(rawUrl, opts = {}) {
     while (true) {
       await validateUrlAsync(currentUrl);
       const res = await fetch(currentUrl, {
+        method: opts.method || "GET",
         headers,
+        body: opts.body,
         redirect: "manual",
         signal: controller.signal,
       });
