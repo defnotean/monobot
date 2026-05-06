@@ -43,12 +43,27 @@ function stripBraveAnswerMarkup(text) {
     .trim();
 }
 
+function isUnhelpfulBraveAnswer(text) {
+  const normalized = compact(text).toLowerCase();
+  if (!normalized) return true;
+  return [
+    /provided (?:search )?results do not contain any information/,
+    /provided context (?:does not|doesn't) (?:contain|mention)/,
+    /no information (?:is )?available/,
+    /no relevant (?:results|information|context)/,
+    /could not find/,
+    /couldn't find/,
+    /cannot provide (?:a )?(?:relevant )?answer/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
 export function formatBraveAnswerPayload(json) {
   const message = json?.choices?.[0]?.message;
   const content = Array.isArray(message?.content)
     ? message.content.map((part) => part?.text || part?.content || "").join("")
     : message?.content;
   const text = stripBraveAnswerMarkup(content || json?.answer || json?.content || json?.summary || "");
+  if (isUnhelpfulBraveAnswer(text)) return "";
   return text ? `Brave Answers:\n${text}` : "";
 }
 

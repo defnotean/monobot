@@ -62,6 +62,38 @@ describe("webSearchEngine Brave support", () => {
     expect((init.headers as Record<string, string>)["X-Subscription-Token"]).toBe("search-key");
   });
 
+  it("falls back to Brave Search when Brave Answers only says it has no context", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: 'The provided search results do not contain any information about "jtmachina." Therefore, I cannot provide a relevant answer.',
+          },
+        }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        web: {
+          results: [{
+            title: "JT Machina",
+            description: "A creator profile surfaced by web search.",
+            url: "https://example.test/jtmachina",
+          }],
+        },
+      }), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const out = await performWebSearch("jtmachina", {
+      braveAnswersApiKey: "answers-key",
+      braveSearchApiKey: "search-key",
+    }, 1000);
+
+    expect(out).toContain("JT Machina");
+    expect(out).toContain("creator profile");
+    expect(out).not.toContain("Brave Answers");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not spend the full tool timeout waiting for slow Brave Answers", async () => {
     const fetchMock = vi
       .fn()
@@ -96,6 +128,10 @@ describe("webSearchEngine Brave support", () => {
     expect(formatBraveAnswerPayload({
       choices: [{ message: { content: "<answer>short answer</answer><usage>ignore</usage>" } }],
     })).toBe("Brave Answers:\nshort answer");
+
+    expect(formatBraveAnswerPayload({
+      choices: [{ message: { content: "No information is available in the provided context." } }],
+    })).toBe("");
 
     expect(formatBraveSearchPayload({
       web: { results: [{ title: "Title", description: "", extra_snippets: ["extra"], url: "https://example.test" }] },

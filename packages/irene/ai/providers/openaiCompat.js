@@ -13,6 +13,26 @@ function stableStringify(value) {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
 }
 
+const WEB_SEARCH_INTENT_WORDS = new Set([
+  "a", "an", "about", "account", "are", "called", "creator", "define", "definition",
+  "does", "for", "from", "get", "info", "information", "is", "lookup", "meaning",
+  "named", "of", "on", "person", "profile", "search", "slang", "someone", "somebody",
+  "the", "to", "user", "was", "were", "what", "who", "with",
+]);
+
+function webSearchCacheKey(fnName, fnArgs) {
+  if (fnName !== "web_search") return "";
+  const query = typeof fnArgs?.query === "string" ? fnArgs.query : "";
+  const tokens = query
+    .toLowerCase()
+    .replace(/['"`]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token && !WEB_SEARCH_INTENT_WORDS.has(token));
+  return tokens.join(" ");
+}
+
 function sanitizeForOpenAI(schema) {
   if (!schema || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) return schema.map(sanitizeForOpenAI);
@@ -420,6 +440,7 @@ export async function runOpenAICompatChat(arg1, ...rest) {
   const toolsUsed = [];
   let finalText = "";
   const calledSignatures = new Set();
+  const webSearchResults = new Map();
   const maxIterations = Math.max(1, OC.maxIterations || 10);
   const shouldPersistHistory = Array.isArray(history) && typeof arg1 === "object" && arg1;
 
@@ -511,14 +532,19 @@ export async function runOpenAICompatChat(arg1, ...rest) {
         allDuplicates = false;
         return { call, fnName, fnArgs, duplicate: false, parseError };
       }
+      const searchKey = webSearchCacheKey(fnName, fnArgs);
+      if (searchKey && webSearchResults.has(searchKey)) {
+        allDuplicates = false;
+        return { call, fnName, fnArgs, duplicate: false, cacheHit: true, cacheResult: webSearchResults.get(searchKey), parseError };
+      }
       const signature = `${fnName}::${stableStringify(fnArgs)}`;
       if (calledSignatures.has(signature)) return { call, fnName, fnArgs, duplicate: true, parseError };
       calledSignatures.add(signature);
       allDuplicates = false;
-      return { call, fnName, fnArgs, duplicate: false, parseError };
+      return { call, fnName, fnArgs, duplicate: false, parseError, searchKey };
     });
 
-    const fresh = slots.filter((slot) => !slot.duplicate && !slot.parseError && slot.fnName);
+    const fresh = slots.filter((slot) => !slot.duplicate && !slot.cacheHit && !slot.parseError && slot.fnName);
     if (fresh.length > 1) log(`[${OC.providerName || "OpenAICompat"}] running ${fresh.length} tool calls in parallel`);
     if (fresh.length && onToolStatus) {
       await onToolStatus(`running ${fresh.map((s) => s.fnName).join(", ")}`).catch(() => {});
@@ -536,7 +562,9 @@ export async function runOpenAICompatChat(arg1, ...rest) {
 
     const byId = new Map();
     fresh.forEach((slot, index) => {
-      byId.set(slot.call.id, results[index]);
+      const result = results[index];
+      byId.set(slot.call.id, result);
+      if (slot.searchKey) webSearchResults.set(slot.searchKey, result);
       toolsUsed.push(slot.fnName);
     });
 
@@ -544,6 +572,8 @@ export async function runOpenAICompatChat(arg1, ...rest) {
       let content;
       if (slot.parseError) {
         content = `Tool arguments were malformed JSON: ${slot.parseError.message}`;
+      } else if (slot.cacheHit) {
+        content = `Already searched for "${slot.fnArgs?.query || "that"}" this turn. Use this previous result instead of searching again:\n${stringifyToolContent(slot.cacheResult)}`;
       } else if (slot.duplicate) {
         content = `Already executed this exact call earlier. Do not call ${slot.fnName} again with these arguments.`;
       } else {

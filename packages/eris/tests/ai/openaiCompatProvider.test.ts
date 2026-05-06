@@ -259,6 +259,51 @@ describe("OpenAI-compatible provider (Eris)", () => {
     });
   });
 
+  it("reuses same-turn web search results for near-duplicate queries", async () => {
+    const executor = vi.fn(async () => "no useful results found");
+    mockFetchResponses(
+      chatMessage({
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: "call_1",
+          type: "function",
+          function: { name: "web_search", arguments: JSON.stringify({ query: "jtmachina" }) },
+        }],
+      }),
+      chatMessage({
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: "call_2",
+          type: "function",
+          function: { name: "web_search", arguments: JSON.stringify({ query: "jtmachina creator" }) },
+        }],
+      }),
+      chatMessage({ role: "assistant", content: "i still could not find much on that name" }),
+    );
+
+    const result = await provider.runGeminiChat(
+      null,
+      "system",
+      [{ name: "web_search", description: "search web", input_schema: { type: "object" } }],
+      [],
+      "who is jtmachina",
+      executor,
+    );
+    const thirdBody = JSON.parse((globalThis.fetch as any).mock.calls[2][1].body);
+
+    expect(executor).toHaveBeenCalledOnce();
+    expect(executor).toHaveBeenCalledWith("web_search", { query: "jtmachina" });
+    expect(thirdBody.messages.at(-1)).toMatchObject({
+      role: "tool",
+      tool_call_id: "call_2",
+    });
+    expect(thirdBody.messages.at(-1).content).toContain('Already searched for "jtmachina creator"');
+    expect(thirdBody.messages.at(-1).content).toContain("no useful results found");
+    expect(result).toEqual({ text: "i still could not find much on that name", toolsUsed: ["web_search"] });
+  });
+
   it("persists tool calls as structured Gemini parts so later turns replay as proper OpenAI tool_calls (not prose)", async () => {
     const history: any[] = [{ role: "user", parts: [{ text: "[defnotean said]\nAlright Eris, dab for me" }] }];
     const executor = vi.fn(async (_name, args) => ({ ok: true, sent: args.query }));
