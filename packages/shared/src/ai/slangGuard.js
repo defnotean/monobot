@@ -13,6 +13,11 @@ export function getSlangGuardContext(text) {
       /\b(?:fucking|super)\s+crack(?:ed|ing)?\b/.test(lower)) {
     return "\n[CONTEXT: user used 'crack/cracking' as slang — it means being extremely skilled, 'going off', or letting someone do their thing (like 'let him cook'). It does NOT mean breaking, drugs, or cracking jokes. Respond naturally to the slang.]";
   }
+
+  // Detect "crack someone", "crack you", "crack him" -> teasing/roasting
+  if (/\bcrack(?:ing)?\s+(?:someone|somebody|you|u|me|him|her|them|bro)\b/.test(lower) || /\bcrack\s+you\b/.test(lower)) {
+    return "\n[CONTEXT: user used 'crack someone' as slang — it means to mess with them, tease them, roast them, or try to get a reaction out of them. Respond naturally knowing this definition.]";
+  }
   
   return null;
 }

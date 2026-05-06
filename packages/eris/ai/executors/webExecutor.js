@@ -77,21 +77,32 @@ export async function execute(toolName, input, message, _context) {
         }
       }
 
-      // ── Tier 2: DuckDuckGo HTML scraping (last resort, can break when DDG changes markup) ──
+      // ── Tier 2: DuckDuckGo Lite POST (last resort, bypasses anti-bot 202 responses) ──
       try {
-        const res = await safeFetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+        const body = `q=${encodeURIComponent(query)}`;
+        const res = await safeFetch(`https://lite.duckduckgo.com/lite/`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Content-Length": Buffer.byteLength(body).toString()
+          },
+          body: body,
           timeoutMs: 10_000,
         });
         const cheerio = await import("cheerio");
         const $ = cheerio.load(res.text);
         const results = [];
-        $(".result__body").each((i, el) => {
-          if (i >= 5) return false;
-          const title = $(el).find(".result__a").text().trim();
-          const snippet = $(el).find(".result__snippet").text().trim();
-          const href = $(el).find(".result__a").attr("href") || "";
-          results.push(`${i + 1}. ${title}\n   ${snippet}\n   ${href}`);
+        $("tr").each((i, el) => {
+          if (results.length >= 5) return false;
+          const snippetEl = $(el).find(".result-snippet");
+          if (snippetEl.length) {
+            const snippet = snippetEl.text().trim();
+            const titleEl = $(el).prev("tr").find(".result-title");
+            const title = titleEl.text().trim();
+            const href = titleEl.attr("href") || "";
+            results.push(`${results.length + 1}. ${title}\n   ${snippet}\n   ${href}`);
+          }
         });
         return results.length ? wrapWebOutput(results.join("\n\n"), userId) : "no results found";
       } catch (e) {
