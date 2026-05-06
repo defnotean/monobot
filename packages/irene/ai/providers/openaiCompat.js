@@ -450,24 +450,38 @@ export async function runOpenAICompatChat(arg1, ...rest) {
       // Rescue hallucinated tool calls (common with weaker models)
       const trimmed = finalText.trim();
       if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+        let fnName = null;
+        let fnArgs = {};
+        let parsedOk = false;
+
         try {
           const parsed = JSON.parse(trimmed);
-          const fnName = parsed.tool || parsed.name || parsed.function || (parsed.query ? "web_search" : null);
-          const fnArgs = parsed.arguments || parsed.args || parsed.parameters || (parsed.query ? parsed : {});
-          if (fnName && openaiTools?.some((t) => t.function.name === fnName)) {
-            msg.tool_calls = [{
-              id: `call_hallucinated_${Date.now()}`,
-              type: "function",
-              function: {
-                name: fnName,
-                arguments: typeof fnArgs === "string" ? fnArgs : JSON.stringify(fnArgs)
-              }
-            }];
-            msg.content = null;
-            finalText = "";
-            log(`[${OC.providerName || "OpenAICompat"}] rescued hallucinated tool call for ${fnName}`);
+          fnName = parsed.tool || parsed.name || parsed.function || (parsed.query ? "web_search" : null);
+          fnArgs = parsed.arguments || parsed.args || parsed.parameters || (parsed.query ? parsed : {});
+          parsedOk = true;
+        } catch (e) {
+          // If JSON.parse fails (e.g. unescaped quotes: "query": "slang "crack" someone"), try regex
+          const qMatch = trimmed.match(/"query"\s*:\s*"([\s\S]*?)"\s*(?:}|,)/);
+          if (qMatch) {
+            fnName = "web_search";
+            fnArgs = { query: qMatch[1].trim() };
+            parsedOk = true;
           }
-        } catch (e) { /* ignore */ }
+        }
+
+        if (parsedOk && fnName && openaiTools?.some((t) => t.function.name === fnName)) {
+          msg.tool_calls = [{
+            id: `call_hallucinated_${Date.now()}`,
+            type: "function",
+            function: {
+              name: fnName,
+              arguments: typeof fnArgs === "string" ? fnArgs : JSON.stringify(fnArgs)
+            }
+          }];
+          msg.content = null;
+          finalText = "";
+          log(`[${OC.providerName || "OpenAICompat"}] rescued hallucinated tool call for ${fnName}`);
+        }
       }
 
       if (!msg.tool_calls?.length) {
