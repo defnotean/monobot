@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // @ts-expect-error - importing JS module without types
-import { callEris, erisErrorText, execute } from "../../../ai/executors/advancedExecutor.js";
+import { callEris, erisErrorText, execute, shouldUseGeminiGroundingForWebSearch } from "../../../ai/executors/advancedExecutor.js";
 // @ts-expect-error - importing JS module without types
 import { verifyTwinRequest } from "@defnotean/shared/twinSign";
 // @ts-expect-error - importing JS module without types
@@ -149,5 +149,33 @@ describe("calculate executor", () => {
     await expect(execute("calculate", {
       expression: "2 ** 99",
     }, {} as any, {} as any)).resolves.toContain("large exponents are forbidden");
+  });
+});
+
+describe("web_search grounding selection", () => {
+  const savedProvider = config.aiProvider;
+  const savedOverride = process.env.WEB_SEARCH_GEMINI_GROUNDING;
+
+  afterEach(() => {
+    config.aiProvider = savedProvider;
+    if (savedOverride === undefined) delete process.env.WEB_SEARCH_GEMINI_GROUNDING;
+    else process.env.WEB_SEARCH_GEMINI_GROUNDING = savedOverride;
+  });
+
+  it("skips Gemini grounding when Irene is using OpenRouter", () => {
+    config.aiProvider = "openrouter";
+    delete process.env.WEB_SEARCH_GEMINI_GROUNDING;
+
+    expect(shouldUseGeminiGroundingForWebSearch()).toBe(false);
+  });
+
+  it("keeps Gemini grounding for Gemini provider or explicit opt-in", () => {
+    config.aiProvider = "gemini";
+    delete process.env.WEB_SEARCH_GEMINI_GROUNDING;
+    expect(shouldUseGeminiGroundingForWebSearch()).toBe(true);
+
+    config.aiProvider = "openrouter";
+    process.env.WEB_SEARCH_GEMINI_GROUNDING = "true";
+    expect(shouldUseGeminiGroundingForWebSearch()).toBe(true);
   });
 });

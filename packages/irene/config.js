@@ -280,6 +280,8 @@ const config = {
     searxngQueryUrl: env("SEARXNG_QUERY_URL"),
     tavilyApiKey: env("TAVILY_API_KEY"),
     braveSearchApiKey: env("BRAVE_SEARCH_API_KEY"),
+    braveAnswersApiKey: env("BRAVE_ANSWERS_API_KEY", env("BRAVE_SEARCH_API_KEY")),
+    braveAnswersModel: env("BRAVE_ANSWERS_MODEL", "brave"),
     serperApiKey: env("SERPER_API_KEY"),
     googleSearchKey: env("GOOGLE_SEARCH_KEY"),
     googleSearchCx: env("GOOGLE_SEARCH_CX"),

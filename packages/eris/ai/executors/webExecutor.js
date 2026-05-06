@@ -38,6 +38,13 @@ function getGroundingClient() {
   return c;
 }
 
+export function shouldUseGeminiGroundingForWebSearch() {
+  const override = String(process.env.WEB_SEARCH_GEMINI_GROUNDING || "").trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(override)) return true;
+  if (["0", "false", "no", "off"].includes(override)) return false;
+  return ["gemini", "google"].includes(String(config.aiProvider || "").toLowerCase());
+}
+
 export async function execute(toolName, input, message, _context) {
   if (!HANDLED.has(toolName)) return undefined;
 
@@ -48,9 +55,8 @@ export async function execute(toolName, input, message, _context) {
       if (!query) return "no search query provided";
       const userId = message?.author?.id;
 
-      // ── Tier 1: Gemini Google Search grounding — reliable, uses real Google results ──
-      const allowGrounding = config.aiProvider === "gemini" || process.env.WEB_SEARCH_GEMINI_GROUNDING === "1";
-      const client = allowGrounding ? getGroundingClient() : null;
+      // ── Tier 1: Gemini Google Search grounding — only when Gemini is active or explicitly enabled ──
+      const client = shouldUseGeminiGroundingForWebSearch() ? getGroundingClient() : null;
       if (client) {
         try {
           const resp = await Promise.race([

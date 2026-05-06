@@ -80,6 +80,13 @@ function getGroundingClient() {
   return c;
 }
 
+export function shouldUseGeminiGroundingForWebSearch() {
+  const override = String(process.env.WEB_SEARCH_GEMINI_GROUNDING || "").trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(override)) return true;
+  if (["0", "false", "no", "off"].includes(override)) return false;
+  return ["gemini", "google"].includes(String(config.aiProvider || "").toLowerCase());
+}
+
 const CALC_FUNCTIONS = {
   abs: Math.abs,
   acos: Math.acos,
@@ -540,16 +547,15 @@ export async function execute(toolName, input, message, ctx) {
               return wrapWebOutput(`🔍 Search results for "${input.query}":\n\n${results.join("\n\n")}`, userId);
             }
           } else {
-            log(`[web_search] Google CSE ${res.status} — falling back to Gemini grounding`);
+            log(`[web_search] Google CSE ${res.status} — falling back to ${shouldUseGeminiGroundingForWebSearch() ? "Gemini grounding" : "universal web search"}`);
           }
         } catch (err) {
-          log(`[web_search] Google CSE error: ${err.message} — falling back to Gemini grounding`);
+          log(`[web_search] Google CSE error: ${err.message} — falling back to ${shouldUseGeminiGroundingForWebSearch() ? "Gemini grounding" : "universal web search"}`);
         }
       }
 
-      // ── Tier 2: Gemini Google Search grounding (always available when we have Gemini keys) ──
-      const allowGrounding = config.aiProvider === "gemini" || process.env.WEB_SEARCH_GEMINI_GROUNDING === "1";
-      const client = allowGrounding ? getGroundingClient() : null;
+      // ── Tier 2: Gemini Google Search grounding (only when Gemini is active or explicitly enabled) ──
+      const client = shouldUseGeminiGroundingForWebSearch() ? getGroundingClient() : null;
       if (client) {
         try {
           const resp = await Promise.race([
