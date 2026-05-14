@@ -4,6 +4,17 @@ Both bots evolved from the same scaffolding. Some divergence is intentional (eac
 
 This is the new-dev summary. The full reconciliation plan is in [packages/eris/EXTRACTION_PLAN.md](../packages/eris/EXTRACTION_PLAN.md) — read that before doing extraction work.
 
+## What the status tags mean
+
+Every row in the table below is tagged with one of:
+
+- **IDENTICAL** — byte-for-byte equal (ignoring line endings). Ready to lift into `@defnotean/shared` as-is.
+- **ACCIDENTAL DRIFT** — *meant* to be the same, but one bot got an update the other didn't. Needs a quick reconcile pass, then it can be shared. The Notes column says which bot's version is **canonical** (the one to keep).
+- **INTENTIONALLY DIFFERENT** — diverged on purpose: different schema, personality, or domain. Stays per-bot; don't try to merge it.
+- **EXTRACTED** — already moved to `@defnotean/shared`; the per-bot copies are gone. Edit it in `packages/shared/`.
+
+Quick rule: if you're about to edit a file tagged anything other than `INTENTIONALLY DIFFERENT`, read [When your change touches drifted code](#when-your-change-touches-drifted-code) first so you don't deepen the drift.
+
 ## At a glance
 
 | File / module | Eris | Irene | Same? | Notes |

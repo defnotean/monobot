@@ -8,18 +8,16 @@ Monorepo housing the twin-bot system: two Discord bots (Eris + Irene) and a shar
 | [`packages/irene`](./packages/irene) | Irene — the good twin (server moderation, tickets, music, ~200 tools) | Render service: `irene-bot` |
 | [`packages/shared`](./packages/shared) | Shared core utilities: HMAC twin signing, LRU cache, role categorizer, SSRF-safe fetch | Imported by both bots via `@defnotean/shared/<module>` |
 
-## New here? Read in this order
+## New here?
 
-1. **[docs/start-here.md](./docs/start-here.md)** — 10-minute orientation tour. The 30-second mental model, the four files that hold most of the behavior, and which doc to read next based on what you're trying to do.
-2. **[GETTING_STARTED.md](./GETTING_STARTED.md)** — clone → install → running bot in ~15 minutes.
-3. **[docs/glossary.md](./docs/glossary.md)** — vocabulary used throughout the codebase (twin, tier, profile, sub-executor, gauntlet, drift, etc.).
-4. **[CONTRIBUTING.md](./CONTRIBUTING.md)** — workflow, commit conventions, what NOT to touch.
+**[docs/start-here.md](./docs/start-here.md)** is the front door — a 10-minute orientation with the mental model, the handful of files that hold most of the behavior, and a "pick your track" guide that points you at the right doc next. Start there and let it route you.
+
+In a hurry to just get a bot running? **[GETTING_STARTED.md](./GETTING_STARTED.md)** takes you from `git clone` to a live bot in about 15 minutes.
 
 ## Reference docs
 
 | File | Use it when |
 |---|---|
-| [docs/start-here.md](./docs/start-here.md) | First time opening the repo |
 | [docs/glossary.md](./docs/glossary.md) | A term in the code doesn't make sense |
 | [docs/where-do-i-edit.md](./docs/where-do-i-edit.md) | "I want to change X — what file?" decision tree |
 | [docs/cheatsheet.md](./docs/cheatsheet.md) | Copy-paste recipes for the 10 most common tasks |
@@ -31,7 +29,7 @@ Monorepo housing the twin-bot system: two Discord bots (Eris + Irene) and a shar
 | [docs/presence-api.md](./docs/presence-api.md) | The HMAC twin coordination layer + the dashboard REST surface |
 | [docs/drift-inventory.md](./docs/drift-inventory.md) | Eris ↔ Irene divergence at a glance — read before touching shared modules |
 | [docs/dev-guild-workflow.md](./docs/dev-guild-workflow.md) | Setting up a safe dev Discord guild for testing |
-| [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) | Render service runbook + 2026-04-24 post-mortem |
+| [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) | Render deployment runbook + known deploy gotchas |
 
 ## Development
 
@@ -49,14 +47,10 @@ For the watch-mode + dev-guild workflow, see [docs/local-dev-loop.md](./docs/loc
 
 ## History
 
-This monorepo was created by `git subtree add`-ing the two pre-existing repos:
-- [`defnotean/Eris`](https://github.com/defnotean/Eris) → `packages/eris/`
-- [`defnotean/Irene`](https://github.com/defnotean/Irene) → `packages/irene/`
+This monorepo was assembled from two previously separate bot repositories — one per bot — merged into a single npm-workspaces layout with a shared package.
 
-Original repos remain as-is for backward compatibility during the Render deploy migration. Once both services point at this monorepo, the originals can be archived.
+## Deployment
 
-## Migration notes
-
-See [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) for the step-by-step Render service update and the 2026-04-24 post-mortem (workspace dep hoisting silently broke production — required reading before touching dep ranges).
+See [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) for the step-by-step Render setup and known deploy gotchas (workspace dependency hoisting can silently break things — worth reading before touching dep ranges).
 
 See [docs/drift-inventory.md](./docs/drift-inventory.md) for files that have drifted between the two bots — some intentionally (per-bot personality, schema), some accidentally (slated for extraction into `@defnotean/shared`).

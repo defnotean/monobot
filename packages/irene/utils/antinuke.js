@@ -44,7 +44,7 @@ async function _exemptReason(guild, userId, settings) {
   // roles is a catastrophic false positive and the very scenario the
   // user hit that led to this fix.
   if (guild && userId === guild.ownerId) return "guild_owner";
-  // Bot owner (the person running Irene — e.g. defnotean). They run
+  // Bot owner (the person running Irene). They run
   // maintenance across servers they own and shouldn't get flagged.
   if (config?.userId && userId === String(config.userId)) return "bot_owner";
   // Explicit allowlist set via addToWhitelist.

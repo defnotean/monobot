@@ -121,7 +121,7 @@ Wrap in `database.js` `withUserLock(userId, async () => {...})`. Serializes per-
 `packages/irene/presence.js` — `TWIN_ALIASES` map (around line 536). Add `"foo" → "foo_full_tool_name"`. Both bots also need the requester-permission check to pass.
 
 ### Change what Irene's `ask_eris` can do (currently unsigned!)
-`packages/irene/ai/executors/advancedExecutor.js:430-492`. Sub-actions: `remind | note | fact | mood | status`. URL is hardcoded to `https://irene-bot.onrender.com/api/twin/...` (a known inconsistency).
+`packages/irene/ai/executors/advancedExecutor.js:430-492`. Sub-actions: `remind | note | fact | mood | status`. URL is hardcoded to `https://eris-bot.onrender.com/api/twin/...` (a known inconsistency).
 
 ### Add a new HMAC-signed twin endpoint
 1. Receiver: add a route in `packages/irene/presence.js` (or `packages/eris/api/dashboard.js`). Use `verifyTwinRequest` from `@defnotean/shared/twinSign`. Re-check requester is trusted.

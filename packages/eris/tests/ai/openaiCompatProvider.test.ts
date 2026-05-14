@@ -163,7 +163,7 @@ describe("OpenAI-compatible provider (Eris)", () => {
   });
 
   it("does not duplicate the current user message when history already contains it", async () => {
-    const userText = "[defnotean said]\ncount this sentinel once";
+    const userText = "[testuser said]\ncount this sentinel once";
     const history: any[] = [{ role: "user", parts: [{ text: userText }] }];
     mockFetchResponses(chatMessage({ role: "assistant", content: "normal-ok" }));
 
@@ -305,7 +305,7 @@ describe("OpenAI-compatible provider (Eris)", () => {
   });
 
   it("persists tool calls as structured Gemini parts so later turns replay as proper OpenAI tool_calls (not prose)", async () => {
-    const history: any[] = [{ role: "user", parts: [{ text: "[defnotean said]\nAlright Eris, dab for me" }] }];
+    const history: any[] = [{ role: "user", parts: [{ text: "[testuser said]\nAlright Eris, dab for me" }] }];
     const executor = vi.fn(async (_name, args) => ({ ok: true, sent: args.query }));
 
     mockFetchResponses(
@@ -328,7 +328,7 @@ describe("OpenAI-compatible provider (Eris)", () => {
       "system",
       [{ name: "send_gif", description: "send gif", input_schema: { type: "object" } }],
       history,
-      "[defnotean said]\nAlright Eris, dab for me",
+      "[testuser said]\nAlright Eris, dab for me",
       executor,
     );
 
@@ -352,7 +352,7 @@ describe("OpenAI-compatible provider (Eris)", () => {
     expect(resultPart?.functionResponse?.name).toBe("send_gif");
     expect(resultPart?.functionResponse?._id).toBe("call_dab");
 
-    history.push({ role: "user", parts: [{ text: "[defnotean said]\nhow about hit the quan for me" }] });
+    history.push({ role: "user", parts: [{ text: "[testuser said]\nhow about hit the quan for me" }] });
     mockFetchResponses(chatMessage({ role: "assistant", content: "fresh turn" }));
 
     await provider.runGeminiChat(
@@ -360,7 +360,7 @@ describe("OpenAI-compatible provider (Eris)", () => {
       "system",
       [{ name: "send_gif", description: "send gif", input_schema: { type: "object" } }],
       history,
-      "[defnotean said]\nhow about hit the quan for me",
+      "[testuser said]\nhow about hit the quan for me",
       executor,
     );
 

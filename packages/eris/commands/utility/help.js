@@ -14,7 +14,7 @@ export async function execute(interaction) {
       { name: "chat", value: "just @ me or DM me. i talk like a real person", inline: true },
       { name: "tools", value: "i can search the web, analyze images, make memes, set reminders, take notes, and way more", inline: true },
       { name: "memory", value: "i remember things about you across conversations", inline: true },
-      { name: "owner tools", value: "defnotean gets terminal access, email, github, system control", inline: true },
+      { name: "owner tools", value: "the bot owner gets terminal access, email, github, system control", inline: true },
     )
     .setFooter({ text: "46 AI tools | powered by gemini" });
 

@@ -7,3 +7,5 @@ process.env.GEMINI_API_KEY ||= "test-gemini-key";
 process.env.BOT_NAME ||= "eris-test";
 process.env.TWIN_API_SECRET ||= "test-twin-secret";
 process.env.IRENE_API_URL ||= "https://test-twin.local";
+process.env.BOT_OWNER_ID ||= "123456789012345678";
+process.env.TWIN_BOT_ID ||= "345678901234567890";

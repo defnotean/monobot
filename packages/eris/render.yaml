@@ -38,7 +38,7 @@ services:
       - key: OPENAI_COMPAT_HTTP_REFERER
         value: https://eris-bot.onrender.com
       - key: OPENAI_COMPAT_APP_TITLE
-        value: OpenClaw Eris
+        value: Eris
       - key: GEMINI_API_KEY
         sync: false
       - key: SUPABASE_URL

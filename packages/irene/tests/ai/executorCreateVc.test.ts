@@ -61,7 +61,7 @@ function makeMessage(content = "Irene Setup this vc to be a create") {
     content,
     guild,
     member,
-    author: { id: member.id, username: "defnotean" },
+    author: { id: member.id, username: "testuser" },
     client: { user: { id: "500000000000000005" } },
   } as any;
 }

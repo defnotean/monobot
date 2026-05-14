@@ -46,7 +46,7 @@ export function trackHumanInteraction(userId, username, message, sentiment, isCr
   rel.totalInteractions++;
   rel.lastSeen = Date.now();
 
-  // Creator (defnotean) — always max trust, zero grudge, pure devotion
+  // Creator — always max trust, zero grudge, pure devotion
   if (isCreator) {
     rel.trustLevel = 100;
     rel.grudge = 0;

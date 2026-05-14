@@ -264,10 +264,10 @@ const ERIS_TESTS = [
 
   // ── Owner: github ──
   { cat: "owner_gh",   prompt: "list my github repos",                                                                   expect: "github_repos" },
-  { cat: "owner_gh",   prompt: "list issues for repo defnotean/monobot",                                                expect: "github_issues" },
-  { cat: "owner_gh",   prompt: "list pull requests for defnotean/monobot",                                              expect: "github_prs" },
-  { cat: "owner_gh",   prompt: "create a github issue in defnotean/monobot titled 'bug: x'",                            expect: "github_create_issue" },
-  { cat: "owner_gh",   prompt: "show stats for repo defnotean/monobot",                                                 expect: "github_repo_stats" },
+  { cat: "owner_gh",   prompt: "list issues for repo octocat/hello-world",                                                expect: "github_issues" },
+  { cat: "owner_gh",   prompt: "list pull requests for octocat/hello-world",                                              expect: "github_prs" },
+  { cat: "owner_gh",   prompt: "create a github issue in octocat/hello-world titled 'bug: x'",                            expect: "github_create_issue" },
+  { cat: "owner_gh",   prompt: "show stats for repo octocat/hello-world",                                                 expect: "github_repo_stats" },
 
   // ── Owner: deploy / db ──
   { cat: "owner_ops",  prompt: "check deploy status of eris-bot",                                                   expect: "check_deploy" },
@@ -440,7 +440,7 @@ const IRENE_TESTS = [
   { cat: "notif",      prompt: "configure twitch notifications for shroud in channel 5555555555555555555",               expect: "configure_twitch" },
   // configure_youtube requires a 24-char YT channel ID (starts with UC), not a display name.
   { cat: "notif",      prompt: "set up youtube notifications for channel UCX6OQ3DkcsbYNE6H8uQQuVA in discord channel 5555555555555555555",  expect: "configure_youtube" },
-  { cat: "notif",      prompt: "configure github notifications for defnotean/monobot in channel 5555555555555555555",  expect: "configure_github" },
+  { cat: "notif",      prompt: "configure github notifications for octocat/hello-world in channel 5555555555555555555",  expect: "configure_github" },
   { cat: "notif",      prompt: "configure giveaway pings to use the Giveaway role",                                     expect: "configure_giveaway_pings" },
   { cat: "notif",      prompt: "show me the latest valorant patch notes as a test",                                     expect: "test_patch_news" },
 

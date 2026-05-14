@@ -1303,7 +1303,7 @@ export const EVERYONE_TOOLS = [
 
 // ═══════════════════════════════════════════════════════════════════════════
 // OWNER TOOLS — SYSTEM ACCESS, TERMINAL, PERSONALITY & GAME RIGGING
-// Owner-only (defnotean) machine-level tools: shell exec, local exec with
+// Owner-only (the bot owner) machine-level tools: shell exec, local exec with
 // audit description, live personality update, full game/slot odds rigging,
 // minion management.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1311,7 +1311,7 @@ export const OWNER_TOOLS = [
   {
     name: "execute_terminal",
     description:
-      "Execute a one-off shell command on the host machine and return stdout/stderr. Owner-only. Use when defnotean asks to run a command, check something on the server, or perform a system task. For a command that needs an audit description, use execute_local instead.",
+      "Execute a one-off shell command on the host machine and return stdout/stderr. Owner-only. Use when the bot owner asks to run a command, check something on the server, or perform a system task. For a command that needs an audit description, use execute_local instead.",
     input_schema: {
       type: "object",
       properties: {
@@ -1336,7 +1336,7 @@ export const OWNER_TOOLS = [
   {
     name: "update_personality",
     description:
-      "Update Eris's personality or system prompt instructions on the fly. Owner-only. Use when defnotean wants to tweak Eris's behavior, tone, rules, or add new personality traits. Do not use this for Irene; use ask_irene only when delegating to Irene.",
+      "Update Eris's personality or system prompt instructions on the fly. Owner-only. Use when the bot owner wants to tweak Eris's behavior, tone, rules, or add new personality traits. Do not use this for Irene; use ask_irene only when delegating to Irene.",
     input_schema: {
       type: "object",
       properties: {
@@ -1360,17 +1360,17 @@ export const OWNER_TOOLS = [
   },
   {
     name: "minion_status",
-    description: "Owner-only. Check defnotean's minions — workers, earnings, available slots. Minions earn coins passively while away.",
+    description: "Owner-only. Check the bot owner's minions — workers, earnings, available slots. Minions earn coins passively while away.",
     input_schema: { type: "object", properties: {} },
   },
   {
     name: "minion_collect",
-    description: "Owner-only. Collect accumulated earnings from defnotean's minions.",
+    description: "Owner-only. Collect accumulated earnings from the bot owner's minions.",
     input_schema: { type: "object", properties: {} },
   },
   {
     name: "minion_name",
-    description: "Owner-only. Rename one of defnotean's minions.",
+    description: "Owner-only. Rename one of the bot owner's minions.",
     input_schema: {
       type: "object",
       properties: {
@@ -1404,7 +1404,7 @@ export const OWNER_TOOLS = [
   {
     name: "read_emails",
     description:
-      "Read recent emails from the configured inbox. Owner-only. Use when defnotean asks to check email or see what's new in the inbox.",
+      "Read recent emails from the configured inbox. Owner-only. Use when the bot owner asks to check email or see what's new in the inbox.",
     input_schema: {
       type: "object",
       properties: {
@@ -1416,7 +1416,7 @@ export const OWNER_TOOLS = [
   {
     name: "search_emails",
     description:
-      "Search the email inbox by query string. Owner-only. Use when defnotean wants to find a specific email by sender, subject, or keyword.",
+      "Search the email inbox by query string. Owner-only. Use when the bot owner wants to find a specific email by sender, subject, or keyword.",
     input_schema: {
       type: "object",
       properties: {
@@ -1429,7 +1429,7 @@ export const OWNER_TOOLS = [
   {
     name: "draft_email",
     description:
-      "Compose and save an email draft (does not send). Owner-only. Use when defnotean asks to write or prepare an email for review before sending.",
+      "Compose and save an email draft (does not send). Owner-only. Use when the bot owner asks to write or prepare an email for review before sending.",
     input_schema: {
       type: "object",
       properties: {
@@ -1443,7 +1443,7 @@ export const OWNER_TOOLS = [
   {
     name: "summarize_inbox",
     description:
-      "Generate a summary of the current inbox state: unread count, important threads, and action items. Owner-only. Use when defnotean wants a quick overview without reading every email.",
+      "Generate a summary of the current inbox state: unread count, important threads, and action items. Owner-only. Use when the bot owner wants a quick overview without reading every email.",
     input_schema: {
       type: "object",
       properties: {},
@@ -1453,7 +1453,7 @@ export const OWNER_TOOLS = [
   {
     name: "github_repos",
     description:
-      "List or search GitHub repositories. Owner-only. Use when defnotean asks about their repos, wants to find a project, or needs an overview of what's on GitHub.",
+      "List or search GitHub repositories. Owner-only. Use when the bot owner asks about their repos, wants to find a project, or needs an overview of what's on GitHub.",
     input_schema: {
       type: "object",
       properties: {
@@ -1465,11 +1465,11 @@ export const OWNER_TOOLS = [
   {
     name: "github_issues",
     description:
-      "List open issues for a GitHub repository. Owner-only. Use when defnotean asks about bugs, feature requests, or tasks on a repo.",
+      "List open issues for a GitHub repository. Owner-only. Use when the bot owner asks about bugs, feature requests, or tasks on a repo.",
     input_schema: {
       type: "object",
       properties: {
-        repo: { type: "string", description: "Repository in 'owner/repo' format (e.g. 'defnotean/monobot')" },
+        repo: { type: "string", description: "Repository in 'owner/repo' format (e.g. 'octocat/hello-world')" },
       },
       required: ["repo"],
     },
@@ -1477,7 +1477,7 @@ export const OWNER_TOOLS = [
   {
     name: "github_prs",
     description:
-      "List open pull requests for a GitHub repository. Owner-only. Use when defnotean asks about PRs, pending reviews, or merge status.",
+      "List open pull requests for a GitHub repository. Owner-only. Use when the bot owner asks about PRs, pending reviews, or merge status.",
     input_schema: {
       type: "object",
       properties: {
@@ -1489,7 +1489,7 @@ export const OWNER_TOOLS = [
   {
     name: "github_create_issue",
     description:
-      "Create a new issue on a GitHub repository. Owner-only. Use when defnotean wants to file a bug, feature request, or task directly from Discord.",
+      "Create a new issue on a GitHub repository. Owner-only. Use when the bot owner wants to file a bug, feature request, or task directly from Discord.",
     input_schema: {
       type: "object",
       properties: {
@@ -1503,7 +1503,7 @@ export const OWNER_TOOLS = [
   {
     name: "github_repo_stats",
     description:
-      "Get statistics for a GitHub repository: stars, forks, open issues, languages, recent activity. Owner-only. Use when defnotean wants a quick health check or overview of a repo.",
+      "Get statistics for a GitHub repository: stars, forks, open issues, languages, recent activity. Owner-only. Use when the bot owner wants a quick health check or overview of a repo.",
     input_schema: {
       type: "object",
       properties: {
@@ -1515,7 +1515,7 @@ export const OWNER_TOOLS = [
   {
     name: "check_deploy",
     description:
-      "Check the deployment status of a service. Owner-only. Use when defnotean asks if something is deployed, running, or wants to verify a deploy went through.",
+      "Check the deployment status of a service. Owner-only. Use when the bot owner asks if something is deployed, running, or wants to verify a deploy went through.",
     input_schema: {
       type: "object",
       properties: {
@@ -1527,7 +1527,7 @@ export const OWNER_TOOLS = [
   {
     name: "watch_deploy",
     description:
-      "Watch a deployment in progress and report status changes. Owner-only. Use when defnotean kicks off a deploy and wants live updates on its progress.",
+      "Watch a deployment in progress and report status changes. Owner-only. Use when the bot owner kicks off a deploy and wants live updates on its progress.",
     input_schema: {
       type: "object",
       properties: {
@@ -1540,7 +1540,7 @@ export const OWNER_TOOLS = [
   {
     name: "query_database",
     description:
-      "Run a read query against the project database. Owner-only. Use when defnotean needs to look up data, check records, or inspect database contents.",
+      "Run a read query against the project database. Owner-only. Use when the bot owner needs to look up data, check records, or inspect database contents.",
     input_schema: {
       type: "object",
       properties: {
@@ -1556,7 +1556,7 @@ export const OWNER_TOOLS = [
   {
     name: "list_tables",
     description:
-      "List all tables in the project database. Owner-only. Use when defnotean wants to see what data is available or explore the database schema.",
+      "List all tables in the project database. Owner-only. Use when the bot owner wants to see what data is available or explore the database schema.",
     input_schema: {
       type: "object",
       properties: {},
@@ -1566,7 +1566,7 @@ export const OWNER_TOOLS = [
   {
     name: "system_info",
     description:
-      "Get system information: CPU, memory, disk, uptime, OS details. Owner-only. Use when defnotean asks about server health, resource usage, or system status.",
+      "Get system information: CPU, memory, disk, uptime, OS details. Owner-only. Use when the bot owner asks about server health, resource usage, or system status.",
     input_schema: {
       type: "object",
       properties: {},
@@ -1576,7 +1576,7 @@ export const OWNER_TOOLS = [
   {
     name: "list_processes",
     description:
-      "List running processes on the host, optionally filtered by name. Owner-only. Use when defnotean wants to see what's running, check if a process is alive, or debug resource usage.",
+      "List running processes on the host, optionally filtered by name. Owner-only. Use when the bot owner wants to see what's running, check if a process is alive, or debug resource usage.",
     input_schema: {
       type: "object",
       properties: {
@@ -1601,7 +1601,7 @@ export const OWNER_TOOLS = [
   {
     name: "browse_files",
     description:
-      "Browse and list files in a directory on the host machine. Owner-only. Use when defnotean wants to explore the file system, find files, or check what's in a folder.",
+      "Browse and list files in a directory on the host machine. Owner-only. Use when the bot owner wants to explore the file system, find files, or check what's in a folder.",
     input_schema: {
       type: "object",
       properties: {
@@ -1647,7 +1647,7 @@ export const OWNER_TOOLS = [
   },
   {
     name: "trust_user",
-    description: "Grant a user trusted status so they can customize Eris (change personality, avatar, name, etc). Creator only. Use when defnotean says 'trust this person' or 'let them customize you'.",
+    description: "Grant a user trusted status so they can customize Eris (change personality, avatar, name, etc). Creator only. Use when the bot owner says 'trust this person' or 'let them customize you'.",
     input_schema: {
       type: "object",
       properties: {

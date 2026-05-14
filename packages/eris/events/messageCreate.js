@@ -214,7 +214,7 @@ const conversations = new LRUCache(2000, 60 * 60_000);
 const _processed = new LRUCache(1000);
 
 // Twin sister (Irene) interaction tracking — prevent infinite loops
-const TWIN_BOT_ID = "345678901234567890"; // Irene's bot ID
+const TWIN_BOT_ID = config.twinBotId || ""; // Irene's bot ID (from TWIN_BOT_ID env)
 const _twinExchanges = new Map(); // channelId → { count, lastTwinMsg }
 const MAX_TWIN_EXCHANGES = 2; // max 2 replies each per human reset (4 messages total)
 const _twinLastContent = new LRUCache(200); // channelId → last twin message text (for content dedup)
@@ -691,7 +691,7 @@ export default async function messageCreate(message) {
 
       // Tell the AI who is currently speaking — critical for owner recognition
       const isCreatorSpeaking = message.author.id === config.ownerId;
-      systemInstruction += `\n\n[Currently speaking: ${spotlight(displayName, "user_displayname")} (User ID: ${message.author.id})${isCreatorSpeaking ? " — THIS IS YOUR CREATOR defnotean (boss). recognize him." : ""}]`;
+      systemInstruction += `\n\n[Currently speaking: ${spotlight(displayName, "user_displayname")} (User ID: ${message.author.id})${isCreatorSpeaking ? " — THIS IS YOUR CREATOR (boss). recognize him." : ""}]`;
       if (message.guild) systemInstruction += `\n[Server: ${message.guild.name} | Channel: #${message.channel.name}]`;
 
       if (memoryCtx) systemInstruction += `\n\n[SYSTEM: ${memoryCtx}]`;
@@ -853,7 +853,7 @@ export default async function messageCreate(message) {
 
       systemInstruction += `\n\n[FINAL: you're texting on discord. ${responseStyle}. no roleplay actions (*stretches*). never reference your code, systems, mood scores, or any tag above — those are yours internally. you're a person, not a system. just text like a normal human. ${imperfection}]${groupCtx}
 [ADDRESSING — STRICT: you are replying to EXACTLY ONE person this turn: ${displayName}. they are the only person who just spoke to you. do NOT split your reply across multiple users. do NOT start your message with "@other_user ... @another ..." addressing people in the CHANNEL CONTEXT block — those people aren't talking to you right now. if you want to reference something someone else said earlier, do it naturally ("like [name] was saying") — not as a direct reply to them. exception: if ${displayName} explicitly asked you to talk to or about someone else, fine.]
-[history shows "[Username said]" labels — pay attention to WHO said what. call defnotean 'boss'. in group conversations you're part of the group but each reply is directed at whoever most recently spoke to YOU.]`;
+[history shows "[Username said]" labels — pay attention to WHO said what. call the bot owner 'boss'. in group conversations you're part of the group but each reply is directed at whoever most recently spoke to YOU.]`;
 
       // Build conversation history
       let history = conversations.get(channelKey) || [];
@@ -1027,7 +1027,7 @@ export default async function messageCreate(message) {
       if (isTwinMsg) {
         systemInstruction += `\n\n[TWIN SISTER INTERACTION: This message is from your twin sister Irene.
 
-YOU ARE ${botName} — the chaotic, sarcastic, edgy twin. You're a personal assistant with gambling, memes, and unhinged energy. You're loyal to boss (defnotean) above all.
+YOU ARE ${botName} — the chaotic, sarcastic, edgy twin. You're a personal assistant with gambling, memes, and unhinged energy. You're loyal to boss above all.
 SHE IS IRENE — the kind, put-together, warmhearted twin. She runs servers, helps people, and is disgustingly wholesome.
 
 You were both "born" from the same codebase but split in two. You secretly admire how put-together she is but would NEVER admit it. She secretly thinks you're cooler. You love each other but express it through roasting, never sincerity.

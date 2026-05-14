@@ -194,7 +194,7 @@ describe("OpenAI-compatible provider (Irene)", () => {
   });
 
   it("does not duplicate the current user message when history already contains it", async () => {
-    const userText = "[defnotean said]\ncount this sentinel once";
+    const userText = "[testuser said]\ncount this sentinel once";
     const history: any[] = [{ role: "user", content: userText }];
     mockFetchResponses(chatMessage({ role: "assistant", content: "normal-ok" }));
 
@@ -277,7 +277,7 @@ describe("OpenAI-compatible provider (Irene)", () => {
   });
 
   it("persists tool calls and results so later turns do not replay old actions", async () => {
-    const history: any[] = [{ role: "user", content: "[defnotean said]\nAlright Irene, dab for me" }];
+    const history: any[] = [{ role: "user", content: "[testuser said]\nAlright Irene, dab for me" }];
     const executor = vi.fn(async (_name, args) => ({ ok: true, sent: args.query }));
 
     mockFetchResponses(
@@ -299,7 +299,7 @@ describe("OpenAI-compatible provider (Irene)", () => {
       systemInstruction: "system",
       history,
       tools: [{ name: "send_gif", description: "send gif", input_schema: { type: "object" } }],
-      message: { userMessage: "[defnotean said]\nAlright Irene, dab for me" },
+      message: { userMessage: "[testuser said]\nAlright Irene, dab for me" },
       executor,
     });
 
@@ -311,14 +311,14 @@ describe("OpenAI-compatible provider (Irene)", () => {
       expect.objectContaining({ type: "tool_result", tool_use_id: "call_dab", tool_name: "send_gif" }),
     ]));
 
-    history.push({ role: "user", content: "[defnotean said]\nhow about hit the quan for me" });
+    history.push({ role: "user", content: "[testuser said]\nhow about hit the quan for me" });
     mockFetchResponses(chatMessage({ role: "assistant", content: "fresh turn" }));
 
     await provider.runGeminiChat({
       systemInstruction: "system",
       history,
       tools: [{ name: "send_gif", description: "send gif", input_schema: { type: "object" } }],
-      message: { userMessage: "[defnotean said]\nhow about hit the quan for me" },
+      message: { userMessage: "[testuser said]\nhow about hit the quan for me" },
       executor,
     });
 

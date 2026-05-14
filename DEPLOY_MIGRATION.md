@@ -1,6 +1,6 @@
 # Deploy Migration: from two Render repos → one monorepo
 
-This guide moves the two Render services (`eris-bot` and `irene-bot`) from their individual repos onto the new `defnotean/bots-monorepo`, **one bot at a time**, with a fast rollback path.
+This guide moves the two Render services (`eris-bot` and `irene-bot`) from their individual repos onto the new `your-org/bots-monorepo`, **one bot at a time**, with a fast rollback path.
 
 The migration is non-destructive: the old repos stay on GitHub and the old service settings can be restored in under a minute.
 
@@ -10,7 +10,7 @@ The migration is non-destructive: the old repos stay on GitHub and the old servi
 
 | | Before | After |
 |---|---|---|
-| Source repo | `defnotean/eris` + `defnotean/irene` (2 separate repos) | `defnotean/bots-monorepo` (1 repo, 2 packages) |
+| Source repo | `your-org/eris` + `your-org/irene` (2 separate repos) | `your-org/bots-monorepo` (1 repo, 2 packages) |
 | `utils/roleCategorizer.js` | Duplicated in both bots (drift risk) | Single source in `packages/shared/src/` |
 | `utils/twinSign.js` | Duplicated (already drifted once) | Single source in `packages/shared/src/` |
 | `utils/LRUCache.js` | Duplicated | Single source in `packages/shared/src/` |
@@ -21,19 +21,22 @@ Environment variables, bot tokens, Supabase keys, service plans, and ports **do 
 
 ---
 
-## Post-mortem: the 2026-04-24 Irene incident
+## Known gotcha: npm workspace version hoisting
 
-The first Irene cutover attempt **failed silently in production** — her process came up,
-62 commands loaded, Discord gateway connected, but user-facing interactions stopped
-responding. Root cause: npm workspace version hoisting.
+The biggest pitfall when moving two bots into one monorepo: a cutover can **fail silently
+in production** — the process comes up, commands load, the Discord gateway connects, but
+user-facing interactions stop responding. The usual root cause is npm workspace version
+hoisting.
 
-Eris specified `discord.js@^14.26.2`, Irene specified `^14.14.1`. `14.26.3` satisfied
-BOTH ranges, so npm hoisted `14.26.3` to the root and Irene — with no local override —
-ran against a minor-version she wasn't built for. Interaction-reply APIs changed between
-14.14 and 14.26; Irene's handlers silently broke. Unit tests passed because they ran
-against the same hoisted version that prod did — both "broken" in the same matching way.
+Suppose Eris specifies `discord.js@^14.26.2` and Irene specifies `^14.14.1`. A version
+like `14.26.3` satisfies BOTH ranges, so npm hoists `14.26.3` to the root — and Irene,
+with no local override, ends up running against a minor version she wasn't built for.
+Interaction-reply APIs changed between 14.14 and 14.26, so the handlers break silently.
+Worse, unit tests can still pass because they run against the same hoisted version prod
+does — both "broken" in the same matching way.
 
-Rollback took ~2 minutes via the Render dashboard repo flip documented below.
+Rollback in this scenario takes ~2 minutes via the Render dashboard repo flip documented
+below, but the goal is to never trigger it.
 
 **Lessons encoded into this guide:**
 1. Every shared dep must have **byte-identical** version ranges across workspaces. Pin
@@ -68,12 +71,12 @@ Irene is less public-facing than Eris in current usage, so roll Irene first. If 
 
 ### Step 1 — Render dashboard: Irene service
 
-**Critical procedural fix learned from 2026-04-24:** disable Auto-Deploy FIRST. Otherwise each settings change triggers its own auto-deploy and you end up with an in-flight deploy that captured the old start command against the new repo (or vice-versa) — exactly what caused the failed rollback attempt on 2026-04-24.
+**Critical procedural fix:** disable Auto-Deploy FIRST. Otherwise each settings change triggers its own auto-deploy and you end up with an in-flight deploy that captured the old start command against the new repo (or vice-versa) — a classic way to get a half-updated deploy and a botched rollback.
 
 1. Open the Irene service on Render.
 2. **Settings → Deploy → Auto-Deploy**: change to **Off**. Save.
 3. **Settings → Deploy → Start Command**: change to `npm run start:irene`. Save. (No deploy triggers because Auto-Deploy is off.)
-4. **Settings → Build → Repository → "Change Repository"** → select `defnotean/bots-monorepo` on the `main` branch. Save.
+4. **Settings → Build → Repository → "Change Repository"** → select `your-org/bots-monorepo` on the `main` branch. Save.
 5. **Settings → Build**: verify **Root Directory** is **blank** (must be empty — do NOT set to `packages/irene`. npm workspaces requires install from the repo root to establish symlinks; setting a sub-root breaks that.)
 6. **Settings → Build → Build Command**: confirm `npm install`.
 7. Leave all env vars alone — they carry over with the service, the repo change does not touch them.
@@ -87,14 +90,14 @@ On the Logs tab, expect:
 - Build completes → service enters `Live`.
 - First log line from Irene's `index.js` should be the usual startup banner.
 
-**Sanity smoke test** — run ALL of these against your dev Discord guild before claiming success. The 2026-04-24 incident bypassed smoke tests entirely and we declared success on "process is alive" — which missed that interaction handlers were silently broken.
+**Sanity smoke test** — run ALL of these against your dev Discord guild before claiming success. Declaring success on "process is alive" alone is dangerous — it misses the case where interaction handlers are silently broken.
 
-1. **`/ping`** — simplest interaction path. If this fails, interaction handling is broken. (This is the test that would have caught the 2026-04-24 incident.)
+1. **`/ping`** — simplest interaction path. If this fails, interaction handling is broken. (This is the test that catches the version-hoisting failure mode described above.)
 2. **Any slash command that sends an embed** — validates discord.js Embed APIs still work across the version bump.
 3. **`/setup` or any command that lists roles** — uses `@defnotean/shared/roleCategorizer`; confirms shared package resolves.
 4. **Mention the bot in a guild channel** — exercises the message handler + AI path, different from slash commands.
 5. **Twin API** — trigger anything that signs an outbound HMAC via `@defnotean/shared/twinSign` (e.g., a `twinPunish` call) and verify the receiving bot accepts it.
-6. **Check `[Bot] N commands loaded` count in the log** — compare to the previous known-good deploy. If it's lower than before, some command file failed to load silently (this is what happened to Irene on 2026-04-24: 63 → 62 commands; one file was silently skipped).
+6. **Check `[Bot] N commands loaded` count in the log** — compare to the previous known-good deploy. If it's lower than before, some command file failed to load silently (a dropped command count, e.g. 63 → 62, means one file was silently skipped).
 
 If any smoke test fails, **rollback immediately** (see "Rollback" below). Do not debug in prod; the other bot is still on its old repo and stable.
 
@@ -104,7 +107,7 @@ Leave the migrated bot on the monorepo for **at least 24 hours** before touching
 
 If anything misbehaves:
 
-1. Render dashboard → Irene service → **Settings → Repository → "Change Repository"** → select `defnotean/irene` on `main`.
+1. Render dashboard → Irene service → **Settings → Repository → "Change Repository"** → select `your-org/irene` on `main`.
 2. **Build & Deploy** settings: restore `Build Command = npm install`, `Start Command = node index.js`.
 3. **Manual Deploy → Deploy latest commit**.
 
@@ -116,7 +119,7 @@ You are back on the old repo in ~2 minutes. The monorepo retains the full histor
 
 Same procedure, Eris service:
 
-1. `eris-bot` service → Repository → `defnotean/bots-monorepo` / `main`.
+1. `eris-bot` service → Repository → `your-org/bots-monorepo` / `main`.
 2. Build & Deploy:
    - **Root Directory**: blank.
    - **Build Command**: `npm install`
@@ -132,7 +135,7 @@ Smoke tests for Eris:
 
 Same flip as Irene:
 
-1. Repository → `defnotean/eris` / `main`.
+1. Repository → `your-org/eris` / `main`.
 2. Build Command `npm install`, Start Command `npm start`.
 3. Manual Deploy.
 
@@ -155,8 +158,8 @@ The following still exist in the monorepo because they were imported by `git sub
 Optional cleanup (not required for operation):
 
 1. Archive the old repos on GitHub:
-   - `defnotean/eris` → Settings → Archive this repository.
-   - `defnotean/irene` → Settings → Archive this repository.
+   - `your-org/eris` → Settings → Archive this repository.
+   - `your-org/irene` → Settings → Archive this repository.
    Archiving is reversible. It stops new pushes, makes the repos read-only, and signals to future-you that the monorepo is canonical.
 2. Delete the stale `render.yaml` files inside `packages/eris/` and `packages/irene/` — or replace them with a single root `render.yaml` Blueprint defining both services, if you want "click-to-redeploy-on-a-new-Render-account" portability. That's a separate refactor, not a migration step.
 

@@ -2,6 +2,22 @@
 
 End-to-end trace through Irene. Paths absolute from repo root; line numbers approximate.
 
+## How to read this
+
+The pipeline runs in **7 stages** — a message flows through them top to bottom:
+
+1. **Entry point** — the Discord event arrives and gets routed to `messageCreate.js`.
+2. **Gating** — a gauntlet of cheap skip-checks decides *whether to reply at all*. Auto-mod also runs here, and most messages stop at this stage before spending a single AI token.
+3. **Context building** — assemble the system prompt: personality, permissions, memory, server rules, history, and which tools to offer.
+4. **AI call** — hand it to the model and run the generate → tool-call loop.
+5. **Tool dispatch** — route each tool the model asked for to the code that runs it.
+6. **Response rendering** — clean up the model's text and deliver it like a human typing.
+7. **State persistence** — write back what changed (mood, memory, affinity, …).
+
+Roughly: stages 1–2 *gatekeep*, 3–5 are the *AI turn*, 6–7 *clean up and deliver*.
+
+Each heading is tagged **`[STABLE]`** (settled; changes rarely — safe to build on) or **`[EVOLVING]`** (actively churning — trust the code over the line numbers here). Treat the whole doc as a map, not a spec: skim it once for the shape, then jump back to the stage you're actually touching. Line numbers drift; the stage names and file paths are the durable part.
+
 ## 1. Entry point  [STABLE]
 
 `packages/irene/index.js` (~line 20) builds the discord.js `Client`. `main()` (~line 249) boots in order: `startPresenceAPI(client)` → `initDatabase` → `loadCommands` → `loadEvents` → `registerCommands` → `client.login` → `setupLavalink`.
