@@ -1,12 +1,92 @@
-// ─── Twin API HMAC Signing ──────────────────────────────────────────────────
-// Both Eris and Irene share a copy of this module. The protocol:
-//
-//   X-Twin-Timestamp:  <unix_ms_at_signing_time>
-//   X-Twin-Signature:  hex(HMAC_SHA256(secret, `${timestamp}.${rawBody}`))
-//
-// Verifier rejects requests whose timestamp is outside ±TWIN_MAX_SKEW_MS and
-// requires the signature to match in constant time. A replay cache rejects
-// identical signatures seen within the skew window.
+/**
+ * @file packages/shared/src/twinSign.js
+ *
+ * HMAC-SHA256 request signing and verification for the twin-bot REST channel
+ * that connects Eris and Irene. Both bots import this exact module from the
+ * shared workspace package so the signing and verification halves cannot drift.
+ *
+ * ## Wire protocol
+ *   X-Twin-Timestamp:  <unix_ms_at_signing_time>
+ *   X-Twin-Signature:  hex(HMAC_SHA256(secret, `${timestamp}.${rawBody}`))
+ *
+ * The signed payload is `${timestamp}.${rawBody}` — concatenating the
+ * timestamp binds the signature to a single moment so a captured signature
+ * cannot be reused later with the same body.
+ *
+ * ## Exports
+ * - `signTwinRequest(body, secret, now?)` — builds the two header values the
+ *   client must attach to its outgoing HTTP request.
+ * - `verifyTwinRequest(headers, body, secret, now?)` — verifies an incoming
+ *   request. Returns a discriminated `{ok: true} | {ok: false, reason}` so the
+ *   caller can log the failure mode without leaking it to the network peer.
+ * - `safeStringEqual(a, b)` — constant-time string compare for unrelated
+ *   secret/token comparisons (e.g. legacy bearer tokens still in use during
+ *   rollout).
+ * - `TWIN_MAX_SKEW_MS` — exported window size (60s) so callers can match it
+ *   in tests or surface the rule in error messages.
+ * - `_REPLAY_CACHE_PRESSURE`, `_resetReplayCacheForTests` — test-only hooks
+ *   (underscore-prefixed) so the test suite can simulate flood pressure and
+ *   reset cache state between cases without reaching into module internals.
+ *
+ * ## Secret management & rotation
+ * The shared secret is read by each bot from the `TWIN_API_SECRET` environment
+ * variable (set via Render / `.env`, never hardcoded). Rotation procedure:
+ *   1. Generate a new high-entropy value (`openssl rand -hex 32`).
+ *   2. Update `TWIN_API_SECRET` on BOTH bots in the same deploy window. The
+ *      twin link is briefly down while one side is ahead — short downtime is
+ *      acceptable; mismatched secrets simply reject with "bad signature".
+ *   3. Confirm both sides healthy via the dashboard / presence endpoints.
+ * The module refuses to sign or verify with an empty secret (fail-loud).
+ *
+ * ## Replay protection
+ * Two layers:
+ *   - Timestamp window: requests with `|now - ts| > TWIN_MAX_SKEW_MS` are
+ *     rejected. 60 seconds in each direction tolerates clock drift between
+ *     hosts but caps the window in which a captured signature is replayable.
+ *   - In-memory replay cache: any signature seen previously within the skew
+ *     window is rejected as `"replay detected"`. Entries are pruned after
+ *     `2 * TWIN_MAX_SKEW_MS` so old sigs cannot recur. Under sustained flood
+ *     pressure (`_REPLAY_CACHE_PRESSURE` distinct in-window sigs) the verifier
+ *     FAILS LOUD with `"replay-cache-pressure"` rather than evicting earlier
+ *     entries — evicting would reopen a replay window for an attacker who
+ *     captured a legit sig and then churned the cache.
+ *
+ * ## Constant-time comparisons
+ * Both signature checks (`verifyTwinRequest`) and the public
+ * `safeStringEqual` route the final byte compare through Node's
+ * `crypto.timingSafeEqual` to prevent attackers from learning the secret one
+ * byte at a time via response-time differences. Buffer lengths are equalized
+ * before the compare; mismatched lengths return false without timing leak
+ * beyond the unavoidable length side-channel.
+ *
+ * ## What this module does NOT do
+ * - No persistent nonce store. The replay cache is in-process memory; on
+ *   restart the cache is empty and a signature captured pre-restart could be
+ *   replayed until its timestamp ages out of the skew window. The 60s window
+ *   bounds this exposure but it is a known limitation — see SECURITY.md audit
+ *   findings for the rationale and the conditions that would justify a Redis
+ *   or Durable-Object-backed nonce store.
+ * - No transport encryption. This module assumes the underlying channel
+ *   is HTTPS; raw HTTP would expose body content even though the signature
+ *   prevents tampering.
+ * - No per-user authentication or authorization. The HMAC only proves
+ *   "the caller knows TWIN_API_SECRET". Callers must layer their own
+ *   permission checks on top (the dashboard and twin executors do this).
+ * - No body parsing. Verification operates on the EXACT raw body string —
+ *   any framework middleware that re-serializes JSON before passing it here
+ *   will silently break signatures. Capture the raw body upstream.
+ *
+ * ## Callers (cross-reference)
+ *   Eris:
+ *     - packages/eris/api/dashboard.js          (dashboard REST endpoints)
+ *     - packages/eris/utils/twinState.js        (presence + twin state sync)
+ *     - packages/eris/ai/executors/twinExecutor.js (cross-bot AI tool calls)
+ *   Irene:
+ *     - packages/irene/presence.js              (presence beacon to Eris)
+ *     - packages/irene/utils/twinState.js       (presence + twin state sync)
+ *     - packages/irene/utils/twinPunish.js      (cross-bot moderation)
+ *     - packages/irene/ai/executors/advancedExecutor.js (cross-bot AI calls)
+ */
 
 import { createHmac, timingSafeEqual } from "crypto";
 
