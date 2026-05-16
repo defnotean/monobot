@@ -1,12 +1,27 @@
-// ai/keyPool.js — Smart API key pool with per-key rate limit tracking
-// Each key tracks its own rate limit state. Round-robin skips limited keys.
+// ai/keyPool.js — Smart API key pool with per-key rate-limit tracking
+//
+// Each key tracks its own rate-limit state. Round-robin skips limited keys.
 // If ALL keys are limited, uses the one that recovers soonest.
+//
+// Originally lived in each bot's `ai/` directory. After the shared-logger
+// migration, the only bot-local dependency was the logger import — so the
+// module moves here and accepts an injected `log` instead. Callers wire
+// their bot's logger in via the `{ log }` option on `createSplitPools()` /
+// the KeyPool constructor; if omitted, a no-op suppresses output (so
+// console-less unit tests don't crash).
 
-import { log } from "../utils/logger.js";
+const _noop = () => {};
 
-class KeyPool {
-  constructor(name, keys, ClientClass) {
+export class KeyPool {
+  /**
+   * @param {string} name — pool label, surfaced in log lines.
+   * @param {string[]} keys — array of API keys.
+   * @param {new (opts: { apiKey: string }) => any} ClientClass — provider client.
+   * @param {{ log?: (m: string) => void }} [opts]
+   */
+  constructor(name, keys, ClientClass, opts = {}) {
     this.name = name;
+    this._log = opts.log || _noop;
     this.clients = keys.map((key, i) => ({
       id: i,
       client: new ClientClass({ apiKey: key }),
@@ -16,7 +31,7 @@ class KeyPool {
       lastUsed: 0,
     }));
     this._idx = 0;
-    log(`[KeyPool:${name}] Initialized with ${this.clients.length} keys`);
+    this._log(`[KeyPool:${name}] Initialized with ${this.clients.length} keys`);
   }
 
   // Get the next available client, skipping rate-limited keys
@@ -41,7 +56,7 @@ class KeyPool {
       entry.rateLimitedUntil < best.rateLimitedUntil ? entry : best
     );
     const waitMs = soonest.rateLimitedUntil - now;
-    log(`[KeyPool:${this.name}] All ${this.clients.length} keys rate-limited. Soonest recovery: ${Math.ceil(waitMs / 1000)}s (key ${soonest.id})`);
+    this._log(`[KeyPool:${this.name}] All ${this.clients.length} keys rate-limited. Soonest recovery: ${Math.ceil(waitMs / 1000)}s (key ${soonest.id})`);
     soonest.requestCount++;
     soonest.lastUsed = now;
     return soonest.client;
@@ -53,7 +68,7 @@ class KeyPool {
     if (entry) {
       entry.rateLimitedUntil = Date.now() + durationMs;
       entry.errorCount++;
-      log(`[KeyPool:${this.name}] Key ${entry.id} rate-limited for ${Math.ceil(durationMs / 1000)}s (${entry.errorCount} errors total)`);
+      this._log(`[KeyPool:${this.name}] Key ${entry.id} rate-limited for ${Math.ceil(durationMs / 1000)}s (${entry.errorCount} errors total)`);
     }
   }
 
@@ -91,15 +106,31 @@ class KeyPool {
 
 // ─── Split pool into conversation + worker with per-key tracking ────────────
 
-export function createSplitPools(name, keys, ClientClass) {
+/**
+ * Build three sub-pools off a single key list:
+ *   - `conv` — even-indexed keys, biased toward conversational turns
+ *   - `work` — odd-indexed keys, biased toward background / task tools
+ *   - `all`  — every key (use when both classes can compete for the same
+ *               capacity, e.g. for a hot-path fallback when one half is dry)
+ *
+ * Splitting halves the chance that a noisy conversational burst starves an
+ * unrelated background tool of capacity (and vice versa) when keys are few.
+ *
+ * @param {string} name
+ * @param {string[]} keys
+ * @param {new (opts: { apiKey: string }) => any} ClientClass
+ * @param {{ log?: (m: string) => void }} [opts]
+ */
+export function createSplitPools(name, keys, ClientClass, opts = {}) {
   if (!keys?.length) return { conv: null, work: null, all: null };
+  const log = opts.log || _noop;
 
   const convKeys = keys.filter((_, i) => i % 2 === 0);
   const workKeys = keys.length > 1 ? keys.filter((_, i) => i % 2 === 1) : [...keys];
 
-  const conv = new KeyPool(`${name}-conv`, convKeys, ClientClass);
-  const work = new KeyPool(`${name}-work`, workKeys, ClientClass);
-  const all = new KeyPool(`${name}-all`, keys, ClientClass);
+  const conv = new KeyPool(`${name}-conv`, convKeys, ClientClass, { log });
+  const work = new KeyPool(`${name}-work`, workKeys, ClientClass, { log });
+  const all = new KeyPool(`${name}-all`, keys, ClientClass, { log });
 
   log(`[KeyPool:${name}] Split ${keys.length} keys → ${convKeys.length} conversation + ${workKeys.length} worker`);
 
