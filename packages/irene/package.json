@@ -1,6 +1,6 @@
 {
   "name": "@defnotean/irene",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "type": "module",
   "description": "Irene — Discord AI bot with moderation, server setup, AI chat, games, music, and presence API. Twin of Eris.",
   "scripts": {
