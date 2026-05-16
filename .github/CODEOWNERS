@@ -1,0 +1,8 @@
+# Default ownership
+*                          @defnotean
+
+# Critical paths require explicit attention
+/packages/shared/          @defnotean
+/packages/*/database.js    @defnotean
+/SECURITY.md               @defnotean
+/.github/workflows/        @defnotean
