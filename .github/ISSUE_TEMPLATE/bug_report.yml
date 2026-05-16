@@ -1,0 +1,106 @@
+name: Bug report
+description: Report a defect or unexpected behavior in MonoBot
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill out the form below as completely as possible — the more we know, the faster we can fix it.
+
+        **Do not file security vulnerabilities here.** See `SECURITY.md` for the disclosure process.
+
+  - type: dropdown
+    id: which-bot
+    attributes:
+      label: Which bot is affected?
+      description: Pick the surface where you observed the bug.
+      options:
+        - Eris
+        - Irene
+        - Shared (code used by both bots)
+        - Both bots
+    validations:
+      required: true
+
+  - type: input
+    id: short-description
+    attributes:
+      label: Short description
+      description: One sentence summary of the bug.
+      placeholder: "e.g. Slash command /ask crashes when the prompt contains a code block"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps that reliably reproduce the bug. Include the exact command/input where relevant.
+      placeholder: |
+        1. Invite the bot to a guild
+        2. Run `/ask prompt: ...`
+        3. Observe the error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include any error messages shown to the user.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ai-provider
+    attributes:
+      label: AI provider in use
+      description: Which AI backend was the bot configured to use when the bug occurred?
+      options:
+        - Gemini
+        - Claude (Anthropic)
+        - OpenAI
+        - Local / self-hosted
+        - Not applicable
+        - Other (specify in logs)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy-target
+    attributes:
+      label: Deploy target
+      description: Where is the affected bot running?
+      options:
+        - Render
+        - Self-hosted (VPS / bare metal / Docker)
+        - Local development
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: Output of `node --version`.
+      placeholder: "e.g. v20.11.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (optional)
+      description: Paste any relevant log output, stack traces, or screenshots. Scrub tokens, IDs, and other secrets before pasting.
+      render: shell
+    validations:
+      required: false

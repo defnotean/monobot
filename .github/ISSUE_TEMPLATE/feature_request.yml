@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest a new feature or enhancement for MonoBot
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. Please describe the problem you're trying to solve before jumping to a solution — it helps us evaluate alternatives.
+
+  - type: dropdown
+    id: which-bot
+    attributes:
+      label: Which bot does this affect?
+      description: Pick the surface this feature should live on.
+      options:
+        - Eris
+        - Irene
+        - Shared (code used by both bots)
+        - Both bots
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What problem are you trying to solve? Describe the user/operator pain point, not the solution.
+      placeholder: "e.g. As a moderator, I can't tell how often the AI command is being abused, so I can't tune rate limits."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you like this to work? Sketch the command, config, or behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you weigh? Why is the proposed one better?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Should this ship in one bot or both?
+      options:
+        - Single bot (Eris only)
+        - Single bot (Irene only)
+        - Both bots (parallel implementation)
+        - Shared code (refactor / utility used by both)
+    validations:
+      required: true
