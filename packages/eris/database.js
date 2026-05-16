@@ -1,9 +1,12 @@
 // ─── packages/eris/database.js ──────────────────────────────────────────
-// In-memory read cache + ~2s debounced flush to Supabase. ALL state for
+// In-memory read cache + short-debounce flush to Supabase. ALL state for
 // economy / mood / relationships / games / etc. lives here behind getters.
 // Reads are sync from cache; writes mutate cache + queue a flush.
+// The debounce window is intentionally tight (200ms) so a crash between
+// mutation and flush drops at most one batching window of writes. SIGINT/
+// SIGTERM/beforeExit handlers drain the queue synchronously before exit.
 // See docs/start-here.md and section TOC below.
-// ─── In-Memory Cache + Debounced Supabase Sync ──────────────────────────────
+// ─── In-Memory Cache + Short-Debounced Supabase Sync ────────────────────────
 //
 // ─── TABLE OF CONTENTS ──────────────────────────────────────────────────────
 //   1. Setup, init, debounced save infrastructure ............. ~line 20
@@ -114,11 +117,17 @@ async function _loadFromSupabase() {
 
 export function getSupabase() { return supabase; }
 
-// ─── SAVE (debounced) ───
+// ─── SAVE (short-debounce, ≤200ms) ───
+// The window is tight on purpose: any rows that mutate in memory between
+// `save()` and the timer firing are at risk if the process dies suddenly.
+// 200ms is still enough to batch a burst of edits from the same event handler
+// while keeping the data-loss window small. On graceful shutdown the
+// `beforeExit` / SIGINT / SIGTERM hooks call `flushAll()` to drain immediately.
+const _DEBOUNCE_MS = 200;
 function save(bucket) {
   if (bucket) _dirty.add(bucket);
   if (_saveTimer) return;
-  _saveTimer = setTimeout(() => _flushSave(), 2000);
+  _saveTimer = setTimeout(() => _flushSave(), _DEBOUNCE_MS);
 }
 
 async function _flushSave() {
@@ -146,6 +155,24 @@ async function _flushSave() {
       _dirty.add(bucket); // re-queue failed bucket for next save cycle
     }
   }
+}
+
+// Set up a beforeExit hook so any clean exit (no SIGTERM/SIGINT, e.g. `process.exit()`
+// after main() resolves on test runners) still drains the queue. SIGTERM/SIGINT
+// already trigger flushAll() from index.js.
+// Guard so the hook is only registered once even if this module gets re-imported.
+if (typeof process !== "undefined" && !process.__erisBeforeExitFlush) {
+  process.__erisBeforeExitFlush = true;
+  process.on("beforeExit", () => {
+    if (!_dirty.size && !_saveTimer) return;
+    // beforeExit runs sync-ish — we can await inside it, Node will keep the
+    // loop alive as long as the returned promise still has work pending.
+    // Bound the flush so a hung Supabase request doesn't block exit.
+    Promise.race([
+      flushAll(),
+      new Promise(r => setTimeout(r, 3000)),
+    ]).catch(e => log(`[DB] beforeExit flush: ${e.message}`));
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -642,13 +669,81 @@ export async function getBalance(userId) {
   return { ...defaults };
 }
 
+// Tracks whether the `eris_add_balance` RPC is deployed. The first call probes;
+// if Postgres reports the function doesn't exist (PGRST202 / "Could not find the function"),
+// we flip this to false and never retry — the version-CAS loop below stays the
+// fallback path for self-hosters who haven't applied migration 002 yet.
+let _rpcAddBalanceAvailable = true;
+
 // Inner balance update — assumes caller already holds withEconLock for userId.
 // Do not call directly from outside database.js; use updateBalance() or transferBalance().
+//
+// Preferred path: the `eris_add_balance` Postgres function (see migration 002)
+// does the read-modify-write inside one transaction with SELECT … FOR UPDATE,
+// which is a tighter atomicity guarantee than the optimistic-concurrency loop
+// below — and it serializes correctly across multiple bot processes, not just
+// the in-process withEconLock callers.
+//
+// Fallback path: if the RPC isn't deployed (or fails for any other reason),
+// fall through to the version-CAS retry loop. The semantics are identical
+// from the caller's perspective.
 async function _updateBalanceUnsafe(userId, delta, type, details) {
   // Guard at the top — a NaN/Infinity delta corrupts DB + cache.
   if (!Number.isFinite(delta) || !Number.isInteger(delta)) {
     throw new Error(`invalid balance delta: ${delta}`);
   }
+
+  // ── RPC fast path: one round-trip, server-side atomic ───────────────────
+  if (supabase && _rpcAddBalanceAvailable) {
+    try {
+      const { data: rows, error } = await supabase.rpc("eris_add_balance", {
+        p_user_id: userId,
+        p_delta: delta,
+        p_type: type ?? "other",
+        p_details: details ?? "",
+      });
+      if (error) {
+        // PGRST202 = function not found. Disable the RPC path for the rest of
+        // the process lifetime so we don't pay this round-trip on every call.
+        if (error.code === "PGRST202" || /Could not find the function|does not exist/i.test(error.message || "")) {
+          _rpcAddBalanceAvailable = false;
+          log(`[DB] eris_add_balance RPC not deployed — falling back to version-CAS path. Apply migrations/002_atomic_balance_rpc.sql to enable atomic updates.`);
+        } else {
+          // Any other RPC error: fall through to the CAS loop, which has its
+          // own retry/recovery logic. Don't permanently disable the RPC for
+          // transient errors.
+          log(`[DB] eris_add_balance RPC error: ${error.message} — falling back to version-CAS for this call`);
+        }
+      } else if (Array.isArray(rows) && rows.length === 0) {
+        // Empty result set = SQL returned without RETURN NEXT, which means
+        // the function refused the update (insufficient balance).
+        const current = await getBalance(userId);
+        const err = new Error("insufficient_balance");
+        err.code = "insufficient_balance";
+        err.balance = Number(current?.balance) || 0;
+        throw err;
+      } else if (Array.isArray(rows) && rows.length > 0) {
+        const updated = rows[0];
+        // Refresh cache from RPC result, preserving streak/daily fields that
+        // the RPC doesn't touch (we only fetch the columns it returns).
+        const prev = _economyCache[userId] || {};
+        _economyCache[userId] = {
+          ...prev,
+          ...updated,
+        };
+        _economyCacheTimes.set(userId, Date.now());
+        await logTransaction(userId, type, delta, Number(updated.balance) || 0, details);
+        return Number(updated.balance) || 0;
+      }
+    } catch (e) {
+      // Re-throw insufficient_balance — that's a contract, not a fallthrough trigger.
+      if (e?.code === "insufficient_balance") throw e;
+      // Network/transport errors: log and fall through to the CAS loop.
+      log(`[DB] eris_add_balance RPC threw: ${e.message} — falling back to version-CAS for this call`);
+    }
+  }
+
+  // ── Version-CAS fallback (also used when supabase is null) ──────────────
   const MAX_RETRIES = 5;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const current = await getBalance(userId);
@@ -2110,10 +2205,24 @@ export function setFeatureConfig(guildId, feature, updates) {
 }
 
 // ─── GRACEFUL SHUTDOWN ───
+// Bounded so a hung Supabase request can't block exit forever. Returns when
+// either the flush completes or the timeout elapses — whichever is first.
+const _SHUTDOWN_FLUSH_TIMEOUT_MS = 4000;
 export async function flushAll() {
   if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+  // Mark every persistable bucket dirty so anything mutated since the last
+  // flush gets pushed. Guild settings used to get skipped here, which meant
+  // a directive added in the last 200ms could vanish on shutdown.
   _dirty.add("mood");
   _dirty.add("relationships");
-  await _flushSave();
-  log("[DB] Final flush complete");
+  _dirty.add("guild_settings");
+  try {
+    await Promise.race([
+      _flushSave(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("flush_timeout")), _SHUTDOWN_FLUSH_TIMEOUT_MS)),
+    ]);
+    log("[DB] Final flush complete");
+  } catch (e) {
+    log(`[DB] Final flush incomplete: ${e.message}`);
+  }
 }
