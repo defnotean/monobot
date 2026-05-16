@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { LRUCache } from "@defnotean/shared/LRUCache";
 
 describe("LRUCache", () => {
@@ -69,18 +69,28 @@ describe("LRUCache", () => {
   });
 
   describe("TTL", () => {
-    it("expires entries after TTL", async () => {
+    // Fake timers keep TTL behaviour deterministic — real setTimeout(r, 60)
+    // raced against the cache's Date.now() check on slow CI runners.
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("expires entries after TTL", () => {
       const ttlCache = new LRUCache(10, 50); // 50ms TTL
       ttlCache.set("a", 1);
       expect(ttlCache.get("a")).toBe(1);
-      await new Promise(r => setTimeout(r, 60));
+      vi.advanceTimersByTime(60);
       expect(ttlCache.get("a")).toBeUndefined();
     });
 
-    it("has() returns false for expired entries", async () => {
+    it("has() returns false for expired entries", () => {
       const ttlCache = new LRUCache(10, 50);
       ttlCache.set("a", 1);
-      await new Promise(r => setTimeout(r, 60));
+      vi.advanceTimersByTime(60);
       expect(ttlCache.has("a")).toBe(false);
     });
   });

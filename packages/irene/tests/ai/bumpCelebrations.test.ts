@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // Mock Supabase-backed modules so this test stays pure-in-memory.
 const guildSettings = new Map();
@@ -29,6 +29,15 @@ import * as analytics from "../../ai/bumpAnalytics.js";
 beforeEach(() => {
   guildSettings.clear();
   (analytics as any).__setStreak(0);
+  // Freeze the clock so dedupe windows (`Date.now() - prev.at < 20h`) and
+  // baseline `at` reads land at identical timestamps. Without this, a sliver
+  // of wall-clock drift between two `Date.now()` calls flakes the test.
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 // Minimal fake client/channel — just enough surface for celebration sends.

@@ -1,6 +1,29 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// mulberry32 — small deterministic PRNG. Same seed -> same sequence every run,
+// which keeps these statistical bands from flaking on CI variance.
+function mulberry32(seed: number) {
+  let s = seed >>> 0;
+  return function () {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 describe("Gambling Odds", () => {
+  beforeEach(() => {
+    // Fixed seed -> deterministic Math.random sequence for the whole describe.
+    const rand = mulberry32(0xC0FFEE);
+    vi.spyOn(Math, "random").mockImplementation(rand);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe("Coinflip", () => {
     it("should have approximately 50/50 odds over many flips", () => {
       let wins = 0;
