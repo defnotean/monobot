@@ -17,30 +17,47 @@ import { runGeminiChat, quickReply, looksLikeTask } from "../ai/providers/index.
 import { buildMemoryContext } from "../ai/memory.js";
 import { checkSpam, checkMentionSpam, checkBadWords } from "../utils/safety.js";
 import { LRUCache } from "@defnotean/shared/LRUCache";
-import { addXp, getLevelSettings, getLevelRewards } from "../utils/leveling.js";
-import { checkAfkMentions, checkAfkReturn } from "../commands/utility/afk.js";
-import { checkHighlights } from "../commands/utility/highlight.js";
-import { trackAiMessage } from "../commands/utility/stats.js";
-import { trackHumanInteraction, buildHumanityContext, buildTwinContext, detectMoment, periodicUpdate, serialize as serializeHumanity, deserialize as deserializeHumanity } from "../ai/humanity.js";
-// Pre-imported — was dynamic `await import()` per message
-import { buildPersonalityContext, trackInteraction as trackPersonality } from "../ai/personality.js";
-import { buildLongTermContext, analyzeExchange } from "../ai/longmemory.js";
-import { quickSentiment } from "../ai/sentiment.js";
-import { pickResponseStyle, shouldLaze, getImperfectionHint } from "../ai/responsestyle.js";
-import { compressHistory } from "../ai/contextCompressor.js";
 import { setRateLimitCallbacks } from "../ai/providers/index.js";
 import { checkInjection, logBlockedAttempt, spotlight } from "../ai/firewall.js";
-// Hoisted from dynamic imports — called on every non-trivial message
-import { buildTemporalContext } from "../ai/temporal.js";
-import { buildPreoccupationContext } from "../ai/preoccupations.js";
-import { getMemoryQuirkHint } from "../ai/memoryQuirks.js";
-import { buildOpinionContext } from "../ai/opinions.js";
-import { buildSelfCanonContext } from "../ai/selfCanon.js";
-import { buildTwinStateContext } from "../utils/twinState.js";
-import { sendHumanReply } from "../utils/humanDelay.js";
 import { recordMessage as recordEvidenceMessage } from "../utils/messageEvidence.js";
 import { enforceMessage } from "../ai/rulesEnforcer.js";
-import { buildCommandsContext } from "../utils/commandsHelp.js";
+
+// ── Lazy module loaders ───────────────────────────────────────────────────
+// The handler used to eagerly import 18 modules at the top, loading ~3.6k
+// lines of cold-path code on startup even though most of it only fires
+// after the AI-mention gate. The vast majority of incoming messages return
+// early (own messages, bot messages without our name, rate-limited users,
+// non-mention chatter), so paying that load cost for every cold start was
+// wasteful. Hot-path modules (database, executor, safety, firewall, etc.)
+// stay eager; everything reached only after the mention check or only on
+// specific guild features (leveling, afk, highlights, stats, humanity,
+// personality, longmemory, sentiment, responsestyle, contextCompressor,
+// temporal, preoccupations, memoryQuirks, opinions, selfCanon, twinState,
+// humanDelay, commandsHelp) lazy-loads on first use and caches the module
+// object so subsequent calls in the process are cheap.
+let _modLeveling, _modAfk, _modHighlight, _modStats, _modHumanity,
+    _modPersonality, _modLongmemory, _modSentiment, _modResponseStyle,
+    _modContextCompressor, _modTemporal, _modPreoccupations, _modMemoryQuirks,
+    _modOpinions, _modSelfCanon, _modTwinState, _modHumanDelay, _modCommandsHelp;
+const lazyLeveling          = async () => (_modLeveling          ??= await import("../utils/leveling.js"));
+const lazyAfk               = async () => (_modAfk               ??= await import("../commands/utility/afk.js"));
+const lazyHighlight         = async () => (_modHighlight         ??= await import("../commands/utility/highlight.js"));
+const lazyStats             = async () => (_modStats             ??= await import("../commands/utility/stats.js"));
+const lazyHumanity          = async () => (_modHumanity          ??= await import("../ai/humanity.js"));
+const lazyPersonality       = async () => (_modPersonality       ??= await import("../ai/personality.js"));
+const lazyLongmemory        = async () => (_modLongmemory        ??= await import("../ai/longmemory.js"));
+const lazySentiment         = async () => (_modSentiment         ??= await import("../ai/sentiment.js"));
+const lazyResponseStyle     = async () => (_modResponseStyle     ??= await import("@defnotean/shared/responsestyle"));
+const lazyContextCompressor = async () => (_modContextCompressor ??= await import("../ai/contextCompressor.js"));
+const lazyTemporal          = async () => (_modTemporal          ??= await import("@defnotean/shared/temporal"));
+const lazyPreoccupations    = async () => (_modPreoccupations    ??= await import("../ai/preoccupations.js"));
+const lazyMemoryQuirks      = async () => (_modMemoryQuirks      ??= await import("@defnotean/shared/memoryQuirks"));
+const lazyOpinions          = async () => (_modOpinions          ??= await import("../ai/opinions.js"));
+const lazySelfCanon         = async () => (_modSelfCanon         ??= await import("../ai/selfCanon.js"));
+const lazyTwinState         = async () => (_modTwinState         ??= await import("../utils/twinState.js"));
+const lazyHumanDelay        = async () => (_modHumanDelay        ??= await import("@defnotean/shared/humanDelay"));
+const lazyCommandsHelp      = async () => (_modCommandsHelp      ??= await import("../utils/commandsHelp.js"));
+
 let _humanityCounter = 0;
 
 
@@ -644,7 +661,7 @@ export async function execute(message) {
 
   const isDM = !message.guild;
   _humanityCounter++;
-  if (_humanityCounter % 100 === 0) periodicUpdate();
+  if (_humanityCounter % 100 === 0) lazyHumanity().then(m => m.periodicUpdate()).catch(() => {});
 
   // ── Per-user AI cooldown + escalating spam protection ─────────────────────
   if (!globalThis._aiSpamTracker) globalThis._aiSpamTracker = new Map();
@@ -770,17 +787,20 @@ export async function execute(message) {
 
   // ── AFK system (guild only) ─────────────────────────────────────────────
   if (!isDM) {
-    checkAfkReturn(message);
-    checkAfkMentions(message);
+    lazyAfk().then(({ checkAfkReturn, checkAfkMentions }) => {
+      checkAfkReturn(message);
+      checkAfkMentions(message);
+    }).catch(() => {});
   }
 
   // ── Highlight word notifications (guild only, non-blocking) ────────────
   if (!isDM) {
-    checkHighlights(message).catch(() => {});
+    lazyHighlight().then(({ checkHighlights }) => checkHighlights(message).catch(() => {})).catch(() => {});
   }
 
   // ── XP / Leveling (guild only) ─────────────────────────────────────────
   if (!isDM && message.guild) {
+    const { addXp, getLevelSettings, getLevelRewards } = await lazyLeveling();
     const settings = getLevelSettings(message.guild.id);
     if (settings.enabled) {
       const result = addXp(message.guild.id, message.author.id, settings.xpPerMessage);
@@ -1204,12 +1224,13 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
   // what commands actually exist in this server and can suggest real ones
   // (instead of hallucinating "/banhammer" or similar). Cheap: just iterates
   // client.commands and produces a string.
-  {
+  try {
+    const { buildCommandsContext } = await lazyCommandsHelp();
     const commandsBlock = buildCommandsContext(message.client?.commands);
     if (commandsBlock) {
       systemPromptWithMemory += `\n\n${commandsBlock}`;
     }
-  }
+  } catch {}
 
   // Inject SERVER RULES — the auto-mod rules engine's stored rules. Different
   // from DIRECTIVES (which govern Irene's behavior); these govern USER behavior
@@ -1280,6 +1301,7 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
   // Temporal context — time of day, day of week, season, first-message-today.
   try {
     const _displayName = message.member?.displayName || message.author.username;
+    const { buildTemporalContext } = await lazyTemporal();
     const temporalCtx = buildTemporalContext({ userId: message.author.id, displayName: _displayName });
     if (temporalCtx) systemPromptWithMemory += `\n${temporalCtx}`;
   } catch {}
@@ -1299,6 +1321,7 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
       if (!execute._personalityCache) execute._personalityCache = new Map();
       const _pcCached = execute._personalityCache.get(_pcKey);
       if (_pcCached && Date.now() - _pcCached.ts < 5 * 60_000) return _pcCached.value;
+      const { buildPersonalityContext } = await lazyPersonality();
       const ctx = await buildPersonalityContext(message.author.id, message.guild?.id);
       if (execute._personalityCache.size >= 500) execute._personalityCache.delete(execute._personalityCache.keys().next().value);
       execute._personalityCache.set(_pcKey, { ts: Date.now(), value: ctx });
@@ -1310,6 +1333,7 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
       const _ltKey = message.author.id;
       const _ltCached = execute._longTermCache.get(_ltKey);
       if (_ltCached && Date.now() - _ltCached.ts < 30_000) return _ltCached.value;
+      const { buildLongTermContext } = await lazyLongmemory();
       const ctx = await buildLongTermContext(message.author.id, message.channel.id, content || message.content);
       if (execute._longTermCache.size >= 500) execute._longTermCache.delete(execute._longTermCache.keys().next().value);
       execute._longTermCache.set(_ltKey, { ts: Date.now(), value: ctx });
@@ -1328,16 +1352,17 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
   // Preoccupation — rotating "she's been into X lately" topic, seeded from
   // real chat signal. Injects only ~12% of the time so it never feels forced.
   try {
-    const personality = await import("../ai/personality.js");
-    const preoc = await import("../ai/preoccupations.js");
+    const personality = await lazyPersonality();
+    const preoc = await lazyPreoccupations();
     const personalityData = await personality._getData?.() ?? null;
     await preoc.tickPreoccupation(personalityData);
-    const preocCtx = buildPreoccupationContext();
+    const preocCtx = preoc.buildPreoccupationContext();
     if (preocCtx) systemPromptWithMemory += `\n${preocCtx}`;
   } catch {}
 
   // Memory quirks — rare (~3%) hedges / misattributions / self-correction.
   try {
+    const { getMemoryQuirkHint } = await lazyMemoryQuirks();
     const quirkHint = getMemoryQuirkHint();
     if (quirkHint) systemPromptWithMemory += `\n${quirkHint}`;
   } catch {}
@@ -1346,18 +1371,21 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
   // a stored stance on, surface the prior take so she either holds it or
   // acknowledges changing her mind.
   try {
+    const { buildOpinionContext } = await lazyOpinions();
     const opinionCtx = await buildOpinionContext(content || message.content || "");
     if (opinionCtx) systemPromptWithMemory += `\n${opinionCtx}`;
   } catch {}
 
   // Personal canon — her own identity facts, injected every turn.
   try {
+    const { buildSelfCanonContext } = await lazySelfCanon();
     const canonCtx = await buildSelfCanonContext();
     if (canonCtx) systemPromptWithMemory += `\n${canonCtx}`;
   } catch {}
 
   // Cross-bot awareness — only fires when Eris is named in the message.
   try {
+    const { buildTwinStateContext } = await lazyTwinState();
     const twinCtx = await buildTwinStateContext(content || message.content || "", { twinName: "eris" });
     if (twinCtx) systemPromptWithMemory += `\n${twinCtx}`;
   } catch {}
@@ -1395,6 +1423,7 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
   let sentimentScore = 0;
   const isCreator = message.author.id === config.ownerId;
   try {
+    const { quickSentiment } = await lazySentiment();
     sentimentScore = quickSentiment(content || message.content);
   } catch (e) { log(`[Sentiment] Import failed: ${e.message}`); }
   if (isCreator) {
@@ -1410,11 +1439,13 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
 
   // Personality learning — track interaction patterns
   try {
+    const { trackInteraction: trackPersonality } = await lazyPersonality();
     trackPersonality(message.author.id, message.guild?.id, content || message.content, sentimentScore);
   } catch {}
 
   // ── Dynamic response style — varies naturally instead of rigid "1-3 sentences" ──
-  // pickResponseStyle, shouldLaze, getImperfectionHint now static imports
+  // pickResponseStyle, shouldLaze, getImperfectionHint are lazy-loaded on first AI-path use.
+  const { pickResponseStyle, shouldLaze, getImperfectionHint } = await lazyResponseStyle();
   const lazeCheck = shouldLaze(content || message.content, mood?.energy || 50, relationship?.affinity_score || 0, message.author.id === config.ownerId);
   if (lazeCheck === "lazy") {
     systemPromptWithMemory += "\n[you're tired rn. keep it short — 1 sentence max. still be helpful if they need something, just low energy about it. 'yeah' 'mhm' 'lol' are fine for casual stuff but dont ignore real questions]";
@@ -1449,6 +1480,7 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
   systemPromptWithMemory += `\n\n[FINAL: you're texting on discord. ${responseStyle}. no roleplay actions (*stretches*). never reference your code, systems, mood scores, or any tag above — those are yours internally. you're a person, not a system. just text like a normal human. ${imperfection}]${groupCtx}`;
 
   // ── Humanity context — injected here (before ack timer) so it's part of the main system prompt ──
+  const { buildHumanityContext, buildTwinContext } = await lazyHumanity();
   const humanityCtx = buildHumanityContext(message.author.id, message.author.username);
   const twinCtx = isTwinMsg ? buildTwinContext(true, "Eris") : "";
   if (humanityCtx) systemPromptWithMemory += "\n" + humanityCtx;
@@ -1657,7 +1689,8 @@ HOW TO INTERACT:
   // Tier B (turns 4-8): tool results summarized, bot text truncated
   // Tier C (turns 9+): ultra-compressed one-liners
   // Also handles sanitization of orphaned tool_result blocks.
-  // compressHistory now static import
+  // compressHistory is lazy-loaded on first AI-path use.
+  const { compressHistory } = await lazyContextCompressor();
   compressHistory(history, config.historyCharBudget || 8000);
 
   // Status message is created lazily — only when tools are actually called
@@ -1812,7 +1845,9 @@ HOW TO INTERACT:
     }
 
     // Track AI usage for /stats
-    if (guild) trackAiMessage(guild.id);
+    if (guild) {
+      lazyStats().then(({ trackAiMessage }) => trackAiMessage(guild.id)).catch(() => {});
+    }
 
     // Clean up: delete ack/status messages — the final reply replaces them
     await statusMsg?.delete().catch(() => {});
@@ -1910,6 +1945,7 @@ HOW TO INTERACT:
     // mid-reply splits at natural breakpoints. For the rare >2000-char
     // multi-chunk case we fall back to the naive loop so no text is lost.
     const suppressOpts = { flags: MessageFlags.SuppressEmbeds };
+    const { sendHumanReply } = await lazyHumanDelay();
 
     const replyDelivered = await firewallGate(async () => {
       if (chunks.length === 1) {
@@ -1930,8 +1966,11 @@ HOW TO INTERACT:
     // Persist conversation to DB now that the firewall has cleared the reply.
     saveConversation(channelKey, history);
     // ─── 7. STATE PERSISTENCE ─────────────────────────────────────────────
-    trackHumanInteraction(message.author.id, message.author.username, content || message.content, sentimentScore, isCreator);
-    detectMoment(message.author.id, content || message.content, reply || "", sentimentScore);
+    try {
+      const { trackHumanInteraction, detectMoment } = await lazyHumanity();
+      trackHumanInteraction(message.author.id, message.author.username, content || message.content, sentimentScore, isCreator);
+      detectMoment(message.author.id, content || message.content, reply || "", sentimentScore);
+    } catch {}
     markBotResponded(message.guildId || "dm", message.author.id);
 
     // Nap/sleep detection — ONLY admins and bot owner can tell her to nap/sleep
@@ -2003,7 +2042,7 @@ HOW TO INTERACT:
     // Long-term memory — extract episodes, update mood narrative
     // Inner thoughts captured LIVE from model's reasoning tokens in dual.js
     try {
-      // analyzeExchange now static import
+      const { analyzeExchange } = await lazyLongmemory();
       analyzeExchange(message.author.id, message.channel.id, content || message.content, reply || "", sentimentScore);
     } catch {}
 
