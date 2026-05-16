@@ -2,6 +2,15 @@ import { log } from "../utils/logger.js";
 import { MessageFlags } from "discord.js";
 import * as db from "../database.js";
 
+// In-flight interaction guard for re-entrant game buttons. The economy lock
+// in database.js already serializes the mutations, but it does so by queuing —
+// a user spamming "hit" 5 times in 200ms still triggers 5 handler invocations,
+// 4 of which would race to the "no active game" branch (and one of which, for
+// the bj_double path, could double-deduct if the timing lined up between the
+// stake mutation and the game-state delete). Reject re-entrant presses at the
+// door so the second click sees a clear "still processing" message instead.
+const _inflightGameKeys = new Set();
+
 export default async function interactionCreate(interaction) {
   // ─── Button interactions (games) ──────────────────────────────────────
   if (interaction.isButton()) {
@@ -91,73 +100,90 @@ async function handleGameButton(interaction) {
   const channelId = interaction.channel.id;
 
   // ── Blackjack buttons ─────────────────────────────────────────────────
-  // Wrap the whole button handler in withUserLock so rapid clicks on "double"
-  // (or hit, or stand) can't each pass the balance check and each deduct the
-  // stake before either lands. Previously a fast double-click could charge
-  // the user 2x stake while the game only resolved once.
+  // Two-layer defense against rapid-click double-spend:
+  //   1. _inflightGameKeys reject the second click immediately so it never
+  //      starts a duplicate handler invocation. Cleared in a finally block.
+  //   2. db.withUserLock still serializes inside, so if anything else (the
+  //      AI text path, /gamble commands) is mutating this user's balance
+  //      concurrently, the bj logic still observes a consistent state.
+  // The combination prevents the previous failure mode where a fast
+  // double-click on "double" could pass the balance check twice before the
+  // first deduct landed, and the rare race where two parallel handlers both
+  // saw the same active game and each resolved it.
   if (id === "bj_hit" || id === "bj_stand" || id === "bj_double") {
-    return db.withUserLock(userId, async () => {
-      const game = db.getActiveGame(channelId, userId, "blackjack");
-      if (!game) return interaction.reply({ content: "you don't have an active blackjack game", flags: MessageFlags.Ephemeral });
+    const gameKey = `bj:${channelId}:${userId}`;
+    if (_inflightGameKeys.has(gameKey)) {
+      // Re-entrant click while the previous one is still processing — reject
+      // ephemerally so the user gets clear feedback instead of a silent queue.
+      return interaction.reply({ content: "still processing your last move, hang on", flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+    _inflightGameKeys.add(gameKey);
+    try {
+      return await db.withUserLock(userId, async () => {
+        const game = db.getActiveGame(channelId, userId, "blackjack");
+        if (!game) return interaction.reply({ content: "you don't have an active blackjack game", flags: MessageFlags.Ephemeral });
 
-      const { handValue, randomQuip } = await import("../ai/gambling.js");
-      const { blackjackHitEmbed, blackjackResultEmbed } = await import("../ai/gameVisuals.js");
-      const { deck, playerHand, dealerHand } = game.gameState;
-      let stake = game.stake;
+        const { handValue, randomQuip } = await import("../ai/gambling.js");
+        const { blackjackHitEmbed, blackjackResultEmbed } = await import("../ai/gameVisuals.js");
+        const { deck, playerHand, dealerHand } = game.gameState;
+        let stake = game.stake;
 
-      if (id === "bj_double") {
-        // Use the unsafe variant — outer withUserLock is already held.
-        const deduct = await db.tryDeductBalanceUnsafe(userId, stake, "gamble_double", "blackjack:double");
-        if (!deduct.ok) {
-          if (deduct.reason === "insufficient") {
-            return interaction.reply({ content: `can't double — you only have ${deduct.balance} coins. hit or stand instead`, flags: MessageFlags.Ephemeral });
+        if (id === "bj_double") {
+          // Use the unsafe variant — outer withUserLock is already held.
+          const deduct = await db.tryDeductBalanceUnsafe(userId, stake, "gamble_double", "blackjack:double");
+          if (!deduct.ok) {
+            if (deduct.reason === "insufficient") {
+              return interaction.reply({ content: `can't double — you only have ${deduct.balance} coins. hit or stand instead`, flags: MessageFlags.Ephemeral });
+            }
+            return interaction.reply({ content: `can't double right now: ${deduct.reason}`, flags: MessageFlags.Ephemeral });
           }
-          return interaction.reply({ content: `can't double right now: ${deduct.reason}`, flags: MessageFlags.Ephemeral });
+          stake *= 2;
+          playerHand.push(deck.pop());
+        } else if (id === "bj_hit") {
+          playerHand.push(deck.pop());
+          const pv = handValue(playerHand);
+          if (pv < 21) {
+            // Still playing — update game and show new hand
+            db.saveActiveGame(channelId, userId, "blackjack", { deck, playerHand, dealerHand }, game.stake);
+            const { embed, row } = blackjackHitEmbed(playerHand, dealerHand, pv, game.stake);
+            return interaction.update({ embeds: [embed], components: [row] });
+          }
+          // 21 or bust — fall through to resolve
         }
-        stake *= 2;
-        playerHand.push(deck.pop());
-      } else if (id === "bj_hit") {
-        playerHand.push(deck.pop());
-        const pv = handValue(playerHand);
-        if (pv < 21) {
-          // Still playing — update game and show new hand
-          db.saveActiveGame(channelId, userId, "blackjack", { deck, playerHand, dealerHand }, game.stake);
-          const { embed, row } = blackjackHitEmbed(playerHand, dealerHand, pv, game.stake);
-          return interaction.update({ embeds: [embed], components: [row] });
+
+        // ── Resolve the hand ──────────────────────────────────────────────
+        db.deleteActiveGame(channelId, userId, "blackjack");
+        const playerValue = handValue(playerHand);
+
+        if (playerValue > 21) {
+          const newBalance = await db.updateBalanceUnsafe(userId, -stake, "gamble_loss", "blackjack:bust");
+          await db.recordGameResult(userId, "blackjack", false, stake, 0);
+          const embed = blackjackResultEmbed(playerHand, dealerHand, playerValue, handValue(dealerHand), "BUST!", -stake, stake, newBalance);
+          const quip = await randomQuip({ won: false, game: "blackjack", amount: stake });
+          return interaction.update({ embeds: [embed], components: [], content: quip });
         }
-        // 21 or bust — fall through to resolve
-      }
 
-      // ── Resolve the hand ──────────────────────────────────────────────
-      db.deleteActiveGame(channelId, userId, "blackjack");
-      const playerValue = handValue(playerHand);
+        // Dealer plays
+        while (handValue(dealerHand) < 17) dealerHand.push(deck.pop());
+        const dealerValue = handValue(dealerHand);
 
-      if (playerValue > 21) {
-        const newBalance = await db.updateBalanceUnsafe(userId, -stake, "gamble_loss", "blackjack:bust");
-        await db.recordGameResult(userId, "blackjack", false, stake, 0);
-        const embed = blackjackResultEmbed(playerHand, dealerHand, playerValue, handValue(dealerHand), "BUST!", -stake, stake, newBalance);
-        const quip = await randomQuip({ won: false, game: "blackjack", amount: stake });
+        let resultText, won;
+        if (dealerValue > 21) { resultText = "Dealer Busts!"; won = true; }
+        else if (playerValue > dealerValue) { resultText = "You Win!"; won = true; }
+        else if (playerValue < dealerValue) { resultText = "Dealer Wins"; won = false; }
+        else { resultText = "Push (Tie)"; won = null; }
+
+        const payout = won === true ? stake : won === false ? -stake : 0;
+        const newBalance = await db.updateBalanceUnsafe(userId, payout, won ? "gamble_win" : won === false ? "gamble_loss" : "gamble_push", `blackjack:${resultText}`);
+        if (won !== null) await db.recordGameResult(userId, "blackjack", won, stake, won ? stake * 2 : 0);
+
+        const embed = blackjackResultEmbed(playerHand, dealerHand, playerValue, dealerValue, resultText, payout, stake, newBalance);
+        const quip = await randomQuip({ won: !!won, game: "blackjack", amount: stake });
         return interaction.update({ embeds: [embed], components: [], content: quip });
-      }
-
-      // Dealer plays
-      while (handValue(dealerHand) < 17) dealerHand.push(deck.pop());
-      const dealerValue = handValue(dealerHand);
-
-      let resultText, won;
-      if (dealerValue > 21) { resultText = "Dealer Busts!"; won = true; }
-      else if (playerValue > dealerValue) { resultText = "You Win!"; won = true; }
-      else if (playerValue < dealerValue) { resultText = "Dealer Wins"; won = false; }
-      else { resultText = "Push (Tie)"; won = null; }
-
-      const payout = won === true ? stake : won === false ? -stake : 0;
-      const newBalance = await db.updateBalanceUnsafe(userId, payout, won ? "gamble_win" : won === false ? "gamble_loss" : "gamble_push", `blackjack:${resultText}`);
-      if (won !== null) await db.recordGameResult(userId, "blackjack", won, stake, won ? stake * 2 : 0);
-
-      const embed = blackjackResultEmbed(playerHand, dealerHand, playerValue, dealerValue, resultText, payout, stake, newBalance);
-      const quip = await randomQuip({ won: !!won, game: "blackjack", amount: stake });
-      return interaction.update({ embeds: [embed], components: [], content: quip });
-    });
+      });
+    } finally {
+      _inflightGameKeys.delete(gameKey);
+    }
   }
 
   // ── Trivia buttons ────────────────────────────────────────────────────
