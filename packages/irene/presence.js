@@ -10,6 +10,15 @@ import http from "http";
 import config from "./config.js";
 import { log } from "./utils/logger.js";
 import { verifyTwinRequest, safeStringEqual } from "@defnotean/shared/twinSign";
+import { createRateLimiter } from "@defnotean/shared/rateLimit";
+
+// Per-source rate limit for /api/twin/state. The endpoint is Bearer-gated, so
+// "identity" reduces to source IP — anyone holding TWIN_API_SECRET can read
+// mood/preoccupation snapshots, and without this a valid token could be
+// replayed in a tight loop (or simply hammered) to scrape state at arbitrary
+// resolution. 10/min/IP is well above any healthy poll cadence; legit twin
+// awareness sync runs on much longer intervals.
+const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
 
 // TTS audio cache — stores generated WAV buffers keyed by random ID, served via /tts/:id
 // Bounded to TTS_MAX_CACHE entries; oldest entries evicted on insert. Entries expire after 5 min.
@@ -449,11 +458,19 @@ export function startPresenceAPI(client) {
 
       // ── Twin State (read-only snapshot of mood/energy/preoccupation) ──
       // Bearer-gated for simplicity — side-effect-free, no HMAC needed.
+      // Rate-limited per-IP because a valid token can otherwise be replayed
+      // or hammered to scrape mood state at arbitrary resolution. The bearer
+      // is one shared secret, so IP is the only identity signal we have.
       } else if (path === "/api/twin/state" && req.method === "GET") {
         const authHeader = req.headers.authorization;
         const token = authHeader?.replace("Bearer ", "");
         if (!token || !safeStringEqual(token, config.twinApiSecret)) {
           return j(403, { error: "twin state requires Bearer TWIN_API_SECRET" });
+        }
+        const ipKey = req.socket.remoteAddress || "unknown";
+        if (!_twinStateLimiter.allow(ipKey)) {
+          res.setHeader("Retry-After", "60");
+          return j(429, { error: "twin state rate limit (10/min)" });
         }
         try {
           const mood = db.getMood?.() || {};

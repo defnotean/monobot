@@ -13,4 +13,5 @@ export * from "./roleCategorizer.js";
 export * from "./twinSign.js";
 export * from "./LRUCache.js";
 export * from "./safeFetch.js";
+export * from "./rateLimit.js";
 export { createFirewall, spotlight, normalizeText, InMemoryWindowStore, RedisWindowStore } from "./ai/firewall.js";

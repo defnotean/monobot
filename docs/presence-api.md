@@ -109,9 +109,9 @@ Cached 5 min, called from `buildTwinStateContext` whenever the user's text menti
 
 Fire-and-forget, called from the moderation executor whenever Irene bans/kicks. Validates snowflakes, signs, POSTs to `/api/twin/punish` with a 5 s `AbortSignal.timeout`. Eris checks the guild's `cross_bot_punish` opt-in and confiscates the user's economy balance if true (`packages/eris/api/dashboard.js:347`).
 
-**Irene → Eris (`ask_eris` LLM tool)** — `packages/irene/ai/executors/advancedExecutor.js:430`
+**Irene → Eris (`ask_eris` LLM tool)** — `packages/irene/ai/executors/advancedExecutor.js` (`callEris` helper + `ask_eris` block)
 
-Sub-actions `remind | note | fact | mood | status`. **NOT HMAC-signed** — these hit unauthenticated `/api/twin/{remind,note,fact,...}` endpoints. The Eris API URL used to be hardcoded here; that was previously a known inconsistency. See the latest commit log for the fix that moved these URLs to `config.twinApiUrl`.
+Sub-actions `remind | note | fact | mood | status`. Routed through the shared `callEris(path, opts)` helper, which reads the base URL from `config.twinApiUrl` (env: `ERIS_API_URL`) and signs every `POST` body via `signTwinRequest` against `TWIN_API_SECRET` — same protocol as `twinPunish`. `GET` sub-actions (`/mood`, `/status`) are unsigned because Eris's twin gate is POST-only. A 5 s `AbortSignal.timeout` bounds each call.
 
 ## 5. Failure Modes
 
@@ -119,7 +119,7 @@ Sub-actions `remind | note | fact | mood | status`. **NOT HMAC-signed** — thes
 - **Signature mismatch** [STABLE] — Irene returns `403 { success: false, error: "twin auth failed: <reason>" }` (presence.js:492). Eris surfaces this verbatim to the LLM as `irene refused: ...`.
 - **Replay** [STABLE] — same signature seen twice → `403 "replay detected"` (twinSign.js:93).
 - **Clock skew** [STABLE] — > 60 s in either direction → `403 "timestamp outside acceptable skew"`.
-- **Rate limit** [STABLE] — public `/presence` is 1 req/sec/IP (presence.js:114); dashboard `/api/*` is 30/min/IP (around line 188). Both return `429 { error: "rate limited" }`. Twin-command isn't separately rate-limited beyond the dashboard bucket.
+- **Rate limit** [STABLE] — public `/presence` is 1 req/sec/IP (presence.js:114); dashboard `/api/*` is 30/min/IP (around line 188). `/api/twin/state` is additionally capped at 10/min/IP via the shared `createRateLimiter` (mirrored on both bots) so a leaked or replayed bearer can't scrape mood at arbitrary resolution; rejects with `Retry-After: 60`. All return `429 { error: "..." }`. Twin-command isn't separately rate-limited beyond the dashboard bucket.
 - **Other bot down** [STABLE] — `ask_irene` catches and returns `couldn't reach irene — {message}` to the user. `twinState` caches the error and returns empty context (silent degradation). `twinPunish` logs and returns; the ban itself still succeeds. `ask_eris` returns `couldn't reach eris right now — she might be sleeping`.
 - **Payload too large** [STABLE] — > 10 KB body to `/api/twin/command` returns `413` and destroys the request socket (presence.js:478).
 
