@@ -128,14 +128,39 @@ function sendToDiscord(channelId, content) {
 }
 
 // ─── AGENT POLL ───────────────────────────────────────────────────────────────
+// Re-evaluate the kill switch on every invocation so a flipped env var halts
+// drain immediately, even if rows are already in the queue. Reads from
+// process.env *and* the local config (parity with getEnv()) so the env file
+// can flip it without an Electron restart.
+function isPcAgentDisabled() {
+    const fromEnv = process.env.PC_AGENT_DISABLED;
+    if (fromEnv === '1' || fromEnv === 'true') return true;
+    try {
+        const fromConfig = getEnv('PC_AGENT_DISABLED');
+        if (fromConfig === '1' || fromConfig === 'true') return true;
+    } catch {}
+    return false;
+}
+
 async function pollCommands() {
     if (!supabase || !isConnected) return;
+    // Kill-switch parity with the bot: refuse to drain when disabled.
+    if (isPcAgentDisabled()) {
+        mainWindow?.webContents.send('agent-log', 'Poll skipped: PC_AGENT_DISABLED=1');
+        return;
+    }
     try {
         const { data: commands, error } = await supabase
             .from('local_commands').select('*').eq('status', 'pending')
             .order('created_at', { ascending: true }).limit(5);
         if (error || !commands?.length) return;
         for (const cmd of commands) {
+            // Re-check before each exec — a flip mid-batch must halt the rest
+            // of the drain without leaving rows in the 'running' state.
+            if (isPcAgentDisabled()) {
+                mainWindow?.webContents.send('agent-log', `Skipped command ${cmd.id}: PC_AGENT_DISABLED=1`);
+                break;
+            }
             await supabase.from('local_commands').update({ status: 'running' }).eq('id', cmd.id);
             mainWindow?.webContents.send('agent-command-start', { command: cmd.command, id: cmd.id });
             exec(cmd.command, { shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/bash', timeout: 30000 }, async (err, stdout, stderr) => {
@@ -250,6 +275,10 @@ app.whenReady().then(() => {
 
     // ── Terminal ──────────────────────────────────────────────────────────────
     ipcMain.handle('run-terminal', async (_, { command, cwd }) => {
+        // Honor the same kill switch as the bot-side enqueue path.
+        if (isPcAgentDisabled()) {
+            return { output: 'PC agent is disabled (PC_AGENT_DISABLED=1).', exitCode: 1 };
+        }
         return new Promise(resolve => {
             exec(command, { shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/bash', timeout: 60000, cwd: cwd || undefined }, (err, stdout, stderr) => {
                 resolve({ output: (stdout || stderr || (err ? err.message : '')).trim(), exitCode: err?.code || 0 });

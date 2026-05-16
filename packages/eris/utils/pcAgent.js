@@ -32,36 +32,103 @@ export function pcAgentDisabledMessage() {
 // Patterns are matched case-insensitively against the full command string.
 // Keep this list conservative — false positives are fine (user can re-send
 // with confirm), false negatives wipe the machine.
+//
+// All patterns use the `u` flag and a unicode-aware whitespace class so
+// NBSP / zero-width / ideographic space bypasses match. The input is also
+// NFKC-normalized and stripped of zero-width characters before matching to
+// fold homoglyphs/confusables to canonical form.
+const WS = "[\\s\\u00A0\\u2000-\\u200B\\u202F\\u205F\\u3000\\uFEFF]";
 const DESTRUCTIVE_PATTERNS = [
-  /\brm\s+(-[a-z]*[rfRF][a-z]*\s+)?[\/~]/i,     // rm -rf /, rm -r ~/
-  /\brm\s+-[a-z]*[rfRF]/i,                       // rm -rf anything
-  /\bdel\s+\/[sfq]/i,                            // del /s, del /f, del /q
-  /\brmdir\s+\/s/i,                              // rmdir /s
-  /\bformat\s+[a-z]:/i,                          // format C:
-  /\bdiskpart\b/i,
-  /\bmkfs(\.|\s)/i,                              // mkfs, mkfs.ext4
-  /\bdd\s+[^|]*\bof=\/dev\//i,                   // dd if=... of=/dev/sda
-  /\b:(?:\(\s*\)\s*{\s*:\|:&\s*}\s*;\s*:|\s*\(\)\s*\{\s*:\|:)/i, // fork bomb
-  /\breg\s+delete\b/i,
-  /\bsc\s+delete\b/i,
-  /\bshutdown\b/i,
-  /\bnet\s+user\b.*\/(add|delete)/i,
-  /\btakeown\s+\/f/i,
-  /\bicacls\b.*\/deny/i,
-  /\bRemove-Item\b[^|]*-Recurse[^|]*-Force/i,   // PowerShell Remove-Item -Recurse -Force
-  /\bStop-Computer\b/i,
-  /\bRestart-Computer\b/i,
-  /\bClear-EventLog\b/i,
+  // POSIX rm
+  new RegExp(`\\brm${WS}+(-[a-z]*[rfRF][a-z]*${WS}+)?[\\/~]`, "iu"),     // rm -rf /, rm -r ~/
+  new RegExp(`\\brm${WS}+-[a-z]*[rfRF]`, "iu"),                          // rm -rf anything (incl. -fr ordering)
+  // Windows del / erase (erase is the synonym for del)
+  new RegExp(`\\b(del|erase)${WS}+\\/[sfq]`, "iu"),                      // del /s, erase /s/f/q
+  // rmdir and its alias rd (PowerShell + cmd)
+  new RegExp(`\\b(rmdir|rd)${WS}+\\/s`, "iu"),                           // rmdir /s, rd /s
+  new RegExp(`\\brd${WS}+(-[a-z]*[rfRF][a-z]*${WS}+)?[\\/~]`, "iu"),     // rd alias used POSIX-style
+  new RegExp(`\\bformat${WS}+[a-z]:`, "iu"),                             // format C:
+  /\bdiskpart\b/iu,
+  new RegExp(`\\bmkfs(\\.|${WS})`, "iu"),                                // mkfs, mkfs.ext4
+  new RegExp(`\\bdd${WS}+[^|]*\\bof=\\/dev\\/`, "iu"),                   // dd if=... of=/dev/sda
+  /\b:(?:\(\s*\)\s*\{\s*:\|:&\s*\}\s*;\s*:|\s*\(\)\s*\{\s*:\|:)/iu,      // fork bomb
+  new RegExp(`\\breg${WS}+delete\\b`, "iu"),
+  new RegExp(`\\bsc${WS}+delete\\b`, "iu"),
+  /\bshutdown\b/iu,
+  new RegExp(`\\bnet${WS}+user\\b.*\\/(add|delete)`, "iu"),
+  new RegExp(`\\btakeown${WS}+\\/f`, "iu"),
+  /\bicacls\b.*\/deny/iu,
+  // PowerShell Remove-Item; its aliases (ri, rd, rm, del, erase, rmdir) under
+  // Recurse + Force are equally dangerous.
+  /\bRemove-Item\b[^|]*-Recurse[^|]*-Force/iu,
+  new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Recurse[^|]*-Force`, "iu"),
+  new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Force[^|]*-Recurse`, "iu"),
+  /\bStop-Computer\b/iu,
+  /\bRestart-Computer\b/iu,
+  /\bClear-EventLog\b/iu,
+  // PowerShell -EncodedCommand is opaque to every regex below it — reject
+  // outright. Match canonical and abbreviated forms (-enc, -ec, -e).
+  new RegExp(`\\bpowershell(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
+  new RegExp(`\\bpwsh(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
+  // cmd /c rebuilds (env-substitution smuggling).
+  new RegExp(`\\bcmd(\\.exe)?\\b[^|]*${WS}\\/c\\b`, "iu"),
 ];
+
+// Chain operators — if a destructive command sits after `;`, `&&`, `||`, `|`,
+// `&`, backtick, or `$()`, the leading clause shouldn't mask it. Split on
+// these and re-check each fragment.
+const CHAIN_SPLIT = /(?:&&|\|\||;|\||&|`|\$\()/u;
+
+/**
+ * Normalize a command for pattern matching. NFKC folds homoglyphs/width
+ * variants to canonical form, then we drop common zero-width chars so e.g.
+ * `r<ZWJ>m` becomes `rm` for the regex pass. The executed command is NOT
+ * touched — this is only the input to the gate.
+ */
+function normalizeForMatch(command) {
+  if (typeof command !== "string") return "";
+  let s;
+  try {
+    s = command.normalize("NFKC");
+  } catch {
+    s = command;
+  }
+  // ZWSP, ZWNJ, ZWJ, WORD JOINER, BOM, SOFT HYPHEN.
+  s = s.replace(/[​-‍⁠﻿­]/g, "");
+  return s;
+}
+
+function matchDestructive(normalized) {
+  for (const pat of DESTRUCTIVE_PATTERNS) {
+    if (pat.test(normalized)) return pat.source;
+  }
+  return null;
+}
 
 /**
  * Check if a shell command looks destructive. Returns the matched pattern if so,
- * or null if it seems safe.
+ * or null if it seems safe. Handles unicode-whitespace bypass, chained
+ * operators, and PowerShell -EncodedCommand smuggling.
  */
 export function looksDestructive(command) {
   if (!command || typeof command !== "string") return null;
-  for (const pat of DESTRUCTIVE_PATTERNS) {
-    if (pat.test(command)) return pat.source;
+  const normalized = normalizeForMatch(command);
+  if (!normalized) return null;
+
+  // Whole-command match.
+  const whole = matchDestructive(normalized);
+  if (whole) return whole;
+
+  // Split on chain operators and re-check each fragment so e.g.
+  //   echo hi && rm -rf /
+  // is caught even when the leading clause is innocuous.
+  if (CHAIN_SPLIT.test(normalized)) {
+    for (const part of normalized.split(CHAIN_SPLIT)) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const hit = matchDestructive(trimmed);
+      if (hit) return hit;
+    }
   }
   return null;
 }
