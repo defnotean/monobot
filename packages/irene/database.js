@@ -113,6 +113,16 @@
 
 import { createClient } from "@supabase/supabase-js";
 import config from "./config.js";
+import {
+  GUILD_SETTINGS_DEFAULTS,
+  STARBOARD_DEFAULTS,
+  DM_WELCOME_DEFAULTS,
+  LEAVE_DEFAULTS,
+  ESCALATION_DEFAULTS,
+  MOOD_DEFAULTS,
+  RELATIONSHIP_DEFAULTS,
+  withDefaults,
+} from "./database/schemas.js";
 // Dual-write target — only invoked when config.dualWritePersistence is true.
 // Imported lazily inside _flushSave to avoid a circular module load at boot
 // (perEntity.js imports getSupabase from this file).
@@ -508,7 +518,12 @@ function ensureGuild(guildId) {
 }
 
 export function getGuildSettings(guildId) {
-  return data.guild_settings[guildId] || null;
+  // Merge defaults so callers can rely on the full GUILD_SETTINGS_DEFAULTS
+  // shape (channel ids default to null, counters/arrays/flags match the
+  // legacy inline `??` fallbacks). Stored fields win; explicit-null in
+  // stored is preserved (cleared state); `undefined` in stored does not
+  // erase the default. See packages/irene/database/schemas.js.
+  return withDefaults(GUILD_SETTINGS_DEFAULTS, data.guild_settings[guildId]);
 }
 
 export function setGuildSetting(guildId, key, value) {
@@ -1315,11 +1330,14 @@ export function setDmWelcome(guildId, enabled, message) {
 }
 
 export function getDmWelcome(guildId) {
+  // Build the slice projection from stored snake_case keys, then merge over
+  // DM_WELCOME_DEFAULTS. Only project keys that are actually set so that
+  // unset fields fall through to defaults via withDefaults.
   const s = data.guild_settings[guildId];
-  return {
-    enabled: s?.dm_welcome_enabled ?? false,
-    message: s?.dm_welcome_message ?? "Welcome to {server}! Feel free to introduce yourself.",
-  };
+  const stored = {};
+  if (s?.dm_welcome_enabled !== undefined) stored.enabled = s.dm_welcome_enabled;
+  if (s?.dm_welcome_message !== undefined) stored.message = s.dm_welcome_message;
+  return withDefaults(DM_WELCOME_DEFAULTS, stored);
 }
 
 // ─── Leave Messages ───────────────────────────────────────────────────────────
@@ -1332,11 +1350,14 @@ export function setLeaveChannel(guildId, channelId, message) {
 }
 
 export function getLeaveSettings(guildId) {
+  // Project stored snake_case fields into the slice shape, then merge.
+  // Only project keys that are set so unset ones inherit the default.
+  // Explicit-null channel id (admin cleared the leave channel) is preserved.
   const s = data.guild_settings[guildId];
-  return {
-    channelId: s?.leave_channel ?? null,
-    message: s?.leave_message ?? "Goodbye, {username}. We hope to see you again!",
-  };
+  const stored = {};
+  if (s?.leave_channel !== undefined) stored.channelId = s.leave_channel;
+  if (s?.leave_message !== undefined) stored.message = s.leave_message;
+  return withDefaults(LEAVE_DEFAULTS, stored);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1445,7 +1466,10 @@ export function setEscalation(guildId, config) {
 }
 
 export function getEscalation(guildId) {
-  return data.guild_settings[guildId]?.escalation ?? { mute_at: null, kick_at: null, ban_at: null };
+  // Partial-policy admins (e.g. only mute_at set) must still observe
+  // null at unset tiers — merge over ESCALATION_DEFAULTS rather than
+  // returning the raw stored row.
+  return withDefaults(ESCALATION_DEFAULTS, data.guild_settings[guildId]?.escalation);
 }
 
 // ─── Server Stats Channels ────────────────────────────────────────────────────
@@ -1572,11 +1596,15 @@ export function setStarboard(guildId, channelId, threshold) {
 }
 
 export function getStarboard(guildId) {
+  // Project stored snake_case fields into the slice shape, then merge.
+  // Only project keys that are set so unset ones inherit STARBOARD_DEFAULTS
+  // (channelId: null, threshold: 3). Explicit-null channel id is preserved
+  // (an admin clearing the starboard channel keeps the threshold).
   const s = data.guild_settings[guildId];
-  return {
-    channelId: s?.starboard_channel ?? null,
-    threshold: s?.starboard_threshold ?? 3,
-  };
+  const stored = {};
+  if (s?.starboard_channel !== undefined) stored.channelId = s.starboard_channel;
+  if (s?.starboard_threshold !== undefined) stored.threshold = s.starboard_threshold;
+  return withDefaults(STARBOARD_DEFAULTS, stored);
 }
 
 export function addStarboardEntry(guildId, messageId, starboardMessageId) {
@@ -1708,7 +1736,9 @@ export function addToWhitelist(guildId, info) {
 // ─── Mood & Energy (shared emotional state) ──────────────────────────────────
 
 export function getMood() {
-  return { ...data.mood };
+  // Merge defaults so a partial/missing in-memory row still yields the
+  // full MOOD_DEFAULTS shape (mood_score: 0, energy: 50).
+  return withDefaults(MOOD_DEFAULTS, data.mood);
 }
 
 export function updateMood(score, energy) {
@@ -1734,7 +1764,9 @@ export function moodLabel(score) {
 // ─── Relationships (per-user affinity tracking) ──────────────────────────────
 
 export function getRelationship(userId) {
-  return data.relationships[userId] || { affinity_score: 0, interactions_count: 0 };
+  // Merge defaults so a missing/partial row still yields the full
+  // RELATIONSHIP_DEFAULTS shape (affinity_score: 0, interactions_count: 0).
+  return withDefaults(RELATIONSHIP_DEFAULTS, data.relationships[userId]);
 }
 
 export function updateRelationship(userId, affinityDelta) {
