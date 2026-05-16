@@ -1,3 +1,80 @@
+/**
+ * @file packages/irene/database.js
+ * @module irene/database
+ *
+ * Irene persistence layer — synchronous in-memory cache fronted by an
+ * asynchronous, debounced flush to Supabase. Every read returns straight
+ * from the local `data` object; every write mutates the cache, marks a
+ * bucket dirty, and schedules a ~2s debounced flush. On SIGTERM/SIGINT the
+ * process awaits the final flush so the cache is durable across deploys.
+ *
+ * Why it's shaped this way:
+ *   - Discord interactions have a 3-second ack budget; we can't await
+ *     network round-trips inside a slash-command handler.
+ *   - Render restarts the process on every deploy, so cache-only would
+ *     mean amnesia. Supabase is the system of record on cold boot.
+ *
+ * Domains covered (see TABLE OF CONTENTS comment below for line anchors):
+ *   - guild_settings — per-guild config (welcome, log channels, ghost-ping,
+ *     autorole, server rules, auto-mod rules/exemptions/violations,
+ *     ticket system config, AFK, temp-VC, color roles, access role,
+ *     channel/server personas, bad words, reaction roles, etc.).
+ *   - moderation_log — warnings (warnings[], _nextWarningId).
+ *   - tickets — config, panel, roles, types, resolution state.
+ *   - reminders, scheduled_tasks — time-driven jobs with monotonic IDs.
+ *   - custom_commands — per-guild trigger/response map.
+ *   - trusted_users — privileged user list with a 5-minute background
+ *     refresh cache (recently added) so revocations propagate without a
+ *     bot restart while keeping read-path hot.
+ *   - mood / relationships — emotional state synced with the Eris sibling
+ *     bot via the perEntity dual-write path.
+ *   - personality, persistent runtime (music queues, temp VC, lockdown),
+ *     external feeds (RSS / Twitch / TTS / YouTube / GitHub), giveaways,
+ *     highlights, voice stats, auto-responders, feature toggles, audit log,
+ *     invite tracking, temp bans, invite filter, sticky messages,
+ *     birthdays, server whitelist, starboard, conversations, DM opt-out.
+ *
+ * Per-entity storage pattern:
+ *   Each logical entity (guild settings, custom commands, mood state,
+ *   relationships, scrim stats, starboard entries, saved queues, global
+ *   state) is written through helpers in ./database/perEntity.js to a
+ *   dedicated `irene_*` table keyed by `guild_id` or `bot_name`. Rows
+ *   carry an integer `version` for optimistic concurrency and a `data`
+ *   JSON payload. Rapid writes within COALESCE_MS collapse into a single
+ *   round-trip; conflicts retry up to MAX_RETRIES; insert-vs-update is
+ *   negotiated via unique-violation fall-through. See
+ *   `packages/irene/tests/database/perEntity.test.ts` for the contract.
+ *   The perEntity module is loaded lazily inside `_flushSave` to avoid a
+ *   circular import (perEntity imports `getSupabase` from this file).
+ *
+ * REQUIRE_PERSISTENCE — fail-fast guarantee:
+ *   When the `REQUIRE_PERSISTENCE` env var is truthy, boot will abort
+ *   hard if Supabase credentials are missing or the initial load throws.
+ *   This is the production posture: a silent fallback to in-memory mode
+ *   on Render would burn user state on every deploy.
+ *
+ * In-memory mode caveats:
+ *   Without Supabase credentials (or in tests) the module runs purely
+ *   from `data` with no flush. Nothing survives a restart. A loud
+ *   warning is logged at boot so this state is impossible to miss in
+ *   the logs. NEVER ship this to production — gate with REQUIRE_PERSISTENCE.
+ *
+ * Concurrency / lock model:
+ *   - Reads are sync and unlocked; the JS event loop is the only writer.
+ *   - `withUserLock(userId, fn)` serialises read-modify-write sequences
+ *     against the same user (e.g. economy, affinity bumps, warning-id
+ *     allocation) so two concurrent interactions can't race the cache.
+ *   - The flush itself is debounced and reentrant-safe via a dirty-set;
+ *     a flush in progress drains pending mutations before resolving.
+ *   - Cross-process contention with the Eris sibling bot is handled at
+ *     the perEntity layer through Postgres `version` checks — the loser
+ *     of a version race re-reads and retries.
+ *
+ * Do not add new top-level table reads/writes here without also wiring
+ * the perEntity helper, the boot-time loader, and a test in
+ * `tests/database/perEntity.test.ts`.
+ */
+
 // ─── packages/irene/database.js ─────────────────────────────────────────
 // In-memory cache + ~2s debounced flush to Supabase. Reads sync from
 // cache; writes mark a bucket dirty; SIGTERM awaits final flush.
