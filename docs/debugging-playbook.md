@@ -2,6 +2,24 @@
 
 Symptom → file location. The reverse direction of [where-do-i-edit.md](./where-do-i-edit.md). Use this when something's broken and you need to know where to look.
 
+## Recent fixes — symptom → file quick lookup
+
+If the symptom matches one of these, jump straight to the file. Each row links to a recipe further down for the full why/how.
+
+| Symptom | File | Recipe |
+|---|---|---|
+| `429` from `/api/twin/state` | `packages/shared/src/rateLimit.js` + `packages/eris/api/dashboard.js:13,428` | [Twin state endpoint 429s](#twin-state-endpoint-429s) |
+| `[DB] eris_add_balance RPC not deployed` log line | `packages/eris/database.js` `_updateBalanceUnsafe` (~690) + `packages/eris/migrations/002_atomic_balance_rpc.sql` | [Atomic balance RPC fell back to CAS](#atomic-balance-rpc-fell-back-to-cas) |
+| `still processing your last move, hang on` on blackjack buttons | `packages/eris/events/interactionCreate.js:113-120` | [Blackjack button ephemeral rejection](#blackjack-button-ephemeral-rejection) |
+| Trust changes don't take effect for ~5 min after `/trust` | `packages/irene/database.js:1020-1061` | [Trusted-user cache staleness](#trusted-user-cache-staleness) |
+| Karaoke session ended on its own after 10 min | `packages/irene/ai/karaoke.js:32,402-413` | [Karaoke session auto-ended](#karaoke-session-auto-ended) |
+| `/voice listen` stopped without `/voice stop` | `packages/irene/voice/listener.js:48,51,102-118` | [Voice listener auto-stopped](#voice-listener-auto-stopped) |
+| Humanity/sentiment reads stale in a busy channel | `packages/irene/ai/humanity.js:34-78` | [humanity.js 30s judge cooldown](#humanityjs-30s-judge-cooldown) |
+| Semantic search cache hit-rate dropped after upgrade | `packages/eris/ai/semantic.js:29-36` | [Semantic cache misses after hash widening](#semantic-cache-misses-after-hash-widening) |
+| Bot connects, sees no messages | `packages/<bot>/index.js` intents + Discord Developer Portal | [Bot connects but doesn't respond](#bot-connects-but-doesnt-respond) |
+| `/foo` isn't there in the picker | `packages/<bot>/deploy-commands.js` + `npm run deploy` | [Slash commands missing](#slash-commands-missing) |
+| Tests pass locally, fail on CI (or vice versa) | `packages/<bot>/tests/**/*.test.ts` | [Tests flake on timers / RNG](#tests-flake-on-timers--rng) |
+
 ## Bot doesn't respond at all
 
 Walk the gating gauntlet in `packages/<bot>/events/messageCreate.js` top-to-bottom. Each gate can silently drop a message.
@@ -173,6 +191,131 @@ The 2026-04-24 incident: tests passed because they ran against the same hoisted 
 - **Run `npm run lint:version-sync`** — catches divergent dep ranges across workspaces.
 - **Smoke-test in dev guild before merging** — `/ping` + an embed-sending command + a moderation command. See [DEPLOY_MIGRATION.md](../DEPLOY_MIGRATION.md) for the full checklist.
 - **Compare `[Bot] N commands loaded` count to last known good** — if it dropped, a command file failed to load silently. (This is what missed Irene on 2026-04-24.)
+
+## Twin state endpoint 429s
+
+Polling `GET /api/twin/state` past 10 hits/minute per source IP returns:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 60
+{"error":"twin state rate limit (10/min)"}
+```
+
+- **Limiter** — `packages/shared/src/rateLimit.js` `createRateLimiter` (sliding-window, in-memory, bounded by `maxKeys=1000`).
+- **Wired in** — `packages/eris/api/dashboard.js:13` creates the limiter; `:428` consults it on every `/api/twin/state` GET keyed on `req.socket.remoteAddress`.
+- **Why it exists** — the endpoint is Bearer-gated, so "identity" reduces to the IP of whoever holds `TWIN_API_SECRET`. Without the gate, a valid token could be replayed in a tight loop to scrape mood/preoccupation snapshots.
+
+Knobs:
+- Legit twin awareness polling cadence is ≥60s, well under 10/min — if you're tripping the limit you're probably accidentally polling in a loop or running the poller in two processes against the same IP.
+- To raise the ceiling for self-hosting, edit `_twinStateLimiter = createRateLimiter({ limit, windowMs })` directly. There is no env knob for this on purpose.
+- The limiter is per-process; if you run multiple Eris replicas behind a load balancer, each replica has its own 10/min/IP allowance.
+
+## Atomic balance RPC fell back to CAS
+
+If you see `[DB] eris_add_balance RPC not deployed — falling back to version-CAS path. Apply migrations/002_atomic_balance_rpc.sql to enable atomic updates.` once at startup, then the version-CAS path runs forever after.
+
+- **Cause** — the `eris_add_balance` Postgres function isn't in your Supabase. The first call probes; on `PGRST202` we flip `_rpcAddBalanceAvailable = false` and never retry. See `packages/eris/database.js:690` `_updateBalanceUnsafe`.
+- **Behavior** — both paths produce identical caller-observable semantics (including the `insufficient_balance` contract). The CAS loop is correct, just costs more round-trips and burns retries on contention.
+- **Fix** — apply `packages/eris/migrations/002_atomic_balance_rpc.sql` to your Supabase project, then restart the bot. The probe re-runs on first balance update post-restart.
+- **Symptoms of falling back unintentionally** — `bot.log` shows repeated `eris_add_balance RPC error: …` (transient errors don't disable the path, only `PGRST202`), or balance updates feel noticeably slower under load.
+
+The CAS retry log lines are not a bug — they're expected under concurrent writers. The RPC removes them by serializing the read-modify-write inside Postgres in a single round-trip.
+
+## Blackjack button ephemeral rejection
+
+User sees `still processing your last move, hang on` (ephemeral) when they spam-click `hit` / `stand` / `double`.
+
+- **Source** — `packages/eris/events/interactionCreate.js:113-120`. The `_inflightGameKeys` Set tracks `bj:<channelId>:<userId>` while the previous click is mid-handler.
+- **Why** — pre-fix, a fast double-click on `double` could pass the balance check twice before the first deduct landed, producing a double-spend. The two-layer defense is:
+  1. `_inflightGameKeys.has(gameKey)` rejects the second click immediately so a duplicate handler invocation never starts.
+  2. `db.withUserLock(userId, …)` still serializes inside, so AI text path / `/gamble` concurrent mutations don't race the bj logic.
+
+If the rejection is sticky after a single click and not clearing:
+- The `finally` block at `:185` clears `_inflightGameKeys.delete(gameKey)`. If a synchronous throw skipped the finally, the entry sticks until restart. Wrap any new logic added inside the `try` so its errors flow through.
+- A bot restart clears the Set (it's in-memory).
+
+## Trusted-user cache staleness
+
+After running `/trust add @user` or `/trust remove @user`, the access decision for that user reflects the old list for up to 5 minutes.
+
+- **Source** — `packages/irene/database.js:1020` `const TRUSTED_TTL_MS = 5 * 60 * 1000`.
+- **How it works** — `getTrustedUsers(guildId)` is a sync function (every call site is sync; rewriting them all to async was deliberately avoided). It does a sync read from `data.guild_settings`, and if the last refresh was >5 min ago, kicks off a fire-and-forget `_refreshTrustedUsers` background fetch. The first stale read returns the stale list; the next read after the background fetch returns the fresh list.
+- **`_trustedRefreshInFlight` dedupes concurrent refreshes** so a flurry of stale reads only fires one Supabase round-trip.
+
+If you need an immediate update (e.g. revoking trust mid-incident), restart Irene — local writes via `addTrustedUser` / `removeTrustedUser` take effect immediately for the same process, but only the Supabase round-trip propagates the change to a different replica.
+
+## Karaoke session auto-ended
+
+Session ended without `/karaoke stop` and you see `[KARAOKE] Max session timeout (600000ms) — auto-stopping` in the log.
+
+- **Source** — `packages/irene/ai/karaoke.js:32` `const MAX_SESSION_MS = 10 * 60 * 1000` + `:402-413` `armSessionTimeout`.
+- **Why** — the auto-stop hooks (music-stopped, song-ended, `/karaoke stop`) can fail to fire if Lavalink reports a stuck position or the session is forgotten. Pre-fix the poll loop would spin indefinitely. 10 min is comfortably longer than any normal song in a typical queue.
+- The timer is `setTimeout`-based and `.unref()`'d, so a shutdown mid-karaoke exits promptly.
+
+If 10 min is too short for your use case (long-form acoustic sets), the constant is the one knob. Raising it past ~30 min defeats the purpose of the cap; consider why a "karaoke session" needs to be that long instead.
+
+## Voice listener auto-stopped
+
+`/voice listen` ended on its own and `bot.log` shows either `Max session reached (3600000ms)` or `No audio for 600000ms — auto-stopping`.
+
+- **Source** — `packages/irene/voice/listener.js:48` `MAX_SESSION_MS = 60 * 60 * 1000` and `:51` `NO_DATA_TIMEOUT_MS = 10 * 60 * 1000`.
+- **Two independent watchers** — `sessionTimer` (hard 60-min cap) and `idleTimer` (10-min no-audio watcher). Both call `stopListening(guildId)`. Both are cleared in `stopListening` so a normal end doesn't leave dangling timers.
+- **Why** — a forgotten `/voice listen` (or a Discord voice-gateway hiccup that leaves the listener half-connected) can keep the bot occupied indefinitely. 60-min cap + 10-min no-data covers both the human-forgetfulness case and the silent-disconnect case.
+
+If the bot drops out of voice mid-conversation, check whether the no-data watcher fired during a long pause. The no-data timer only resets on actual decoded audio frames — if `@discordjs/opus` failed to build (see `Voice listener doesn't hear` above) you'll get the no-data timeout instead of a transcription failure.
+
+## humanity.js 30s judge cooldown
+
+Humanity / sentiment context for a busy channel feels stale — same vibe for several messages in a row even though the conversation shifted.
+
+- **Source** — `packages/irene/ai/humanity.js:34` `HUMANITY_JUDGE_COOLDOWN_MS = 30_000`, gate function `shouldRunHumanityJudge(channelId)`.
+- **How** — callers call `shouldRunHumanityJudge`, get back `{ allow, cachedResult }`. If `allow === false`, they MUST skip the LLM-as-judge call and use `cachedResult` (or degrade gracefully if it's null). On completion, the caller writes back via `recordHumanityJudgeResult(channelId, result)` so the next cooldown-blocked caller reuses it.
+- **Why 30s** — long enough that a back-and-forth burst collapses into one judgment (typical beat is 5-15s), short enough that a channel that goes quiet for a minute gets a fresh read when it lights up again.
+
+If you're adding a new LLM-as-judge call: route it through this gate, otherwise you'll fire judgments per-message and blow cost / per-minute rate limits. Both maps are pruned at 1024 channel entries (drops the oldest 25%) so a long-lived bot in many channels won't leak memory.
+
+## Semantic cache misses after hash widening
+
+`_searchCache` in `packages/eris/ai/semantic.js` started missing more after the 2026-05-16 hash change.
+
+- **Source** — `packages/eris/ai/semantic.js:36` `msgHash` is now SHA-256 truncated to 16 hex chars (64-bit), hashing the full lowercased message text. Previously: 32-bit DJB2-style int over the first 100 chars.
+- **Why the change** — 32-bit space hits the birthday collision wall around ~65k distinct messages, well within reach for any long-running channel. The first-100-chars truncation also produced collisions for messages sharing a 100-char prefix but diverging later.
+- **Expected miss-rate impact** — keys now reflect the full message, so any prior cache hits that were actually collisions become misses. This is correct behavior; the prior "hit" was returning the wrong cached result.
+
+If you actually want a higher hit rate, the right move is to normalize input before hashing (lowercase, collapse whitespace, strip punctuation) — don't shrink the key back down.
+
+## Bot connects but doesn't respond
+
+Bot shows online in the member list, slash commands work, but messages get no reply. Walk this list before diving into the gating gauntlet above.
+
+1. **`MessageContent` intent not approved** — in the Discord Developer Portal under "Bot → Privileged Gateway Intents", `MESSAGE CONTENT INTENT` must be ON. Without it, `message.content` is empty for non-mention messages, so the bot can't see what was said and silently drops the message at the length / mention gates. `packages/<bot>/index.js:22-30` already requests the intent — the failure is portal-side approval.
+2. **`GuildMembers` and `GuildPresences` intents** — both privileged, both required. Without `GuildMembers`, member-mention parsing breaks; without `GuildPresences`, the bot can't see who's in voice / who's online for presence-aware replies.
+3. **`BOT_OWNER_ID` not set or wrong** — `packages/eris/config.js:201` / equivalent in Irene. The owner ID gates wake-from-sleep, owner-only tools, and the relationship section in the personality prompt. If it's blank, the personality renders `{{OWNER_ID}}` literally and the bot treats nobody as the owner.
+4. **Bot has Send Messages perm in the channel** — Discord permission overwrites can deny the bot at the channel level even if it has the guild-level role. Right-click the channel → Edit Channel → Permissions → check for a red ✗ on the bot role.
+5. **The bot is in sleep mode** — see the gating gauntlet table at the top. Only the owner wake-trigger works in sleep mode.
+
+If all of the above pass, walk the gating gauntlet.
+
+## Slash commands missing
+
+`/foo` doesn't appear in the autocomplete picker.
+
+1. **You never deployed** — run `npm run deploy` from the package directory (e.g. `packages/eris`). This runs `deploy-commands.js` against the configured `CLIENT_ID` and either pushes guild-scoped (instant) or global (~1h propagation) commands.
+2. **Hash short-circuit** — `utils/autoDeploy.js` skips PUT if the SHA256 of the sorted command set matches `bot_data` row `<bot>_commands_hash:<clientId>`. To force a re-PUT, delete that row, or edit a command's description by one character to bump the hash.
+3. **Wrong scope** — guild commands appear instantly but only in that guild. Global commands appear everywhere but take up to an hour. Check which `Routes.applicationGuildCommands` vs `Routes.applicationCommands` your `deploy-commands.js` is calling.
+4. **Command file failed to load** — startup log shows `[Bot] N commands loaded`. Compare N to last known good. If it dropped, a `commands/**/*.js` file has a syntax error or threw on import. Tail the log for `[ERROR] failed to load command file …`.
+5. **Bot was invited without `applications.commands` scope** — re-generate the invite URL in the Discord Developer Portal with `bot + applications.commands` both checked, then re-invite.
+
+## Tests flake on timers / RNG
+
+Test passes locally, fails on CI (or vice versa), or fails intermittently on the same machine.
+
+1. **Wall-clock timers** — `setTimeout` / `Date.now()` based assertions race CI scheduling. Use `vi.useFakeTimers()` + `vi.advanceTimersByTime(ms)`. Pattern from `packages/eris/tests/utils/lruCache.test.ts` — wrap the time-sensitive block, advance the clock past the threshold, assert.
+2. **Frozen system time for dedupe windows** — when the code under test reads `Date.now()` multiple times and the assertion depends on them landing on the same tick, use `vi.setSystemTime(<fixed date>)`. Pattern from `packages/eris/tests/ai/bumpCelebrations.test.ts` (and the Irene mirror in `packages/irene/tests/ai/bumpCelebrations.test.ts`).
+3. **Statistical bands with real `Math.random`** — coinflip / dice / slots tests use ranges like "win rate between 48% and 52% over 10k trials". CI variance can land outside the band. Seed with a deterministic PRNG (mulberry32 is already factored in `packages/eris/tests/ai/gambling.test.ts`) and `vi.spyOn(Math, "random").mockImplementation(rand)` in `beforeEach`, restore in `afterEach`.
+4. **Test order dependence** — tests share module-level state (caches, in-memory maps) and pass only when run in a specific order. Add a `beforeEach` that resets the relevant module state, or use `vi.resetModules()` before each test.
+5. **Workspace dep skew** — see `Tests pass but production breaks` above. If a test passes locally on a hoisted module and fails on CI because CI installed differently, run `npm run lint:version-sync` and align workspaces.
 
 ## When all else fails
 
