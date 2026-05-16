@@ -1,3 +1,94 @@
+/**
+ * @file database.js
+ * @module packages/eris/database
+ *
+ * Eris persistence layer over Supabase with a full in-memory fallback. ALL
+ * state for the bot — economy, mood, relationships, facts/memory, games,
+ * shop, inventory, achievements, loans, bounties, daily challenges, boss
+ * battles, pets, territories, heists, auctions, banking, marriages,
+ * crafting, cooldowns, per-guild settings and directives — flows through
+ * exported getters/setters in this file. Reads are synchronous from cache;
+ * writes mutate cache and queue a debounced flush to Supabase.
+ *
+ * Key tables / domains (Supabase prefix `eris_*`, plus the shared
+ * `bot_data` key/value blob for guild settings + server personas):
+ *   - eris_economy        — balances, daily streak, lifetime totals, version
+ *   - eris_memories       — channel-scoped conversation history (no cache)
+ *   - eris_facts          — per-user facts with sensitivity (semantic recall)
+ *   - eris_mood           — global Eris mood + energy (cache-of-one)
+ *   - eris_relationships  — per-user affinity score + interaction count
+ *   - eris_reminders      — pending reminders, drained by scheduler
+ *   - eris_personality    — editable system-prompt instructions
+ *   - eris_inventory / eris_shop / eris_achievements
+ *   - eris_loans / eris_bounties / eris_daily_challenges
+ *   - eris_boss / eris_pets / eris_territories
+ *   - eris_heists / eris_auctions / eris_roast_battles
+ *   - eris_bank / eris_prestige / eris_marriages
+ *   - bot_data            — guild_settings, server_personas (JSON blobs)
+ *   - local_commands      — outbound command queue for remote workers
+ *
+ * Cache + flush model:
+ *   Mutating helpers call `save(bucket)`, which marks the bucket dirty and
+ *   schedules a single 200ms debounced flush (`_DEBOUNCE_MS`). The window
+ *   is intentionally tight: a hard crash between mutation and flush drops
+ *   at most one batching window of writes per bucket. The
+ *   `beforeExit` hook (registered once per process) and the SIGTERM /
+ *   SIGINT handlers in index.js call `flushAll()`, which clears the
+ *   pending timer, re-marks every persistable bucket dirty, and drains
+ *   synchronously with a 4-second timeout so a hung Supabase request
+ *   cannot block exit forever.
+ *
+ * Atomic balance RPC vs version-CAS fallback:
+ *   `_updateBalanceUnsafe` prefers the `eris_add_balance` Postgres
+ *   function (see migrations/002_atomic_balance_rpc.sql), which does the
+ *   read-modify-write inside one transaction with `SELECT … FOR UPDATE`
+ *   and is the only path that serializes correctly across multiple bot
+ *   processes. If the RPC is not deployed (PGRST202), the module flips
+ *   `_rpcAddBalanceAvailable = false` and never retries — every later
+ *   call drops straight into the version-CAS retry loop (optimistic
+ *   concurrency keyed on the row's `version` column from
+ *   migrations/001_add_economy_version.sql). The CAS path is correct for
+ *   a single-process bot held together by `withEconLock`, but two
+ *   processes hitting the same row can still race; apply migration 002
+ *   on any multi-process / multi-replica deployment.
+ *
+ * REQUIRE_PERSISTENCE env var:
+ *   Parsed in config.js as `config.requirePersistence` (default off). The
+ *   intent (documented in self-hosting.md / GETTING_STARTED.md) is fail-
+ *   fast on missing Supabase so silent in-memory mode never reaches
+ *   production. `updateBalance` already refuses to mutate when Supabase
+ *   is offline (`economy_unavailable: database offline`) regardless of
+ *   the flag — that is the load-bearing guard against silent coin loss.
+ *
+ * In-memory mode caveats:
+ *   With Supabase unconfigured (or all init attempts failed), the bot
+ *   still boots and serves reads from the in-memory `data` object plus
+ *   per-domain Maps, but every byte vanishes on restart: facts, mood,
+ *   relationships, reminders, guild settings, server personas, the
+ *   in-progress economy/game state — everything. Most economy-mutating
+ *   helpers explicitly refuse to run in this mode rather than letting
+ *   the cache drift away from a (non-existent) source of truth.
+ *
+ * Concurrency model:
+ *   `withEconLock(userId, fn)` serializes all balance-touching work for
+ *   one user across the in-process call sites (transfers, daily claims,
+ *   bank deposit/withdraw, weekly/monthly rewards, pet training, loan
+ *   repayments). The public alias `withUserLock` is the same mutex and
+ *   is the right entry point for non-balance per-user mutations like
+ *   crafting and loot boxes. Inner `*Unsafe` helpers
+ *   (`updateBalanceUnsafe`, `tryDeductBalanceUnsafe`) skip the
+ *   re-acquisition and MUST only be called from inside an existing
+ *   `withEconLock` / `withUserLock` block — otherwise concurrent callers
+ *   will race the version-CAS loop. The lock is in-process only; true
+ *   cross-process serialization for the economy row comes from the
+ *   `eris_add_balance` RPC path.
+ *
+ * Test surface: packages/eris/tests/db/ covers cache lifecycle, economy
+ * math, loan-repay races, pet train cooldowns, daily-challenge
+ * completion, and bidOnAuction. Tests mock the Supabase client; live DB
+ * is never required to run them.
+ */
+
 // ─── packages/eris/database.js ──────────────────────────────────────────
 // In-memory read cache + short-debounce flush to Supabase. ALL state for
 // economy / mood / relationships / games / etc. lives here behind getters.
