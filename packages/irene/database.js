@@ -1004,8 +1004,59 @@ export function setPublicChannels(guildId, channelIds) {
 
 // ─── Trusted Users ───────────────────────────────────────────────────────────
 // Users added here get full admin-level access to Irene's tools, same as server admins.
+//
+// The bot loads `data` once at boot, so without a refresh path the cache goes
+// stale the moment a trusted user is revoked via direct DB edit, a sister
+// shard, or any process other than this one. The risk is asymmetric:
+// granting trust is fine to lag (worst case: a legit user waits a moment),
+// but *revoking* trust must propagate or a recently-removed user retains
+// admin-level tool access until the next restart.
+//
+// We can't make getTrustedUsers async without rewriting every call site, so
+// we use a sync read with a background TTL-driven re-fetch: a stale cache
+// triggers a fire-and-forget refresh that updates `data.guild_settings`.
+// Subsequent reads see the fresh value.
+
+const TRUSTED_TTL_MS = 5 * 60 * 1000; // 5 min — short enough to bound stale-trust window
+const _trustedFetchedAt = new Map(); // guildId → epoch ms of last refresh
+const _trustedRefreshInFlight = new Map(); // guildId → Promise (dedup concurrent refreshes)
+
+async function _refreshTrustedUsers(guildId) {
+  if (!supabase) return;
+  if (_trustedRefreshInFlight.has(guildId)) return _trustedRefreshInFlight.get(guildId);
+  const p = (async () => {
+    try {
+      const { data: row, error } = await supabase
+        .from("bot_data")
+        .select("data")
+        .eq("id", "irene")
+        .single();
+      if (error || !row?.data?.guild_settings) return;
+      const fresh = row.data.guild_settings?.[guildId]?.trusted_users ?? [];
+      const current = ensureGuild(guildId);
+      // Replace only the trusted_users slice — leave everything else alone so
+      // we don't clobber in-flight local writes to other fields.
+      current.trusted_users = fresh;
+      _trustedFetchedAt.set(guildId, Date.now());
+    } catch (err) {
+      console.warn(`[DB] Trusted-user refresh failed for ${guildId}: ${err.message}`);
+    } finally {
+      _trustedRefreshInFlight.delete(guildId);
+    }
+  })();
+  _trustedRefreshInFlight.set(guildId, p);
+  return p;
+}
 
 export function getTrustedUsers(guildId) {
+  const lastFetch = _trustedFetchedAt.get(guildId) || 0;
+  if (Date.now() - lastFetch > TRUSTED_TTL_MS) {
+    // Mark optimistically so back-to-back stale reads only kick off one refresh.
+    _trustedFetchedAt.set(guildId, Date.now());
+    // Fire-and-forget — current call returns whatever's in the cache; the next
+    // call after the network round-trip will see the refreshed value.
+    _refreshTrustedUsers(guildId).catch(() => {});
+  }
   return data.guild_settings[guildId]?.trusted_users ?? [];
 }
 
@@ -1014,6 +1065,9 @@ export function addTrustedUser(guildId, userId) {
   const list = s.trusted_users ?? [];
   if (!list.includes(userId)) {
     s.trusted_users = [...list, userId];
+    // Local write is authoritative — defer the next TTL refresh so we don't
+    // immediately race ourselves before the save() flush completes.
+    _trustedFetchedAt.set(guildId, Date.now());
     save();
   }
 }
@@ -1022,6 +1076,7 @@ export function removeTrustedUser(guildId, userId) {
   const s = data.guild_settings[guildId];
   if (!s?.trusted_users) return;
   s.trusted_users = s.trusted_users.filter((id) => id !== userId);
+  _trustedFetchedAt.set(guildId, Date.now());
   save();
 }
 

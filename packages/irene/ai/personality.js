@@ -7,6 +7,12 @@ import { log } from "../utils/logger.js";
 // ─── In-Memory State ────────────────────────────────────────────────────────
 
 let _data = null; // Loaded from Supabase on first use
+// Shared lazy-init promise. Multiple concurrent callers at boot all await the
+// same in-flight load instead of each firing their own Supabase query — the
+// older `if (_data) return; ... await ...` pattern raced when the first batch
+// of messages arrived together, producing duplicate selects and potentially
+// inconsistent state when one loader's upsert collided with another's.
+let _loadPromise = null;
 let _dirty = false;
 let _saveTimer = null;
 let _interactionBuffer = { count: 0, sentimentSum: 0, helpRequests: 0 };
@@ -29,30 +35,33 @@ const DEFAULTS = {
 
 // ─── Load/Save ──────────────────────────────────────────────────────────────
 
-async function ensureLoaded() {
-  if (_data) return _data;
-  try {
-    const { default: config } = await import("../config.js");
-    const { getSupabase } = await import("../database.js");
-    const supabase = getSupabase();
-    if (!supabase) { _data = { ...DEFAULTS }; return _data; }
+function ensureLoaded() {
+  if (_loadPromise) return _loadPromise;
+  _loadPromise = (async () => {
+    try {
+      const { default: config } = await import("../config.js");
+      const { getSupabase } = await import("../database.js");
+      const supabase = getSupabase();
+      if (!supabase) { _data = { ...DEFAULTS }; return _data; }
 
-    const botId = config.botName || "irene";
-    const { data: row, error } = await supabase.from("irene_personality_learning").select("*").eq("id", botId).single();
-    if (error && error.code === "PGRST116") {
-      // Table might not exist or no row — try inserting
-      await supabase.from("irene_personality_learning").upsert({ id: botId, ...DEFAULTS }).catch(() => {});
+      const botId = config.botName || "irene";
+      const { data: row, error } = await supabase.from("irene_personality_learning").select("*").eq("id", botId).single();
+      if (error && error.code === "PGRST116") {
+        // Table might not exist or no row — try inserting
+        await supabase.from("irene_personality_learning").upsert({ id: botId, ...DEFAULTS }).catch(() => {});
+        _data = { ...DEFAULTS };
+      } else {
+        _data = row || { ...DEFAULTS };
+      }
+      _data._botId = botId;
+      log(`[Personality] Loaded for ${botId}: warmth=${_data.traits?.warmth?.toFixed(2)}, sarcasm=${_data.traits?.sarcasm?.toFixed(2)}`);
+    } catch (e) {
+      log(`[Personality] Load failed: ${e.message}`);
       _data = { ...DEFAULTS };
-    } else {
-      _data = row || { ...DEFAULTS };
     }
-    _data._botId = botId;
-    log(`[Personality] Loaded for ${botId}: warmth=${_data.traits?.warmth?.toFixed(2)}, sarcasm=${_data.traits?.sarcasm?.toFixed(2)}`);
-  } catch (e) {
-    log(`[Personality] Load failed: ${e.message}`);
-    _data = { ...DEFAULTS };
-  }
-  return _data;
+    return _data;
+  })();
+  return _loadPromise;
 }
 
 function scheduleSave() {

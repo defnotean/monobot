@@ -40,6 +40,15 @@ const SILENCE_THRESHOLD_MS = 1500;   // How long to wait after speech stops befo
 const MAX_AUDIO_DURATION_MS = 30000; // Max 30 seconds of audio per utterance
 const MIN_AUDIO_DURATION_MS = 500;   // Ignore very short audio (clicks, coughs)
 const COOLDOWN_MS = 3000;            // Per-user cooldown between responses
+// Hard cap on a single voice-listener session. Without this a forgotten
+// `/voice listen` (or a Discord voice-gateway hiccup that leaves the listener
+// in a half-connected state) can keep the bot occupied indefinitely.
+// 60 min is generous for legitimate uses; anything beyond that is essentially
+// always a leak.
+const MAX_SESSION_MS = 60 * 60 * 1000;
+// If no audio packets have arrived for this long the room is effectively
+// empty (or the receiver has been silently disconnected). Tear down.
+const NO_DATA_TIMEOUT_MS = 10 * 60 * 1000;
 
 // Per-guild settings
 const guildSettings = new Map(); // guildId → { wakeWord, enabled }
@@ -80,15 +89,40 @@ export async function startListening(voiceChannel, textChannel, options = {}) {
       wakeWord,
       listening: new Map(), // userId → AudioState
       userCooldowns: new Map(), // userId → timestamp
+      startedAt: Date.now(),
+      lastAudioAt: Date.now(),
+      sessionTimer: null,
+      idleTimer: null,
     };
 
     listeners.set(guildId, state);
+
+    // Hard ceiling — even if everything else is healthy, force-stop the
+    // listener after MAX_SESSION_MS so a forgotten session can't accumulate.
+    state.sessionTimer = setTimeout(() => {
+      if (listeners.get(guildId) === state) {
+        log(`[VoiceListen] Max session reached (${MAX_SESSION_MS}ms) — auto-stopping`);
+        stopListening(guildId);
+      }
+    }, MAX_SESSION_MS);
+    if (typeof state.sessionTimer?.unref === "function") state.sessionTimer.unref();
+
+    // Idle watcher — recheck periodically; if no audio has arrived in
+    // NO_DATA_TIMEOUT_MS, the channel is empty / the receiver is broken.
+    state.idleTimer = setInterval(() => {
+      if (Date.now() - state.lastAudioAt > NO_DATA_TIMEOUT_MS) {
+        log(`[VoiceListen] No audio for ${NO_DATA_TIMEOUT_MS}ms — auto-stopping`);
+        stopListening(guildId);
+      }
+    }, 60_000);
+    if (typeof state.idleTimer?.unref === "function") state.idleTimer.unref();
 
     // Start receiving audio from the connection
     const receiver = connection.receiver;
 
     // Listen for users starting to speak
     receiver.speaking.on("start", (userId) => {
+      state.lastAudioAt = Date.now();
       if (state.listening.has(userId)) return; // Already capturing
       startCapturingUser(state, userId, receiver);
     });
@@ -119,6 +153,10 @@ export function stopListening(guildId) {
     if (audioState.stream) audioState.stream.destroy();
   }
   state.listening.clear();
+
+  // Clear session lifetime + idle watchers
+  if (state.sessionTimer) { clearTimeout(state.sessionTimer); state.sessionTimer = null; }
+  if (state.idleTimer) { clearInterval(state.idleTimer); state.idleTimer = null; }
 
   // Destroy the voice connection
   try {
@@ -205,6 +243,7 @@ function startCapturingUser(state, userId, receiver) {
   opusStream.on("data", (chunk) => {
     audioChunks.push(chunk);
     totalBytes += chunk.length;
+    state.lastAudioAt = Date.now();
   });
 
   // When the stream ends (after silence threshold), process the audio

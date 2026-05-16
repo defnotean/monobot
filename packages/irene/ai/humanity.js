@@ -19,6 +19,64 @@ const _innerState = {
   recentThoughts: [], // unprompted thoughts queue
 };
 
+// ─── LLM-as-Judge Cooldown ───────────────────────────────────────────────────
+// Per-channel cooldown gate for any LLM-as-judge call that wants to assess
+// humanity/sentiment/mood from message content. Without this, a single chatty
+// channel can fire a judgment call on every message, blowing cost and tripping
+// per-minute rate limits on the provider.
+//
+// 30 s was picked deliberately: it is long enough that a burst of replies
+// from a back-and-forth conversation collapses into one judgment (the typical
+// arc of a conversational beat is 5-15 s), short enough that a channel that
+// goes quiet for a minute will get a fresh read the next time it lights up.
+// Tune downward if cost ceases to be a concern; tune upward if we add more
+// LLM-based per-channel work.
+const HUMANITY_JUDGE_COOLDOWN_MS = 30_000;
+const _channelJudgeLastAt = new Map(); // channelId → epoch ms of last judge call
+const _channelJudgeLastResult = new Map(); // channelId → last cached judge result
+
+/**
+ * Gate function for any caller wanting to invoke a (potentially expensive)
+ * LLM-as-judge humanity assessment for a channel. Returns:
+ *   { allow: true, cachedResult: <prev | null> } — caller should run the LLM
+ *     call. cachedResult is the last result we saw for this channel (may be
+ *     null on first call) — useful if the caller wants to compare/diff.
+ *   { allow: false, cachedResult: <prev | null> } — caller MUST skip the LLM
+ *     call. If cachedResult is non-null, prefer using it; if null, treat as
+ *     "no fresh judgment available" and degrade gracefully.
+ */
+export function shouldRunHumanityJudge(channelId) {
+  if (!channelId) return { allow: true, cachedResult: null };
+  const now = Date.now();
+  const last = _channelJudgeLastAt.get(channelId) || 0;
+  const cachedResult = _channelJudgeLastResult.get(channelId) ?? null;
+  if (now - last < HUMANITY_JUDGE_COOLDOWN_MS) {
+    return { allow: false, cachedResult };
+  }
+  _channelJudgeLastAt.set(channelId, now);
+  return { allow: true, cachedResult };
+}
+
+/**
+ * Caller stores the LLM-as-judge result here once it completes so the next
+ * cooldown-blocked caller can reuse it instead of degrading to no-data.
+ */
+export function recordHumanityJudgeResult(channelId, result) {
+  if (!channelId) return;
+  _channelJudgeLastResult.set(channelId, result);
+  // Prune both maps if they get unreasonably large — a long-lived bot in
+  // thousands of channels would otherwise leak the Map slowly. We bound at
+  // 1024 entries, drop the oldest ~25% in the rare overflow case.
+  if (_channelJudgeLastAt.size > 1024) {
+    const entries = [..._channelJudgeLastAt.entries()].sort((a, b) => a[1] - b[1]);
+    const drop = entries.slice(0, Math.floor(entries.length * 0.25));
+    for (const [k] of drop) {
+      _channelJudgeLastAt.delete(k);
+      _channelJudgeLastResult.delete(k);
+    }
+  }
+}
+
 // ─── Relationship Data Structure ─────────────────────────────────────────────
 
 function getRelationship(userId) {

@@ -24,6 +24,16 @@ const MIN_GAP_NICK_MS = 1000;   // nickname mode — Discord rate limits nick ch
 const MIN_GAP_MSG_MS = 300;     // message mode — edits are cheaper, follow the actual rhythm
 const POLL_INTERVAL_MS = 250;   // poll 4x/sec for responsive feel
 const LOOKAHEAD_MS = 400;       // 1200 was one line ahead, 800 was behind — split the difference
+// Hard ceiling on any one karaoke session. Auto-stop hooks (music-stopped,
+// song-ended) cover the happy path, but a stalled Lavalink player, a
+// disconnected voice gateway, or a lyric track with a malformed final timestamp
+// can leave the poll loop spinning indefinitely. 10 min is comfortably longer
+// than every regular song; anything beyond that is almost certainly a leak.
+const MAX_SESSION_MS = 10 * 60 * 1000;
+// If the polled Lavalink position has not advanced for this long, assume the
+// stream is dead (network drop, paused-and-forgotten, etc.) and stop. Covers
+// the audit's "30s no-data → kill" requirement.
+const STALL_TIMEOUT_MS = 30_000;
 
 const _sessions = new Map();
 
@@ -224,6 +234,8 @@ function startPolling(session) {
   // Between updates, we interpolate locally so lyrics don't stutter/lag.
   let lastLavalinkPos = 0;
   let lastLavalinkReadAt = 0;
+  // Stall detector — last time we saw the Lavalink position advance.
+  let lastPositionAdvanceAt = Date.now();
 
   session.pollId = setInterval(async () => {
     const queue = getQueue(session.guildId);
@@ -232,6 +244,18 @@ function startPolling(session) {
     if (!queue || !queue.playing || !queue.songs?.length || !queue.player) {
       log(`[KARAOKE] Music stopped or disconnected — auto-stopping lyrics`);
       stopKaraoke(session.guildId, "music stopped");
+      return;
+    }
+
+    // Stall guard — if the Lavalink player has not advanced in STALL_TIMEOUT_MS
+    // the upstream stream is almost certainly dead even though the queue still
+    // looks "playing". Break out instead of polling forever.
+    if (queue?.player?.position != null && queue.player.position !== session._lastSeenPosition) {
+      session._lastSeenPosition = queue.player.position;
+      lastPositionAdvanceAt = Date.now();
+    } else if (Date.now() - lastPositionAdvanceAt > STALL_TIMEOUT_MS) {
+      log(`[KARAOKE] Stream stalled (no position advance for ${STALL_TIMEOUT_MS}ms) — auto-stopping`);
+      stopKaraoke(session.guildId, "stream stalled");
       return;
     }
 
@@ -372,6 +396,22 @@ function stopPolling(session) {
   if (session.pollId) { clearInterval(session.pollId); session.pollId = null; }
 }
 
+// Hard-cap a session at MAX_SESSION_MS. Called once on session creation; the
+// timer is cleared in stopKaraoke so a normal end (song-ended, music-stopped,
+// /karaoke stop) doesn't leave a dangling setTimeout.
+function armSessionTimeout(session) {
+  if (session.maxSessionTimer) clearTimeout(session.maxSessionTimer);
+  session.maxSessionTimer = setTimeout(() => {
+    if (_sessions.get(session.guildId) === session) {
+      log(`[KARAOKE] Max session timeout (${MAX_SESSION_MS}ms) — auto-stopping`);
+      stopKaraoke(session.guildId, "max session timeout").catch(() => {});
+    }
+  }, MAX_SESSION_MS);
+  // Don't keep the Node event loop alive for this timer — if the bot is
+  // shutting down we want it to exit promptly even mid-karaoke.
+  if (typeof session.maxSessionTimer?.unref === "function") session.maxSessionTimer.unref();
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -425,6 +465,7 @@ export async function startKaraoke(client, guildId, opts) {
   }
 
   _sessions.set(guildId, session);
+  armSessionTimeout(session);
   startPolling(session);
 
   log(`[KARAOKE] Started "${session.trackName}" by ${session.artistName} in ${guildId} (${lyrics.length} lines, ${mode} mode)`);
@@ -436,6 +477,7 @@ export async function stopKaraoke(guildId, reason = "stopped") {
   if (!session) return { ok: false, reason: "no karaoke running" };
 
   stopPolling(session);
+  if (session.maxSessionTimer) { clearTimeout(session.maxSessionTimer); session.maxSessionTimer = null; }
 
   if (session.displayMode === "nickname") {
     const guild = session.client.guilds.cache.get(guildId);
@@ -549,6 +591,7 @@ export async function enableAutoMode(client, guildId, requesterId, { mode = "mes
     pollId: null, autoMode: true, lyricsMessage: null,
   };
   _sessions.set(guildId, session);
+  armSessionTimeout(session);
 
   // If something is already playing, start immediately
   const queue = getQueue(guildId);
