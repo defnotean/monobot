@@ -164,6 +164,76 @@ function getOpenAICompatKeyVars(provider) {
   }
 }
 
+// ─── Lavalink password policy ───────────────────────────────────────────────
+// Lavalink ships with the literal password "youshallnotpass" — leaving it as
+// the default is identical to no auth, because every default Lavalink install
+// on the internet uses the same string. We refuse to enable music if a
+// self-hoster exposes the node off-host with that default; localhost gets a
+// softer warning since the port isn't routable from outside the box.
+// Pure function (no env access) so tests can drive it with explicit inputs.
+const LAVALINK_DEFAULT_PASSWORD = "youshallnotpass";
+const LAVALINK_LOCALHOST_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"]);
+
+export function evaluateLavalinkConfig({ host, password }) {
+  const trimmedHost = (host ?? "").trim().toLowerCase();
+  const isLocalhost = LAVALINK_LOCALHOST_HOSTS.has(trimmedHost);
+  const hasPassword = typeof password === "string" && password.length > 0;
+  const isDefaultPassword = password === LAVALINK_DEFAULT_PASSWORD;
+
+  if (!hasPassword) {
+    if (isLocalhost) {
+      return {
+        enabled: true,
+        warning:
+          "LAVALINK_PASSWORD is unset — falling back to Lavalink's default password for localhost only. Set LAVALINK_PASSWORD to a strong value before exposing the port.",
+        fatal: null,
+        effectivePassword: LAVALINK_DEFAULT_PASSWORD,
+        isDefaultPassword: true,
+        isLocalhost: true,
+      };
+    }
+    return {
+      enabled: false,
+      warning: null,
+      fatal: `LAVALINK_PASSWORD is unset and LAVALINK_HOST="${host}" is not localhost. Refusing to enable music features. Set LAVALINK_PASSWORD to a strong value (e.g. \`openssl rand -hex 32\`) before exposing the port.`,
+      effectivePassword: "",
+      isDefaultPassword: true,
+      isLocalhost: false,
+    };
+  }
+
+  if (isDefaultPassword) {
+    if (isLocalhost) {
+      return {
+        enabled: true,
+        warning:
+          'LAVALINK_PASSWORD is the Lavalink default ("youshallnotpass"). This is only safe because LAVALINK_HOST is localhost. Change it before exposing the port off-host.',
+        fatal: null,
+        effectivePassword: password,
+        isDefaultPassword: true,
+        isLocalhost: true,
+      };
+    }
+    return {
+      enabled: false,
+      warning: null,
+      fatal: `LAVALINK_PASSWORD is the Lavalink default password ("youshallnotpass"), which is a well-known string shared by every default Lavalink install. LAVALINK_HOST="${host}" is not localhost, so the node is effectively unauthenticated. Refusing to enable music features. Set LAVALINK_PASSWORD to a strong value (e.g. \`openssl rand -hex 32\`) before exposing the port.`,
+      effectivePassword: password,
+      isDefaultPassword: true,
+      isLocalhost: false,
+    };
+  }
+
+  return {
+    enabled: true,
+    warning: null,
+    fatal: null,
+    effectivePassword: password,
+    isDefaultPassword: false,
+    isLocalhost,
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG OBJECT — Discord identity, Twin API, music, AI providers, personality
 // ═══════════════════════════════════════════════════════════════════════════
@@ -200,12 +270,25 @@ const config = {
   twinApiSecret: env("TWIN_API_SECRET"),
   twinApiUrl: env("ERIS_API_URL"),
   twinBotId: env("ERIS_BOT_ID"),
-  lavalink: {
-    host:     env("LAVALINK_HOST", "localhost"),
-    port:     parseInt(env("LAVALINK_PORT", "2333")),
-    password: env("LAVALINK_PASSWORD", "youshallnotpass"),
-    secure:   env("LAVALINK_SECURE", "false") === "true",
-  },
+  lavalink: (() => {
+    const host = env("LAVALINK_HOST", "localhost");
+    const port = parseInt(env("LAVALINK_PORT", "2333"));
+    // No fallback to the well-known default — see evaluateLavalinkConfig().
+    const password = env("LAVALINK_PASSWORD", "");
+    const secure = env("LAVALINK_SECURE", "false") === "true";
+    const verdict = evaluateLavalinkConfig({ host, password });
+    // Loud refusal on default-password + non-localhost. Music stays off,
+    // bot keeps booting so non-music features remain usable.
+    if (verdict.fatal) console.error(`[LAVALINK] ${verdict.fatal}`);
+    else if (verdict.warning) console.warn(`[LAVALINK] ${verdict.warning}`);
+    return {
+      host,
+      port,
+      password: verdict.effectivePassword,
+      secure,
+      enabled: verdict.enabled,
+    };
+  })(),
   // ─── AI Provider — Irene runs on Gemini (Eris runs on NVIDIA Kimi) ────────
   // The bot's "brain" plugs into ai/providers/<name>.js. To switch, set
   // AI_PROVIDER in .env: "gemini" → Google Gemini | "nvidia" → Kimi K2.5

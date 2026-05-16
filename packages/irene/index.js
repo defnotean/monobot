@@ -57,6 +57,10 @@ client._commandDirs = new Map(); // command name → directory (for help auto-ca
 // Initialized AFTER client.login() in main() — Shoukaku needs the gateway connected
 
 function setupLavalink() {
+  if (config.lavalink.enabled === false) {
+    log("[Lavalink] Music features disabled — see startup warning above (LAVALINK_PASSWORD policy). Skipping Shoukaku init.");
+    return;
+  }
   const nodeUrl = `${config.lavalink.host}:${config.lavalink.port}`;
   log(`[Lavalink] Connecting to ${nodeUrl} (secure: ${config.lavalink.secure})`);
 
