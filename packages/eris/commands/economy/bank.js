@@ -1,5 +1,5 @@
 import { SlashCommandBuilder , MessageFlags } from "discord.js";
-import { getBankBalance, updateBankBalance, getBankCapacity, getBalance, updateBalance, applyBankInterest } from "../../database.js";
+import { getBankBalance, getBankCapacity, applyBankInterest, bankDeposit, bankWithdraw } from "../../database.js";
 
 export const data = new SlashCommandBuilder()
   .setName("bank")
@@ -30,21 +30,27 @@ export async function execute(interaction) {
   const amount = interaction.options.getInteger("amount");
 
   if (sub === "deposit") {
-    const wallet = await getBalance(userId);
-    if (wallet.balance < amount) return interaction.reply({ content: `you only have ${wallet.balance} coins`, flags: MessageFlags.Ephemeral });
-    const cap = await getBankCapacity(userId);
-    const bank = await getBankBalance(userId);
-    if (bank.balance + amount > cap) return interaction.reply({ content: `bank capacity is ${cap} — you can deposit ${cap - bank.balance} more`, flags: MessageFlags.Ephemeral });
-    await updateBalance(userId, -amount, "bank_deposit");
-    await updateBankBalance(userId, amount);
+    const result = await bankDeposit(userId, amount);
+    if (!result.ok) {
+      if (result.reason === "insufficient_wallet") {
+        return interaction.reply({ content: `you only have ${result.balance} coins`, flags: MessageFlags.Ephemeral });
+      }
+      if (result.reason === "bank_full") {
+        return interaction.reply({ content: `bank capacity is ${result.capacity} — you can deposit ${result.maxDeposit} more`, flags: MessageFlags.Ephemeral });
+      }
+      return interaction.reply({ content: `deposit failed: ${result.reason}`, flags: MessageFlags.Ephemeral });
+    }
     return interaction.reply(`✅ deposited **${amount.toLocaleString()}** coins`);
   }
 
   if (sub === "withdraw") {
-    const bank = await getBankBalance(userId);
-    if (bank.balance < amount) return interaction.reply({ content: `you only have ${bank.balance} in the bank`, flags: MessageFlags.Ephemeral });
-    await updateBankBalance(userId, -amount);
-    await updateBalance(userId, amount, "bank_withdraw");
+    const result = await bankWithdraw(userId, amount);
+    if (!result.ok) {
+      if (result.reason === "insufficient_bank") {
+        return interaction.reply({ content: `you only have ${result.balance} in the bank`, flags: MessageFlags.Ephemeral });
+      }
+      return interaction.reply({ content: `withdraw failed: ${result.reason}`, flags: MessageFlags.Ephemeral });
+    }
     return interaction.reply(`✅ withdrew **${amount.toLocaleString()}** coins`);
   }
 }
