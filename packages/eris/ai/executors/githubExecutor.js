@@ -259,6 +259,7 @@ export async function execute(toolName, input, message, _context) {
 
     case "watch_deploy": {
       if (!isOwner(message.author.id)) return denyMessage();
+      if (!config.renderApiKey) return "render api not configured";
       const service = input.service || "render";
       const projectId = input.project_id || input.id;
       if (!projectId) return "no project/service id provided";

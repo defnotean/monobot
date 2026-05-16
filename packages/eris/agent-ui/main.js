@@ -138,7 +138,7 @@ async function pollCommands() {
         for (const cmd of commands) {
             await supabase.from('local_commands').update({ status: 'running' }).eq('id', cmd.id);
             mainWindow?.webContents.send('agent-command-start', { command: cmd.command, id: cmd.id });
-            exec(cmd.command, { shell: 'powershell.exe', timeout: 30000 }, async (err, stdout, stderr) => {
+            exec(cmd.command, { shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/bash', timeout: 30000 }, async (err, stdout, stderr) => {
                 let output = (stdout || stderr || (err ? err.message : 'No output.')).trim();
                 if (output.length > 1800) output = output.substring(0, 1800) + '\n...(truncated)';
                 commandsExecuted++;
@@ -251,7 +251,7 @@ app.whenReady().then(() => {
     // ── Terminal ──────────────────────────────────────────────────────────────
     ipcMain.handle('run-terminal', async (_, { command, cwd }) => {
         return new Promise(resolve => {
-            exec(command, { shell: 'powershell.exe', timeout: 60000, cwd: cwd || undefined }, (err, stdout, stderr) => {
+            exec(command, { shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/bash', timeout: 60000, cwd: cwd || undefined }, (err, stdout, stderr) => {
                 resolve({ output: (stdout || stderr || (err ? err.message : '')).trim(), exitCode: err?.code || 0 });
             });
         });

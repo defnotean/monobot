@@ -185,6 +185,17 @@ If you'd rather run Postgres yourself, the schema lives in `packages/<bot>/migra
 - **Logs eat disk** slowly. PM2 caps at ~10 MB per stream by default; `journalctl` rotates on its own. If you `>` your own log file, set up `logrotate` or you'll wake up to a full disk eventually.
 - **Both bots on the same Discord account?** No — they're separate Discord applications with separate tokens. Create two bot applications in the Developer Portal.
 
+## Render-only features
+
+Two owner-only tools depend on Render's API and gracefully no-op when you're not on Render:
+
+- **`check_deploy`** — queries Render's service API for current deploy status.
+- **`watch_deploy`** — registers a watch on a Render service so new deploys post into the channel.
+
+Both return `"render api not configured"` when `RENDER_API_KEY` is unset — no crash, no noise, just a clear refusal. If you happen to deploy *other* services on Render (even while self-hosting these bots), set `RENDER_API_KEY` and both tools will work against whatever services that key has access to.
+
+Everything else — slash commands, AI tool surface, music, moderation, the twin protocol, the dashboard, persistence, all owner PC-agent tools — works identically on self-host.
+
 ## Migrating from Render to self-host
 
 1. Copy your env vars from the Render dashboard into local `packages/eris/.env` and `packages/irene/.env`.
