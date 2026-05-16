@@ -1,3 +1,53 @@
+/**
+ * @file roleCategorizer.js
+ * @module @defnotean/shared/roleCategorizer
+ *
+ * Permission-based classifier that buckets every Discord guild role into a
+ * small, stable taxonomy so other features ("grant access to staff", "ping
+ * the mods", "let any trusted role open tickets") can resolve fuzzy role
+ * hints without trusting role NAMES. Role names are user-controlled and
+ * trivially spoofable — a cosmetic role called "🎭 Moderator" with zero
+ * permissions must never end up in the mod set. Categorization is derived
+ * exclusively from the role's `.permissions` bitfield, with two structural
+ * overrides: `everyone` (role.id === guild.id) and `bot` (role.managed).
+ *
+ * Categories (stored labels):
+ *   - everyone   — the @everyone role
+ *   - bot        — integration-managed role (Discord application/webhook)
+ *   - admin      — Administrator OR ManageGuild
+ *   - moderator  — Ban/Kick/Timeout/ManageRoles/ManageChannels (no admin)
+ *   - helper     — softer powers (ManageMessages, ManageThreads, MuteMembers,
+ *                  ViewAuditLog, etc.) — can act, can't remove members
+ *   - cosmetic   — no dangerous perms (color tags, pingables, vanity)
+ *
+ * Meta-categories (query-only, expanded inside _expandCategory):
+ *   - staff      = admin ∪ moderator
+ *   - any_staff / trusted = admin ∪ moderator ∪ helper
+ *
+ * Exports:
+ *   - categorizeRole(role, guild)        — single role → category string
+ *   - categorizeAllRoles(guild)          — { roleId: category } snapshot
+ *   - getRolesByCategory(guild, cat)     — Role[] sorted by position desc
+ *   - asCategoryKeyword(input)           — string → canonical keyword | null
+ *   - resolveRoleHints(guild, hints)     — flexible ID|name|keyword resolver
+ *
+ * Heuristics: name matching is ONLY used by `resolveRoleHints` as a step in
+ * the ID → exact-name → category fallback chain, and even then the category
+ * step still goes through permission-based bucketing. There is no fuzzy or
+ * substring name matching anywhere in this module.
+ *
+ * False-positive risks to keep in mind:
+ *   - A "helper" role granted MentionEveryone or ManageWebhooks can still
+ *     cause real damage; the label only reflects relative privilege, not
+ *     safety.
+ *   - Discord may add new permission bits over time — anything not listed
+ *     in ADMIN_PERMS / MOD_PERMS / HELPER_PERMS falls through to cosmetic.
+ *
+ * Consumers: irene's ticket setup, role auditing (roleCreate/roleUpdate
+ * events), eris admin executor, and any AI executor that needs to translate
+ * an admin's loose "give the mods access" instruction into concrete role IDs.
+ */
+
 // ─── Role Categorizer ────────────────────────────────────────────────────────
 // Classify every guild role by its ACTUAL permissions, not by name. This way
 // a cosmetic role called "🎭 Moderator" with no perms gets bucketed as
