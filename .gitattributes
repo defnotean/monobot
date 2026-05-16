@@ -1,0 +1,24 @@
+# Normalize line endings on commit, checkout as native
+* text=auto eol=lf
+
+# Force LF on shell scripts even on Windows
+*.sh text eol=lf
+
+# CRLF for Windows batch files
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+# Generated / lock files: collapse diffs and mark as generated
+package-lock.json -diff linguist-generated=true
+
+# Vendored directories
+node_modules/* linguist-vendored=true
