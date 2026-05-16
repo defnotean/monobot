@@ -1,7 +1,60 @@
-// ─── LRU Cache with Optional TTL ────────────────────────────────────────────
-// Uses Map insertion order for eviction. On get(), entries move to the end
-// (most recently used). On set() over capacity, the oldest entry is evicted.
-//
+/**
+ * @file lruCache.js
+ * @module @defnotean/shared/lruCache
+ *
+ * Bounded Least-Recently-Used (LRU) cache with optional time-to-live (TTL)
+ * expiry and an optional secondary "group" index for bulk invalidation.
+ *
+ * ## Purpose
+ * A lightweight in-memory cache with a hard upper bound on entry count, so
+ * long-running processes (the Discord gateway worker, the AI service) can
+ * memoize hot reads without unbounded heap growth. Backed by a single Map,
+ * leveraging its insertion-ordered iteration to implement LRU eviction in
+ * O(1) per access.
+ *
+ * ## Key exports
+ * - `LRUCache` — the class. Construct with `new LRUCache(maxSize, ttlMs?)`.
+ *   API surface: `get`, `set`, `has`, `delete`, `deleteGroup`, `clear`,
+ *   `keys`, `values`, `size`, and `[Symbol.iterator]`.
+ *
+ * ## Eviction semantics
+ * - On `get(key)`, a hit moves the entry to the tail of the Map (most
+ *   recently used). The head is therefore always the least recently used.
+ * - On `set(key, value)` when `size === maxSize` and the key is new, the
+ *   head entry is evicted before the new one is appended.
+ * - On `set(key, value)` for an existing key, the old entry is removed and
+ *   re-inserted so the key's position resets to the tail (touch-on-write).
+ *
+ * ## TTL behavior
+ * - TTL is millisecond-precision and uses `Date.now()` (wall clock, not a
+ *   monotonic source). System clock jumps will skew expiry; this is
+ *   acceptable for the use cases here (short-lived web/API caches).
+ * - Expiry is checked lazily on `get`, `has`, and iteration. Expired entries
+ *   are not actively swept — a stale entry that is never touched again will
+ *   sit in the Map until eviction pressure displaces it.
+ * - Pass `ttlMs = 0` (the default) to disable TTL entirely.
+ *
+ * ## Thread-safety / concurrency
+ * Node runs JS on a single event-loop thread, so no operation can interleave
+ * with another mid-method. This class is NOT safe across worker_threads,
+ * cluster workers, or multiple processes — each isolate gets its own
+ * instance. For cross-process coordination use Redis or a shared store.
+ *
+ * ## When to use vs. a plain Map
+ * Use `LRUCache` when entries must be bounded (memoization of user lookups,
+ * AI response caches, etc.). Use a plain `Map` when the key set is naturally
+ * bounded by the program (config tables, registry maps) or when you need
+ * exact insertion-ordered iteration without eviction side effects.
+ *
+ * ## Memory footprint
+ * Per entry overhead is roughly: one Map slot (~50–80 B on V8) plus the
+ * wrapper object `{ value, ts, group }` (~40 B). At `maxSize = 1000` with
+ * small values, expect on the order of ~100 KB of overhead beyond the
+ * payload. Group index adds one Set entry (~40 B) per grouped key.
+ *
+ * @see packages/eris/tests/utils/lruCache.test.ts for behavioral specs.
+ */
+
 // Optional group-key indexing: when set() is called with a third arg, the key
 // is added to an index keyed by `group`, which lets deleteGroup(g) drop every
 // key in that group in O(k) where k = keys in group (not total cache size).
