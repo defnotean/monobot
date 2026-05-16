@@ -1,5 +1,29 @@
+import { safeFetch, validateUrl } from "../safeFetch.js";
+
 const BRAVE_ANSWERS_URL = "https://api.search.brave.com/res/v1/chat/completions";
 const BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
+
+// SearxNG URL is operator-supplied. Validate the template at first use and
+// cache the verdict so a per-request URL injection (operator misconfig that
+// somehow points at e.g. http://127.0.0.1) can't reach the network even
+// before safeFetch's per-call DNS check.
+const _searxngVerdict = new Map(); // template -> { ok: boolean, reason?: string }
+
+function isSearxngTemplateSafe(template) {
+  if (!template) return { ok: false, reason: "empty" };
+  if (_searxngVerdict.has(template)) return _searxngVerdict.get(template);
+  let verdict;
+  try {
+    // Substitute a benign query so the URL is well-formed for validation.
+    const sample = template.replace("<query>", "ping");
+    validateUrl(sample);
+    verdict = { ok: true };
+  } catch (e) {
+    verdict = { ok: false, reason: e?.message || "invalid url" };
+  }
+  _searxngVerdict.set(template, verdict);
+  return verdict;
+}
 
 function compact(value) {
   return String(value || "")
@@ -11,12 +35,6 @@ function compact(value) {
     .replace(/&#39;|&#x27;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function withTimeout(timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  return { controller, timer };
 }
 
 function timeoutFor(config, key, fallbackMs, ceilingMs) {
@@ -88,12 +106,15 @@ export function formatBraveSearchPayload(json) {
   return results.length ? results.join("\n\n") : "";
 }
 
+function safeJsonParse(text) {
+  try { return JSON.parse(text); } catch { return null; }
+}
+
 export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // 1. Brave Answers API: direct web-grounded answer for Discord-style Q&A.
   if (config.braveAnswersApiKey) {
     try {
-      const { controller, timer } = withTimeout(timeoutFor(config, "braveAnswersTimeoutMs", 5000, timeoutMs));
-      const res = await fetch(BRAVE_ANSWERS_URL, {
+      const res = await safeFetch(BRAVE_ANSWERS_URL, {
         method: "POST",
         headers: braveHeaders(config.braveAnswersApiKey, { "Content-Type": "application/json" }),
         body: JSON.stringify({
@@ -105,10 +126,11 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
           max_tokens: 1024,
           stream: false,
         }),
-        signal: controller.signal,
-      }).finally(() => clearTimeout(timer));
-      if (res.ok) {
-        const formatted = formatBraveAnswerPayload(await res.json());
+        timeoutMs: timeoutFor(config, "braveAnswersTimeoutMs", 5000, timeoutMs),
+      });
+      if (res.status >= 200 && res.status < 300) {
+        const json = safeJsonParse(res.text);
+        const formatted = formatBraveAnswerPayload(json);
         if (formatted) return formatted;
       }
     } catch (e) {
@@ -120,14 +142,14 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // by lower tiers, so it is safe to request whenever a Brave key is present.
   if (config.braveSearchApiKey) {
     try {
-      const { controller, timer } = withTimeout(timeoutFor(config, "braveSearchTimeoutMs", 3500, timeoutMs));
       const url = `${BRAVE_SEARCH_URL}?q=${encodeURIComponent(query)}&count=5&text_decorations=false&extra_snippets=true`;
-      const res = await fetch(url, {
+      const res = await safeFetch(url, {
         headers: braveHeaders(config.braveSearchApiKey),
-        signal: controller.signal,
-      }).finally(() => clearTimeout(timer));
-      if (res.ok) {
-        const formatted = formatBraveSearchPayload(await res.json());
+        timeoutMs: timeoutFor(config, "braveSearchTimeoutMs", 3500, timeoutMs),
+      });
+      if (res.status >= 200 && res.status < 300) {
+        const json = safeJsonParse(res.text);
+        const formatted = formatBraveSearchPayload(json);
         if (formatted) return formatted;
       }
     } catch (e) {
@@ -135,35 +157,39 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
     }
   }
 
-  // 3. SearxNG
+  // 3. SearxNG — operator-supplied URL. Validated once at first use; reject
+  // here if the template points at a private host so we never even DNS-look-up.
   if (config.searxngQueryUrl) {
-    try {
-      const url = config.searxngQueryUrl.replace("<query>", encodeURIComponent(query));
-      const { controller, timer } = withTimeout(timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs));
-      const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
-      if (res.ok) {
-        const json = await res.json();
-        const results = (json.results || []).slice(0, 5).map((r, i) => `${i + 1}. ${r.title}\n   ${r.content || r.snippet}\n   ${r.url}`);
-        if (results.length) return results.join("\n\n");
+    const verdict = isSearxngTemplateSafe(config.searxngQueryUrl);
+    if (verdict.ok) {
+      try {
+        const url = config.searxngQueryUrl.replace("<query>", encodeURIComponent(query));
+        const res = await safeFetch(url, {
+          timeoutMs: timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs),
+        });
+        if (res.status >= 200 && res.status < 300) {
+          const json = safeJsonParse(res.text);
+          const results = (json?.results || []).slice(0, 5).map((r, i) => `${i + 1}. ${r.title}\n   ${r.content || r.snippet}\n   ${r.url}`);
+          if (results.length) return results.join("\n\n");
+        }
+      } catch (e) {
+        // fallback
       }
-    } catch (e) {
-      // fallback
     }
   }
 
   // 4. Tavily
   if (config.tavilyApiKey) {
     try {
-      const { controller, timer } = withTimeout(timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs));
-      const res = await fetch("https://api.tavily.com/search", {
+      const res = await safeFetch("https://api.tavily.com/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ api_key: config.tavilyApiKey, query, max_results: 5 }),
-        signal: controller.signal
-      }).finally(() => clearTimeout(timer));
-      if (res.ok) {
-        const json = await res.json();
-        const results = (json.results || []).slice(0, 5).map((r, i) => `${i + 1}. ${r.title}\n   ${r.content}\n   ${r.url}`);
+        timeoutMs: timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs),
+      });
+      if (res.status >= 200 && res.status < 300) {
+        const json = safeJsonParse(res.text);
+        const results = (json?.results || []).slice(0, 5).map((r, i) => `${i + 1}. ${r.title}\n   ${r.content}\n   ${r.url}`);
         if (results.length) return results.join("\n\n");
       }
     } catch (e) {
@@ -174,19 +200,18 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // 5. Serper API
   if (config.serperApiKey) {
     try {
-      const { controller, timer } = withTimeout(timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs));
-      const res = await fetch("https://google.serper.dev/search", {
+      const res = await safeFetch("https://google.serper.dev/search", {
         method: "POST",
         headers: {
           "X-API-KEY": config.serperApiKey,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({ q: query, num: 5 }),
-        signal: controller.signal
-      }).finally(() => clearTimeout(timer));
-      if (res.ok) {
-        const json = await res.json();
-        const results = (json.organic || []).slice(0, 5).map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet}\n   ${r.link}`);
+        timeoutMs: timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs),
+      });
+      if (res.status >= 200 && res.status < 300) {
+        const json = safeJsonParse(res.text);
+        const results = (json?.organic || []).slice(0, 5).map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet}\n   ${r.link}`);
         if (results.length) return results.join("\n\n");
       }
     } catch (e) {
@@ -197,13 +222,12 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // 6. Google Custom Search
   if (config.googleSearchKey && config.googleSearchCx) {
     try {
-      const { controller, timer } = withTimeout(timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs));
-      const res = await fetch(`https://www.googleapis.com/customsearch/v1?key=${config.googleSearchKey}&cx=${config.googleSearchCx}&q=${encodeURIComponent(query)}&num=5`, {
-        signal: controller.signal
-      }).finally(() => clearTimeout(timer));
-      if (res.ok) {
-        const json = await res.json();
-        const results = (json.items || []).slice(0, 5).map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet}\n   ${r.link}`);
+      const res = await safeFetch(`https://www.googleapis.com/customsearch/v1?key=${config.googleSearchKey}&cx=${config.googleSearchCx}&q=${encodeURIComponent(query)}&num=5`, {
+        timeoutMs: timeoutFor(config, "backendTimeoutMs", 5000, timeoutMs),
+      });
+      if (res.status >= 200 && res.status < 300) {
+        const json = safeJsonParse(res.text);
+        const results = (json?.items || []).slice(0, 5).map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet}\n   ${r.link}`);
         if (results.length) return results.join("\n\n");
       }
     } catch (e) {
@@ -214,20 +238,18 @@ export async function performWebSearch(query, config = {}, timeoutMs = 10000) {
   // 7. DuckDuckGo Lite POST (Built-in Final Fallback)
   try {
     const body = `q=${encodeURIComponent(query)}`;
-    const { controller, timer } = withTimeout(timeoutFor(config, "ddgTimeoutMs", 5000, timeoutMs));
-    const res = await fetch(`https://lite.duckduckgo.com/lite/`, {
+    const res = await safeFetch(`https://lite.duckduckgo.com/lite/`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Content-Length": Buffer.byteLength(body).toString()
       },
       body: body,
-      signal: controller.signal
-    }).finally(() => clearTimeout(timer));
+      timeoutMs: timeoutFor(config, "ddgTimeoutMs", 5000, timeoutMs),
+    });
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const html = await res.text();
+    if (!(res.status >= 200 && res.status < 300)) throw new Error(`HTTP ${res.status}`);
+    const html = res.text;
     const cheerio = await import("cheerio");
     const $ = cheerio.load(html);
     const results = [];
