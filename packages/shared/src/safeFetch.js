@@ -1,3 +1,85 @@
+/**
+ * @file safeFetch.js
+ * @module @defnotean/shared/safeFetch
+ *
+ * @overview
+ * SSRF-safe `fetch` wrapper used everywhere the bot pulls a URL whose value
+ * ultimately originated from a user, an LLM tool call, or any other
+ * untrusted source. The goal: never let a crafted URL coerce our process
+ * into hitting an internal service, the cloud metadata endpoint, a loopback
+ * admin panel, or a memory-exhausting payload.
+ *
+ * @section Key exports
+ *   - `validateUrl(rawUrl)` — sync. Parses + applies protocol and literal-IP
+ *     checks. Throws on any rejection. No DNS.
+ *   - `validateUrlAsync(rawUrl)` — same as above plus `dns.lookup` and a
+ *     check against the *resolved* address. Returns `{ url, ip }`.
+ *   - `safeFetch(rawUrl, opts)` — full request with re-validation at every
+ *     redirect hop, byte cap, and timeout. Returns a plain
+ *     `{ status, headers, text, url }` object (NOT a `Response`) because the
+ *     body is read here to enforce the size cap.
+ *   - `wrapUntrusted(content)` — wraps fetched text in a header/footer that
+ *     tells the model to treat it as data, not instructions.
+ *   - `wrapUntrustedWithFirewall(content, { firewallCheck, log })` — same,
+ *     but pipes the body through an optional injection-detection callback
+ *     and redacts on hit.
+ *
+ * @section IP / hostname blocklist
+ *   IPv4: loopback (127/8), RFC1918 (10/8, 172.16/12, 192.168/16), link-local
+ *     incl. cloud metadata (169.254/16), "this network" (0/8), and CGNAT
+ *     (100.64/10). The full 127/8 range is blocked, not just 127.0.0.1.
+ *   IPv6: loopback (::1), unspecified (::), ULA (fc00::/7), link-local
+ *     (fe80::/10), plus IPv4-mapped forms in both dotted (`::ffff:127.0.0.1`)
+ *     and hex (`::ffff:7f00:1`) canonicalizations.
+ *   Hostname tricks blocked pre-DNS: `localhost`, `*.localhost`, `*.internal`,
+ *     `*.local`. Non-HTTP(S) protocols (`file:`, `javascript:`, `data:`,
+ *     `gopher:`, …) are rejected before any network I/O.
+ *   Unparseable IP literals are treated as unsafe (fail-closed).
+ *
+ * @section DNS-rebinding protection
+ *   `validateUrlAsync` resolves the hostname with `dns.lookup(host, { family: 0 })`
+ *   and validates the RESOLVED address — not the hostname string. So
+ *   `evil.example` with an A record pointing at 127.0.0.1 is caught.
+ *   `safeFetch` re-runs this validation on every redirect hop (manual 3xx
+ *   handling, `redirect: "manual"`), so a public initial host that 302s to
+ *   `http://169.254.169.254/` is refused at hop 2.
+ *   NOTE: there is still a tiny TOCTOU window between `dns.lookup` and the
+ *   underlying `fetch`'s own resolution — for full pinning you'd need a
+ *   custom agent with `lookup` override. Acceptable for current threat model.
+ *
+ * @section Content-length cap
+ *   Bodies are streamed via `res.body.getReader()` and aborted with
+ *   `reader.cancel()` once `received > maxBytes`. Default cap is 5 MB
+ *   (`DEFAULT_MAX_BYTES`). The wrapper does not trust `Content-Length`
+ *   headers — the cap is enforced on actual bytes received. Empty / HEAD-
+ *   style responses fall back to `res.text()` and are still length-checked.
+ *
+ * @section Timeouts
+ *   Single `AbortController` per call, timer set to `DEFAULT_TIMEOUT_MS`
+ *   (10 s). The same signal covers every redirect hop — so a slow chain
+ *   can't burn 10 s per hop. Cleared in `finally`.
+ *
+ * @section Out of scope (what this does NOT protect against)
+ *   - Timing-side-channel attacks (response-time fingerprinting of internal
+ *     hosts via DNS or TCP RST timing).
+ *   - Content-based attacks (XSS / SQLi in the fetched body) — that's the
+ *     caller's job. We DO wrap content with `wrapUntrusted*` for the LLM,
+ *     which is a prompt-injection mitigation, not a generic sanitizer.
+ *   - IPv4-broadcast (255.255.255.255) and multicast (224/4) ranges — they
+ *     don't typically route to anything useful from a userspace fetch, but
+ *     are not explicitly listed; add to `isPrivateIPv4` if needed.
+ *   - Non-A/AAAA DNS records (CNAME chains are followed by the resolver; we
+ *     only see the final address).
+ *
+ * @section Cross-references
+ *   Consumers: web tools in `packages/eris/src/ai/tools/` (`scrape_url`,
+ *   `web_read`, `web_search`, image-fetch helpers), and anywhere an LLM
+ *   tool result might include a fetched URL. Contract is locked down by
+ *   `packages/eris/tests/utils/safeFetch.test.ts` (91 cases covering every
+ *   blocked range, redirect re-validation, size cap, and the untrusted
+ *   envelope) — update tests in lockstep when changing behavior here.
+ */
+
 // ─── SSRF-safe fetch helper ─────────────────────────────────────────────────
 // Used by web tools (scrape_url, web_read, web_search…) before hitting any
 // URL that ultimately came from a user or an LLM. Refuses non-HTTP(S)
