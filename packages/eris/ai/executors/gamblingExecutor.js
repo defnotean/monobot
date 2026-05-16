@@ -63,8 +63,14 @@ export async function execute(toolName, input, message, _context) {
       const amount = parsed.amount;
       const choice = (input.choice || "").toLowerCase().trim();
       if (!["heads", "tails"].includes(choice)) return "pick heads or tails";
-      const econ = await db.getBalance(message.author.id);
-      if (econ.balance < amount) return `you only have ${econ.balance} coins, can't bet ${amount}`;
+      // Atomic stake debit — closes the check-then-update race so two parallel
+      // coinflip_bet tool calls can't both pass the balance check before either
+      // debit lands. Matches the roulette pattern.
+      const debit = await db.tryDeductBalance(message.author.id, amount, "gamble_coinflip_stake", `coinflip:${choice}`);
+      if (!debit.ok) {
+        if (debit.reason === "insufficient") return `you only have ${debit.balance} coins, can't bet ${amount}`;
+        return `couldn't place bet: ${debit.reason}`;
+      }
       const { randomQuip, getMoodAdjustedOdds, getMoodFlavor } = await import("../gambling.js");
       const { coinflipEmbed } = await import("../gameVisuals.js");
       // Mood-adjusted odds — Eris tilts the coinflip based on her mood
@@ -72,8 +78,15 @@ export async function execute(toolName, input, message, _context) {
       const winChance = getMoodAdjustedOdds(0.5, mood.mood_score);
       const result = Math.random() < winChance ? choice : (choice === "heads" ? "tails" : "heads");
       const won = result === choice;
-      const payout = won ? amount : -amount;
-      const newBalance = await db.updateBalance(message.author.id, payout, won ? "gamble_win" : "gamble_loss", `coinflip:${choice}`);
+      // Stake already deducted. On win, credit 2× stake (refund + winnings).
+      let newBalance = debit.newBalance;
+      if (won) {
+        try {
+          newBalance = await db.updateBalance(message.author.id, amount * 2, "gamble_win", `coinflip:${choice}`);
+        } catch (err) {
+          console.error(`[coinflip_bet] win credit failed for ${message.author.id}:`, err);
+        }
+      }
       await db.recordGameResult(message.author.id, "coinflip", won, amount, won ? amount * 2 : 0);
       const { animateEmbed } = await import("../gameVisuals.js");
       const { EmbedBuilder } = await import("discord.js");
@@ -92,14 +105,21 @@ export async function execute(toolName, input, message, _context) {
       if (parsed.error) return parsed.error;
       const amount = parsed.amount;
       const guess = Math.floor(input.guess || 0);
-      const econ = await db.getBalance(message.author.id);
-      if (econ.balance < amount) return `you only have ${econ.balance} coins`;
-      // If no guess provided, show interactive buttons
+      // If no guess provided, show interactive buttons (no debit — bet hasn't
+      // been placed yet, the button click is what commits).
       if (guess < 1 || guess > 6) {
+        const econ = await db.getBalance(message.author.id);
+        if (econ.balance < amount) return `you only have ${econ.balance} coins`;
         const { diceButtonsEmbed } = await import("../gameVisuals.js");
         const { embed: dbEmbed, row: dbRow } = diceButtonsEmbed(amount);
         await message.channel.send({ embeds: [dbEmbed], components: [dbRow] });
         return "[game started]";
+      }
+      // Atomic stake debit — closes the check-then-update race.
+      const debit = await db.tryDeductBalance(message.author.id, amount, "gamble_dice_stake", `dice:${guess}`);
+      if (!debit.ok) {
+        if (debit.reason === "insufficient") return `you only have ${debit.balance} coins`;
+        return `couldn't place bet: ${debit.reason}`;
       }
       const { randomQuip } = await import("../gambling.js");
       const { diceEmbed, diceAnimFrames, animateEmbed } = await import("../gameVisuals.js");
@@ -107,8 +127,16 @@ export async function execute(toolName, input, message, _context) {
       const roll = Math.floor(Math.random() * 6) + 1;
       const frames = diceAnimFrames(roll);
       const won = roll === guess;
-      const payout = won ? amount * 4 : -amount;
-      const newBalance = await db.updateBalance(message.author.id, payout, won ? "gamble_win" : "gamble_loss", `dice:${guess}`);
+      // Stake already deducted. On win, credit 5× stake (refund + 4× winnings)
+      // to preserve net payout of +amount*4 from the original semantics.
+      let newBalance = debit.newBalance;
+      if (won) {
+        try {
+          newBalance = await db.updateBalance(message.author.id, amount * 5, "gamble_win", `dice:${guess}`);
+        } catch (err) {
+          console.error(`[dice_roll_bet] win credit failed for ${message.author.id}:`, err);
+        }
+      }
       await db.recordGameResult(message.author.id, "dice", won, amount, won ? amount * 5 : 0);
       // Play animation then show result
       const diceResultEmbed = diceEmbed(guess, roll, won, amount, newBalance);
@@ -121,8 +149,12 @@ export async function execute(toolName, input, message, _context) {
       const parsed = parseBet(input.amount);
       if (parsed.error) return parsed.error;
       const amount = parsed.amount;
-      const econ = await db.getBalance(message.author.id);
-      if (econ.balance < amount) return `you only have ${econ.balance} coins`;
+      // Atomic stake debit — closes the check-then-update race.
+      const debit = await db.tryDeductBalance(message.author.id, amount, "gamble_slots_stake", "slots:spin");
+      if (!debit.ok) {
+        if (debit.reason === "insufficient") return `you only have ${debit.balance} coins`;
+        return `couldn't place bet: ${debit.reason}`;
+      }
       const { spinSlots, slotsPayout } = await import("../gambling.js");
       const { slotsEmbed, slotsAnimFrames, animateEmbed } = await import("../gameVisuals.js");
       // Eris rigs the machine based on her mood and how she feels about the user
@@ -130,9 +162,26 @@ export async function execute(toolName, input, message, _context) {
       const rel = db.getRelationship(message.author.id);
       const reels = spinSlots(mood.mood_score, rel.affinity_score);
       const { multiplier, label } = slotsPayout(reels);
-      const payout = multiplier <= 0 ? -amount * Math.max(1, Math.abs(multiplier)) : amount * (multiplier - 1);
+      // Stake already debited; compute the credit relative to that debit so the
+      // net change matches the original `multiplier`-based payout semantics:
+      //   multiplier=-2 (double-skull) → additional -amount (total -2× stake)
+      //   multiplier=0  (skull / no match) → 0 (stake already lost)
+      //   multiplier=1  (push) → +amount (refund stake)
+      //   multiplier>1  (win) → +amount * multiplier (refund + winnings)
+      const credit = multiplier === -2
+        ? -amount
+        : multiplier <= 0
+          ? 0
+          : amount * multiplier;
       const won = multiplier > 1;
-      const newBalance = await db.updateBalance(message.author.id, payout, won ? "gamble_win" : "gamble_loss", `slots:${label}`);
+      let newBalance = debit.newBalance;
+      if (credit !== 0) {
+        try {
+          newBalance = await db.updateBalance(message.author.id, credit, won ? "gamble_win" : "gamble_loss", `slots:${label}`);
+        } catch (err) {
+          console.error(`[slots_spin] credit failed for ${message.author.id}:`, err);
+        }
+      }
       await db.recordGameResult(message.author.id, "slots", won, amount, won ? amount * multiplier : 0);
       // Animated reel spin then final result
       const animFrames = slotsAnimFrames(reels);
@@ -275,8 +324,13 @@ export async function execute(toolName, input, message, _context) {
       const parsed = parseBet(input.stake);
       if (parsed.error) return parsed.error;
       const stake = parsed.amount;
-      const econ = await db.getBalance(message.author.id);
-      if (econ.balance < stake) return `you only have ${econ.balance} coins`;
+      // Atomic stake debit \u2014 closes the check-then-update race. Stake is
+      // pre-deducted; on survival we refund the stake AND add the winnings.
+      const debit = await db.tryDeductBalance(message.author.id, stake, "russian_roulette_stake", "russian_roulette");
+      if (!debit.ok) {
+        if (debit.reason === "insufficient") return `you only have ${debit.balance} coins`;
+        return `couldn't place bet: ${debit.reason}`;
+      }
       const { rouletteEmbed, animateEmbed } = await import("../gameVisuals.js");
       const { EmbedBuilder } = await import("discord.js");
       const dead = Math.random() < (1 / 6);
@@ -286,14 +340,20 @@ export async function execute(toolName, input, message, _context) {
         { embed: new EmbedBuilder().setColor(0x2b2d31).setTitle("\u{1F52B} Russian Roulette").setDescription("*click...*") },
         { embed: new EmbedBuilder().setColor(dead ? 0xEF4444 : 0x10B981).setTitle("\u{1F52B} Russian Roulette").setDescription(dead ? "# \u{1F480} BANG!" : "# \u{1F62E}\u200D\u{1F4A8} *click*... empty") },
       ];
+      let newBalance = debit.newBalance;
       if (dead) {
-        const newBalance = await db.updateBalance(message.author.id, -stake, "gamble_loss", "russian_roulette:dead");
         await db.recordGameResult(message.author.id, "russian_roulette", false, stake, 0);
         const { embed: rrDeadEmbed, row: rrDeadRow } = rouletteEmbed(false, stake, 0, newBalance);
         suspenseFrames.push({ embed: rrDeadEmbed, components: [rrDeadRow] });
       } else {
         const winnings = Math.floor(stake * 0.5);
-        const newBalance = await db.updateBalance(message.author.id, winnings, "gamble_win", "russian_roulette:survived");
+        // Refund stake (+stake) and add winnings. Original semantics: survival
+        // is a net +winnings to the user's balance.
+        try {
+          newBalance = await db.updateBalance(message.author.id, stake + winnings, "gamble_win", "russian_roulette:survived");
+        } catch (err) {
+          console.error(`[russian_roulette] win credit failed for ${message.author.id}:`, err);
+        }
         await db.recordGameResult(message.author.id, "russian_roulette", true, stake, stake + winnings);
         const { embed: rrLiveEmbed, row: rrLiveRow } = rouletteEmbed(true, stake, winnings, newBalance);
         suspenseFrames.push({ embed: rrLiveEmbed, components: [rrLiveRow] });
@@ -310,15 +370,28 @@ export async function execute(toolName, input, message, _context) {
         const parsed = parseBet(stakeRaw);
         if (parsed.error) return parsed.error;
         stake = parsed.amount;
-        const econ = await db.getBalance(message.author.id);
-        if (econ.balance < stake) return `you only have ${econ.balance} coins`;
       }
-      // If no choice provided, show interactive buttons
+      // If no choice provided, show interactive buttons (no debit — the button
+      // click is what commits the stake).
       if (!["rock", "paper", "scissors"].includes(choice)) {
+        if (stake > 0) {
+          const econ = await db.getBalance(message.author.id);
+          if (econ.balance < stake) return `you only have ${econ.balance} coins`;
+        }
         const { rpsButtonsEmbed } = await import("../gameVisuals.js");
         const { embed: rpsE, row: rpsR } = rpsButtonsEmbed(stake);
         await message.channel.send({ embeds: [rpsE], components: [rpsR] });
         return "[game started]";
+      }
+      // Atomic stake debit (only if there's a stake) — closes the
+      // check-then-update race for staked play.
+      let debit = null;
+      if (stake > 0) {
+        debit = await db.tryDeductBalance(message.author.id, stake, "gamble_rps_stake", `rps:${choice}`);
+        if (!debit.ok) {
+          if (debit.reason === "insufficient") return `you only have ${debit.balance} coins`;
+          return `couldn't place bet: ${debit.reason}`;
+        }
       }
       const { randomQuip } = await import("../gambling.js");
       const { rpsResultEmbed, animateEmbed } = await import("../gameVisuals.js");
@@ -329,11 +402,21 @@ export async function execute(toolName, input, message, _context) {
       if (choice === botChoice) result = "tie";
       else if (wins[choice] === botChoice) result = "win";
       else result = "lose";
-      let newBalance = 0;
-      if (stake > 0 && result !== "tie") {
-        const payout = result === "win" ? stake : -stake;
-        newBalance = await db.updateBalance(message.author.id, payout, result === "win" ? "gamble_win" : "gamble_loss", `rps:${choice}`);
-        await db.recordGameResult(message.author.id, "rps", result === "win", stake, result === "win" ? stake * 2 : 0);
+      let newBalance = debit ? debit.newBalance : 0;
+      if (stake > 0) {
+        // Stake already deducted. On win: credit 2× stake (refund + winnings).
+        // On tie: refund stake. On loss: stake stays gone.
+        const credit = result === "win" ? stake * 2 : result === "tie" ? stake : 0;
+        if (credit !== 0) {
+          try {
+            newBalance = await db.updateBalance(message.author.id, credit, result === "win" ? "gamble_win" : "gamble_push", `rps:${choice}`);
+          } catch (err) {
+            console.error(`[rps_play] credit failed for ${message.author.id}:`, err);
+          }
+        }
+        if (result !== "tie") {
+          await db.recordGameResult(message.author.id, "rps", result === "win", stake, result === "win" ? stake * 2 : 0);
+        }
       }
       // Animated countdown then result
       const countdownFrames = [

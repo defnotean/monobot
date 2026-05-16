@@ -1,5 +1,5 @@
 import { SlashCommandBuilder , MessageFlags } from "discord.js";
-import { getBalance, updateBalance, recordGameResult, getMood, getRelationship } from "../../database.js";
+import { tryDeductBalance, updateBalance, recordGameResult, getMood, getRelationship } from "../../database.js";
 import { slotsEmbed, slotsAnimFrames, animateEmbed } from "../../ai/gameVisuals.js";
 import { spinSlots, slotsPayout, randomQuip } from "../../ai/gambling.js";
 
@@ -11,9 +11,15 @@ export const data = new SlashCommandBuilder()
 export async function execute(interaction) {
   const amount = interaction.options.getInteger("amount");
   const userId = interaction.user.id;
-  const wallet = await getBalance(userId);
 
-  if (wallet.balance < amount) return interaction.reply({ content: `you only have ${wallet.balance} coins`, flags: MessageFlags.Ephemeral });
+  // Atomic stake debit — closes the check-then-update race on parallel /slots.
+  const debit = await tryDeductBalance(userId, amount, "gamble_slots_stake", "slots:spin");
+  if (!debit.ok) {
+    if (debit.reason === "insufficient") {
+      return interaction.reply({ content: `you only have ${debit.balance} coins`, flags: MessageFlags.Ephemeral });
+    }
+    return interaction.reply({ content: `couldn't place bet: ${debit.reason}`, flags: MessageFlags.Ephemeral });
+  }
 
   // Spin with mood/affinity rigging
   const mood = getMood();
@@ -21,10 +27,27 @@ export async function execute(interaction) {
   const reels = spinSlots(mood.mood_score || 0, rel.affinity_score || 0);
   const { multiplier, label } = slotsPayout(reels);
 
-  const payout = multiplier <= 0 ? -amount * Math.max(1, Math.abs(multiplier)) : Math.floor(amount * (multiplier - 1));
+  // Stake is already debited. Compute the credit relative to that debit so the
+  // net change matches the original `multiplier`-based payout semantics:
+  //   multiplier=-2 (double-skull) → additional -amount (total -2× stake)
+  //   multiplier=0  (single skull / no match) → 0 (stake lost, no further change)
+  //   multiplier=1  (push) → +amount (refund stake)
+  //   multiplier>1  (win) → +Math.floor(amount * multiplier) (refund + winnings)
+  const credit = multiplier === -2
+    ? -amount
+    : multiplier <= 0
+      ? 0
+      : Math.floor(amount * multiplier);
   const won = multiplier > 1;
 
-  const newBalance = await updateBalance(userId, payout, won ? "gamble_slots_win" : "gamble_slots_loss", `slots:${label}`);
+  let newBalance = debit.newBalance;
+  if (credit !== 0) {
+    try {
+      newBalance = await updateBalance(userId, credit, won ? "gamble_slots_win" : "gamble_slots_loss", `slots:${label}`);
+    } catch (err) {
+      console.error(`[Slots] credit failed for ${userId} credit=${credit}:`, err);
+    }
+  }
   await recordGameResult(userId, "slots", won, amount, won ? Math.floor(amount * multiplier) : 0);
 
   // Animated spin: defer, animate, then show result

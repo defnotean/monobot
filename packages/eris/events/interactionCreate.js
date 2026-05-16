@@ -308,15 +308,26 @@ async function handleGameButton(interaction) {
     const choice = parts[1];
     const amount = Math.max(1, Math.abs(parseInt(parts[2])) || 10);
     if (!["heads", "tails"].includes(choice)) return interaction.reply({ content: "invalid", flags: MessageFlags.Ephemeral });
-    const econ = await db.getBalance(userId);
-    if (econ.balance < amount) return interaction.reply({ content: `you only have ${econ.balance} coins`, flags: MessageFlags.Ephemeral });
+    // Atomic stake debit — closes the check-then-update race on replay-spam.
+    const debit = await db.tryDeductBalance(userId, amount, "gamble_coinflip_stake", `coinflip:${choice}`);
+    if (!debit.ok) {
+      if (debit.reason === "insufficient") return interaction.reply({ content: `you only have ${debit.balance} coins`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `couldn't place bet: ${debit.reason}`, flags: MessageFlags.Ephemeral });
+    }
     const { getMoodAdjustedOdds, randomQuip } = await import("../ai/gambling.js");
     const { coinflipEmbed } = await import("../ai/gameVisuals.js");
     const mood = db.getMood();
     const winChance = getMoodAdjustedOdds(0.5, mood.mood_score);
     const result = Math.random() < winChance ? choice : (choice === "heads" ? "tails" : "heads");
     const won = result === choice;
-    const newBalance = await db.updateBalance(userId, won ? amount : -amount, won ? "gamble_win" : "gamble_loss", `coinflip:${choice}`);
+    let newBalance = debit.newBalance;
+    if (won) {
+      try {
+        newBalance = await db.updateBalance(userId, amount * 2, "gamble_win", `coinflip:${choice}`);
+      } catch (err) {
+        console.error(`[coinflip button] win credit failed for ${userId}:`, err);
+      }
+    }
     await db.recordGameResult(userId, "coinflip", won, amount, won ? amount * 2 : 0);
     const { embed, row } = coinflipEmbed(choice, result, won, amount, newBalance);
     if (embedTooOld) {
@@ -329,8 +340,12 @@ async function handleGameButton(interaction) {
   // ── Slots replay button (with animation + rigging) ────────────────
   if (id.startsWith("slots_")) {
     const amount = Math.max(1, Math.abs(parseInt(id.replace("slots_", ""))) || 10);
-    const econ = await db.getBalance(userId);
-    if (econ.balance < amount) return interaction.reply({ content: `you only have ${econ.balance} coins`, flags: MessageFlags.Ephemeral });
+    // Atomic stake debit — closes the check-then-update race on replay-spam.
+    const debit = await db.tryDeductBalance(userId, amount, "gamble_slots_stake", "slots:spin");
+    if (!debit.ok) {
+      if (debit.reason === "insufficient") return interaction.reply({ content: `you only have ${debit.balance} coins`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `couldn't place bet: ${debit.reason}`, flags: MessageFlags.Ephemeral });
+    }
     const { spinSlots, slotsPayout } = await import("../ai/gambling.js");
     const { slotsEmbed, slotsAnimFrames, animateEmbedEdit } = await import("../ai/gameVisuals.js");
     // Rig based on mood + affinity
@@ -338,9 +353,23 @@ async function handleGameButton(interaction) {
     const rel = db.getRelationship(userId);
     const reels = spinSlots(mood.mood_score, rel.affinity_score);
     const { multiplier, label } = slotsPayout(reels);
-    const payout = multiplier <= 0 ? -amount * Math.max(1, Math.abs(multiplier)) : amount * (multiplier - 1);
+    // Stake already debited; compute the credit relative to that debit so the
+    // net change matches the original `multiplier`-based payout semantics
+    // (see commands/gambling/slots.js for the table).
+    const credit = multiplier === -2
+      ? -amount
+      : multiplier <= 0
+        ? 0
+        : amount * multiplier;
     const won = multiplier > 1;
-    const newBalance = await db.updateBalance(userId, payout, won ? "gamble_win" : "gamble_loss", `slots:${label}`);
+    let newBalance = debit.newBalance;
+    if (credit !== 0) {
+      try {
+        newBalance = await db.updateBalance(userId, credit, won ? "gamble_win" : "gamble_loss", `slots:${label}`);
+      } catch (err) {
+        console.error(`[slots button] credit failed for ${userId}:`, err);
+      }
+    }
     await db.recordGameResult(userId, "slots", won, amount, won ? amount * multiplier : 0);
     const animFrames = slotsAnimFrames(reels);
     const { embed, row } = slotsEmbed(reels, label, multiplier, amount, won, newBalance);
@@ -355,16 +384,20 @@ async function handleGameButton(interaction) {
     return;
   }
 
-  // ── Roulette replay button ────────────────────────────────────────
+  // ── Roulette replay button (russian roulette) ────────────────────
   if (id.startsWith("roulette_")) {
     const stake = Math.max(1, Math.abs(parseInt(id.replace("roulette_", ""))) || 10);
-    const econ = await db.getBalance(userId);
-    if (econ.balance < stake) return interaction.reply({ content: `you only have ${econ.balance} coins`, flags: MessageFlags.Ephemeral });
+    // Atomic stake debit — closes the check-then-update race on replay-spam.
+    const debit = await db.tryDeductBalance(userId, stake, "russian_roulette_stake", "russian_roulette");
+    if (!debit.ok) {
+      if (debit.reason === "insufficient") return interaction.reply({ content: `you only have ${debit.balance} coins`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `couldn't place bet: ${debit.reason}`, flags: MessageFlags.Ephemeral });
+    }
     const { randomQuip } = await import("../ai/gambling.js");
     const { rouletteEmbed } = await import("../ai/gameVisuals.js");
     const dead = Math.random() < (1 / 6);
     if (dead) {
-      const newBal = await db.updateBalance(userId, -stake, "gamble_loss", "russian_roulette:dead");
+      const newBal = debit.newBalance;
       await db.recordGameResult(userId, "russian_roulette", false, stake, 0);
       const { embed, row } = rouletteEmbed(false, stake, 0, newBal);
       if (embedTooOld) {
@@ -374,7 +407,14 @@ async function handleGameButton(interaction) {
       return interaction.update({ embeds: [embed], components: [row], content: randomQuip() });
     }
     const winnings = Math.floor(stake * 0.5);
-    const newBal = await db.updateBalance(userId, winnings, "gamble_win", "russian_roulette:survived");
+    // Refund stake (+stake) plus winnings — original semantics: survival is a
+    // net +winnings change on top of an unchanged stake.
+    let newBal = debit.newBalance;
+    try {
+      newBal = await db.updateBalance(userId, stake + winnings, "gamble_win", "russian_roulette:survived");
+    } catch (err) {
+      console.error(`[russian roulette button] win credit failed for ${userId}:`, err);
+    }
     await db.recordGameResult(userId, "russian_roulette", true, stake, stake + winnings);
     const { embed, row } = rouletteEmbed(true, stake, winnings, newBal);
     if (embedTooOld) {
@@ -447,13 +487,24 @@ async function handleGameButton(interaction) {
     const guess = parseInt(parts[1]);
     const amount = parseInt(parts[2]);
     if (!guess || !amount) return interaction.reply({ content: "invalid dice bet", flags: MessageFlags.Ephemeral });
-    const econ = await db.getBalance(userId);
-    if (econ.balance < amount) return interaction.reply({ content: `you only have ${econ.balance} coins`, flags: MessageFlags.Ephemeral });
+    // Atomic stake debit — closes the check-then-update race on rapid button taps.
+    const debit = await db.tryDeductBalance(userId, amount, "gamble_dice_stake", `dice:${guess}`);
+    if (!debit.ok) {
+      if (debit.reason === "insufficient") return interaction.reply({ content: `you only have ${debit.balance} coins`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `couldn't place bet: ${debit.reason}`, flags: MessageFlags.Ephemeral });
+    }
     const { diceEmbed, diceAnimFrames } = await import("../ai/gameVisuals.js");
     const roll = Math.floor(Math.random() * 6) + 1;
     const won = roll === guess;
-    const payout = won ? amount * 4 : -amount;
-    const newBalance = await db.updateBalance(userId, payout, won ? "gamble_win" : "gamble_loss", `dice:${guess}`);
+    // Stake already deducted; credit 5× stake on win for net payout of +4×.
+    let newBalance = debit.newBalance;
+    if (won) {
+      try {
+        newBalance = await db.updateBalance(userId, amount * 5, "gamble_win", `dice:${guess}`);
+      } catch (err) {
+        console.error(`[dice button] win credit failed for ${userId}:`, err);
+      }
+    }
     await db.recordGameResult(userId, "dice", won, amount, won ? amount * 5 : 0);
     const resultEmbed = diceEmbed(guess, roll, won, amount, newBalance);
     const { diceButtonsEmbed, animateEmbedEdit: animDice, animateEmbed: animDiceNew } = await import("../ai/gameVisuals.js");
@@ -475,9 +526,14 @@ async function handleGameButton(interaction) {
     const choice = parts[1];
     const stake = parseInt(parts[2]) || 0;
     if (!["rock", "paper", "scissors"].includes(choice)) return interaction.reply({ content: "invalid choice", flags: MessageFlags.Ephemeral });
+    // Atomic stake debit (only if staked) — closes the check-then-update race.
+    let debit = null;
     if (stake > 0) {
-      const econ = await db.getBalance(userId);
-      if (econ.balance < stake) return interaction.reply({ content: `you only have ${econ.balance} coins`, flags: MessageFlags.Ephemeral });
+      debit = await db.tryDeductBalance(userId, stake, "gamble_rps_stake", `rps:${choice}`);
+      if (!debit.ok) {
+        if (debit.reason === "insufficient") return interaction.reply({ content: `you only have ${debit.balance} coins`, flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: `couldn't place bet: ${debit.reason}`, flags: MessageFlags.Ephemeral });
+      }
     }
     const options = ["rock", "paper", "scissors"];
     const botChoice = options[Math.floor(Math.random() * 3)];
@@ -486,11 +542,21 @@ async function handleGameButton(interaction) {
     if (choice === botChoice) result = "tie";
     else if (wins[choice] === botChoice) result = "win";
     else result = "lose";
-    let newBalance = 0;
-    if (stake > 0 && result !== "tie") {
-      const payout = result === "win" ? stake : -stake;
-      newBalance = await db.updateBalance(userId, payout, result === "win" ? "gamble_win" : "gamble_loss", `rps:${choice}`);
-      await db.recordGameResult(userId, "rps", result === "win", stake, result === "win" ? stake * 2 : 0);
+    let newBalance = debit ? debit.newBalance : 0;
+    if (stake > 0) {
+      // Stake already deducted. Win → credit 2× (refund + winnings); tie →
+      // refund stake; loss → stake stays gone.
+      const credit = result === "win" ? stake * 2 : result === "tie" ? stake : 0;
+      if (credit !== 0) {
+        try {
+          newBalance = await db.updateBalance(userId, credit, result === "win" ? "gamble_win" : "gamble_push", `rps:${choice}`);
+        } catch (err) {
+          console.error(`[rps button] credit failed for ${userId}:`, err);
+        }
+      }
+      if (result !== "tie") {
+        await db.recordGameResult(userId, "rps", result === "win", stake, result === "win" ? stake * 2 : 0);
+      }
     } else {
       const econ = await db.getBalance(userId);
       newBalance = econ.balance;
