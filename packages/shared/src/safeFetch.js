@@ -17,7 +17,9 @@
  *   - `safeFetch(rawUrl, opts)` — full request with re-validation at every
  *     redirect hop, byte cap, and timeout. Returns a plain
  *     `{ status, headers, text, url }` object (NOT a `Response`) because the
- *     body is read here to enforce the size cap.
+ *     body is read here to enforce the size cap. Pass `{ binary: true }` to
+ *     get `{ status, headers, bytes, url }` instead (Buffer for image/audio
+ *     payloads that utf8 decode would corrupt).
  *   - `wrapUntrusted(content)` — wraps fetched text in a header/footer that
  *     tells the model to treat it as data, not instructions.
  *   - `wrapUntrustedWithFirewall(content, { firewallCheck, log })` — same,
@@ -207,7 +209,11 @@ export async function validateUrlAsync(rawUrl) {
  * - 10s timeout via AbortSignal
  *
  * Returns a plain { status, headers, text, url } object — not a Response —
- * because we read the body ourselves to enforce the cap.
+ * because we read the body ourselves to enforce the cap. Pass
+ * `{ binary: true }` to instead receive `{ status, headers, bytes, url }`
+ * where `bytes` is a Buffer of the raw response (still subject to maxBytes).
+ * Use this for non-text payloads (images, audio) that utf8 decode would
+ * corrupt.
  */
 export async function safeFetch(rawUrl, opts = {}) {
   const {
@@ -215,6 +221,7 @@ export async function safeFetch(rawUrl, opts = {}) {
     maxBytes = DEFAULT_MAX_BYTES,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxRedirects = MAX_REDIRECTS,
+    binary = false,
   } = opts;
 
   const controller = new AbortController();
@@ -238,6 +245,9 @@ export async function safeFetch(rawUrl, opts = {}) {
         const loc = res.headers.get("location");
         if (!loc) {
           // Treat redirect-without-location as a hard stop, not a body to read.
+          if (binary) {
+            return { status: res.status, headers: res.headers, bytes: Buffer.alloc(0), url: currentUrl };
+          }
           return { status: res.status, headers: res.headers, text: "", url: currentUrl };
         }
         if (++hops > maxRedirects) throw new Error("too many redirects");
@@ -249,7 +259,13 @@ export async function safeFetch(rawUrl, opts = {}) {
       // buffer GB if the server sends them — so stream and abort.
       const reader = res.body?.getReader?.();
       if (!reader) {
-        // No body (HEAD-style or empty) — return whatever text() gives us.
+        // No body (HEAD-style or empty) — return whatever the response gives
+        // us. Length-check still applies.
+        if (binary) {
+          const ab = await res.arrayBuffer();
+          if (ab.byteLength > maxBytes) throw new Error("response too large");
+          return { status: res.status, headers: res.headers, bytes: Buffer.from(ab), url: currentUrl };
+        }
         const text = await res.text();
         if (text.length > maxBytes) throw new Error("response too large");
         return { status: res.status, headers: res.headers, text, url: currentUrl };
@@ -268,6 +284,9 @@ export async function safeFetch(rawUrl, opts = {}) {
         chunks.push(value);
       }
       const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
+      if (binary) {
+        return { status: res.status, headers: res.headers, bytes: buf, url: currentUrl };
+      }
       return { status: res.status, headers: res.headers, text: buf.toString("utf8"), url: currentUrl };
     }
   } finally {

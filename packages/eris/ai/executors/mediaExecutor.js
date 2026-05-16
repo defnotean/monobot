@@ -1,8 +1,25 @@
 // ─── Media Sub-Executor ─────────────────────────────────────────────────────
 // Handles: send_gif, analyze_image, search_images, create_meme, search_meme_templates
 // Called from main executor.js via delegation.
+//
+// SSRF / size hardening: every URL fetched here can originate from an LLM
+// tool call or a user-pasted attachment URL, so all HTTP I/O goes through
+// `safeFetch` from @defnotean/shared. That helper enforces the IP / hostname
+// blocklist (loopback, RFC1918, link-local incl. 169.254.169.254 cloud
+// metadata, ULA, …), re-validates every 3xx hop, and caps the response body
+// so a hostile server can't memory-exhaust us. Binary callers
+// (`analyze_image`, `create_meme`) ask for raw bytes and tighten the cap to
+// 8 MB — well above any legitimate Discord-attachable meme/image.
 
 import config from "../../config.js";
+import { safeFetch } from "@defnotean/shared/safeFetch";
+
+// Caps for image fetches. Discord's attachment limit is 25 MB but most memes
+// and avatar URLs are < 2 MB; we pick 8 MB as the upper bound an attacker
+// can force us to buffer before we abort. Web-search HTML scrapes get a
+// smaller 2 MB cap — nothing legitimate needs more than that.
+const IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const HTML_MAX_BYTES = 2 * 1024 * 1024;
 
 const HANDLED = new Set([
   "send_gif", "analyze_image", "search_images", "create_meme", "search_meme_templates",
@@ -23,9 +40,17 @@ export async function execute(toolName, input, message, _context) {
       if (!config.klipyApiKey) return "gif api not configured";
       try {
         const q = encodeURIComponent(query);
-        const res = await fetch(`https://api.klipy.com/api/v1/${config.klipyApiKey}/gifs/search?q=${q}&per_page=20&content_filter=medium&customer_id=${message.author.id}`);
-        if (!res.ok) return `gif api error: ${res.status}`;
-        const json = await res.json();
+        // Fixed-host API call but still routed through safeFetch — gives us
+        // the size cap + redirect re-validation for free in case a future
+        // klipy outage 302s us somewhere weird.
+        const res = await safeFetch(
+          `https://api.klipy.com/api/v1/${config.klipyApiKey}/gifs/search?q=${q}&per_page=20&content_filter=medium&customer_id=${message.author.id}`,
+          { maxBytes: HTML_MAX_BYTES, timeoutMs: 8_000 }
+        );
+        if (res.status < 200 || res.status >= 300) return `gif api error: ${res.status}`;
+        let json;
+        try { json = JSON.parse(res.text); }
+        catch { return "gif api error: invalid response"; }
         const results = json?.data?.data;
         if (!results?.length) return `no gif found for "${query}"`;
         const pick = results[Math.floor(Math.random() * Math.min(results.length, 10))];
@@ -66,8 +91,19 @@ export async function execute(toolName, input, message, _context) {
       const url = input.url || input.image_url || attachment?.url;
       if (!url) return "no image provided — attach an image or provide a url";
       try {
-        const imgRes = await fetch(url);
-        const buffer = Buffer.from(await imgRes.arrayBuffer());
+        // safeFetch (binary: true) enforces SSRF blocklist + DNS-resolved IP
+        // check + 8 MB size cap before we ever materialize the buffer for
+        // Gemini. Without it an LLM tool call could point us at
+        // 169.254.169.254 or stream a GB image into our heap.
+        const imgRes = await safeFetch(url, {
+          binary: true,
+          maxBytes: IMAGE_MAX_BYTES,
+          timeoutMs: 10_000,
+        });
+        if (imgRes.status < 200 || imgRes.status >= 300) {
+          return `image fetch failed: ${imgRes.status}`;
+        }
+        const buffer = imgRes.bytes;
         const base64 = buffer.toString("base64");
         const mimeType = imgRes.headers.get("content-type") || "image/png";
 
@@ -93,8 +129,16 @@ export async function execute(toolName, input, message, _context) {
     case "search_meme_templates": {
       try {
         const query = (input.query || input.search || "").toLowerCase();
-        const res = await fetch("https://api.memegen.link/templates");
-        const templates = await res.json();
+        // Fixed-host but still cap the response — memegen returns ~150 KB
+        // of JSON, nowhere near our 2 MB ceiling.
+        const res = await safeFetch("https://api.memegen.link/templates", {
+          maxBytes: HTML_MAX_BYTES,
+          timeoutMs: 8_000,
+        });
+        if (res.status < 200 || res.status >= 300) return `template list error: ${res.status}`;
+        let templates;
+        try { templates = JSON.parse(res.text); }
+        catch { return "template list error: invalid response"; }
         const matches = templates.filter(t =>
           t.name.toLowerCase().includes(query) ||
           t.id.toLowerCase().includes(query) ||
@@ -135,15 +179,22 @@ export async function execute(toolName, input, message, _context) {
           memeUrl = `https://api.memegen.link/images/${template}/${encMeme(topText)}/${encMeme(bottomText)}.png`;
         }
 
-        // Download the meme image and upload as attachment (more reliable than embedding URL)
+        // Download the meme image and upload as attachment (more reliable
+        // than embedding URL). safeFetch enforces the 8 MB size cap so a
+        // memegen redirect or compromised mirror can't stream us GB of
+        // garbage.
         try {
-          const imgRes = await fetch(memeUrl);
-          if (imgRes.ok) {
+          const imgRes = await safeFetch(memeUrl, {
+            binary: true,
+            maxBytes: IMAGE_MAX_BYTES,
+            timeoutMs: 12_000,
+          });
+          if (imgRes.status >= 200 && imgRes.status < 300) {
             const ct = imgRes.headers.get("content-type") || "";
             if (!ct.startsWith("image/")) throw new Error("Memegen returned non-image (maybe a bad template)");
-            const buffer = Buffer.from(await imgRes.arrayBuffer());
+            const buffer = imgRes.bytes;
             if (buffer.length < 1000) throw new Error("Memegen returned tiny placeholder image");
-            
+
             const { AttachmentBuilder } = await import("discord.js");
             const attachment = new AttachmentBuilder(buffer, { name: "meme.png" });
             const sendOpts = { files: [attachment] };
@@ -166,46 +217,38 @@ export async function execute(toolName, input, message, _context) {
       if (!query) return "no search query";
       try {
         const images = [];
+        const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+        const scrapeOpts = {
+          headers: { "User-Agent": UA },
+          maxBytes: HTML_MAX_BYTES,
+          timeoutMs: 5_000,
+        };
 
         // Method 1: Imgur search (reliable, no auth needed for search)
         try {
-          const imgurRes = await fetch(`https://imgur.com/search?q=${encodeURIComponent(query)}`, {
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-            signal: AbortSignal.timeout(5000),
-          });
-          const imgurHtml = await imgurRes.text();
-          const imgurMatches = imgurHtml.match(/https:\/\/i\.imgur\.com\/[a-zA-Z0-9]+\.(jpg|png|gif|webp)/g) || [];
+          const imgurRes = await safeFetch(`https://imgur.com/search?q=${encodeURIComponent(query)}`, scrapeOpts);
+          const imgurMatches = imgurRes.text.match(/https:\/\/i\.imgur\.com\/[a-zA-Z0-9]+\.(jpg|png|gif|webp)/g) || [];
           images.push(...imgurMatches.slice(0, 3));
         } catch {}
 
         // Method 2: Know Your Meme (for meme templates specifically)
         try {
-          const kymRes = await fetch(`https://knowyourmeme.com/search?q=${encodeURIComponent(query)}`, {
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-            signal: AbortSignal.timeout(5000),
-          });
-          const kymHtml = await kymRes.text();
-          const kymMatches = kymHtml.match(/https?:\/\/[^"'\s]+\.(?:jpg|jpeg|png|webp)[^"'\s]*/gi) || [];
+          const kymRes = await safeFetch(`https://knowyourmeme.com/search?q=${encodeURIComponent(query)}`, scrapeOpts);
+          const kymMatches = kymRes.text.match(/https?:\/\/[^"'\s]+\.(?:jpg|jpeg|png|webp)[^"'\s]*/gi) || [];
           const kymFiltered = kymMatches.filter(u => u.includes("kym-cdn") || u.includes("knowyourmeme")).slice(0, 3);
           images.push(...kymFiltered);
         } catch {}
 
         // Method 3: Imgflip (meme template database)
         try {
-          const flipRes = await fetch(`https://imgflip.com/memesearch?q=${encodeURIComponent(query)}`, {
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-            signal: AbortSignal.timeout(5000),
-          });
-          const flipHtml = await flipRes.text();
+          const flipRes = await safeFetch(`https://imgflip.com/memesearch?q=${encodeURIComponent(query)}`, scrapeOpts);
+          const flipHtml = flipRes.text;
           // Extract template page links and visit them for direct image
           const templateLinks = flipHtml.match(/\/memetemplate\/\d+\/[^"'\s]+/g) || [];
           for (const link of templateLinks.slice(0, 2)) {
             try {
-              const tplRes = await fetch(`https://imgflip.com${link}`, {
-                headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-                signal: AbortSignal.timeout(5000),
-              });
-              const tplHtml = await tplRes.text();
+              const tplRes = await safeFetch(`https://imgflip.com${link}`, scrapeOpts);
+              const tplHtml = tplRes.text;
               // Match both https:// and protocol-relative //i.imgflip.com URLs
               const directUrls = tplHtml.match(/(?:https?:)?\/\/i\.imgflip\.com\/[^"'\s]+\.(?:jpg|png|webp)/gi) || [];
               for (const u of directUrls.slice(0, 2)) {
@@ -223,8 +266,11 @@ export async function execute(toolName, input, message, _context) {
 
         // Method 4: DuckDuckGo instant answer
         try {
-          const ddgRes = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`);
-          const ddg = await ddgRes.json();
+          const ddgRes = await safeFetch(
+            `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`,
+            { maxBytes: HTML_MAX_BYTES, timeoutMs: 5_000 }
+          );
+          const ddg = JSON.parse(ddgRes.text);
           if (ddg.Image) images.push(ddg.Image.startsWith("http") ? ddg.Image : `https://duckduckgo.com${ddg.Image}`);
         } catch {}
 
