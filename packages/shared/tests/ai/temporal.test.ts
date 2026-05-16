@@ -7,7 +7,7 @@ import {
   markDailyGreeting,
   buildTemporalContext,
   _clearDailyGreetingMap,
-} from "../../ai/temporal.js";
+} from "../../src/ai/temporal.js";
 
 beforeEach(() => _clearDailyGreetingMap());
 

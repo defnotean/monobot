@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error - importing JS module without types
-import { getMemoryQuirkHint, _QUIRKS_FOR_TEST } from "../../ai/memoryQuirks.js";
+import { getMemoryQuirkHint, _QUIRKS_FOR_TEST } from "../../src/ai/memoryQuirks.js";
 
 describe("getMemoryQuirkHint", () => {
   it("returns an empty string the overwhelming majority of the time", () => {

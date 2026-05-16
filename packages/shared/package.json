@@ -17,7 +17,11 @@
     "./firewallPatterns": "./src/ai/firewallPatterns.js",
     "./slangGuard.js": "./src/ai/slangGuard.js",
     "./webSearchEngine": "./src/ai/webSearchEngine.js",
-    "./webSearchEngine.js": "./src/ai/webSearchEngine.js"
+    "./webSearchEngine.js": "./src/ai/webSearchEngine.js",
+    "./memoryQuirks": "./src/ai/memoryQuirks.js",
+    "./temporal": "./src/ai/temporal.js",
+    "./responsestyle": "./src/ai/responsestyle.js",
+    "./humanDelay": "./src/utils/humanDelay.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json --noEmit",

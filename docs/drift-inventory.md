@@ -22,12 +22,12 @@ Quick rule: if you're about to edit a file tagged anything other than `INTENTION
 | `ai/personality.js` | yes | yes | INTENTIONALLY DIFFERENT | Eris has stock/game/pet trait axes; Irene omits them. Need union schema before sharing. |
 | `ai/longmemory.js` | yes | yes | INTENTIONALLY DIFFERENT | Schema diverged — table prefix is `{botName}_*`. Convergence planned in extraction Phase 0. |
 | `ai/firewall.js` | yes | yes | ACCIDENTAL DRIFT | Eris uses `config.ownerId`; Irene aliases via `config.userId`. Eris's version is canonical. |
-| `ai/keyPool.js` | yes | yes | IDENTICAL | Byte-equal modulo line endings (CRLF vs LF). Drop-in shared candidate. |
+| `ai/keyPool.js` | yes | yes | IDENTICAL | Byte-equal modulo line endings (CRLF vs LF). Imports bot-local `utils/logger.js` — needs shared-logger strategy before extraction. |
 | `ai/regexWorker.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
-| `ai/temporal.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
-| `ai/memoryQuirks.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
-| `ai/selfCanon.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
-| `ai/responsestyle.js` | yes | yes | ACCIDENTAL DRIFT | One-line comment + redundant parens differ; logic identical. Trivially extractable. |
+| `ai/temporal.js` | no | no | EXTRACTED | Lives in `packages/shared/src/ai/temporal.js`. Per-bot copies have been removed. |
+| `ai/memoryQuirks.js` | no | no | EXTRACTED | Lives in `packages/shared/src/ai/memoryQuirks.js`. Per-bot copies have been removed. |
+| `ai/selfCanon.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Imports bot-local `utils/logger.js` — needs shared-logger strategy before extraction. |
+| `ai/responsestyle.js` | no | no | EXTRACTED | Lives in `packages/shared/src/ai/responsestyle.js`. Per-bot copies have been removed. |
 | `ai/humanity.js` | yes | yes | ACCIDENTAL DRIFT | Eris is canonical (UTC-day streak, time-based grudge decay, dedup-before-push, defensive `_lastDay` persistence). Irene needs port. |
 | `ai/semantic.js` | yes | yes | ACCIDENTAL DRIFT | Eris has FIFO cache cap, length-aware hash, split store/search rate trackers, smart "human-like forgetting" cleanup. Irene's only structural difference is the `eris_*`/`irene_*` table prefix — parametrize for shared. |
 | `ai/preoccupations.js` | yes | yes | ACCIDENTAL DRIFT | Logic identical; only differences are `eris_*`/`irene_*` table prefix and minor fallback-topic flavor wording. |
@@ -45,8 +45,8 @@ Quick rule: if you're about to edit a file tagged anything other than `INTENTION
 | `utils/twinSign.js` | no | no | EXTRACTED | Lives in `packages/shared/src/twinSign.js`. Per-bot copies have been removed. |
 | `utils/LRUCache.js` | no | no | EXTRACTED | Lives in `packages/shared/src/LRUCache.js`. Per-bot copies have been removed. |
 | `utils/roleCategorizer.js` | no | no | EXTRACTED | Lives in `packages/shared/src/roleCategorizer.js`. Per-bot copies have been removed. |
-| `utils/twinState.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
-| `utils/humanDelay.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
+| `utils/twinState.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Imports bot-local `config.js` + `logger.js` — needs shared-logger/config strategy before extraction. |
+| `utils/humanDelay.js` | no | no | EXTRACTED | Lives in `packages/shared/src/utils/humanDelay.js`. Per-bot copies have been removed. |
 | `utils/toolRateLimit.js` | yes | yes | IDENTICAL | Logic byte-equal — only differences are whitespace/JSDoc presence. Drop-in shared candidate. |
 | `utils/cooldown.js` | yes | yes | ACCIDENTAL DRIFT | Same core, but Irene adds `resetCooldown()` (refund on failure) and a deferred `startCooldownCleanup()` (vs Eris's import-time `setInterval`). Irene's API is the better target. |
 | `utils/logger.js` | yes | yes | INTENTIONALLY DIFFERENT | Core `log()` + console formatting could be shared, but Irene also exports `sendModLog()` (auto-detects mod-log channels by name, persists to `getGuildSettings`) which only makes sense for the moderation bot. Split: shared core + per-bot extensions. |
@@ -77,8 +77,12 @@ Lives in `packages/shared/src/` (workspace package `@defnotean/shared`):
 - `twinSign.js` — HMAC signing for twin REST calls
 - `LRUCache.js` — bounded LRU for both bots
 - `roleCategorizer.js` — Discord role classification
+- `ai/temporal.js` — temporal awareness prompt fragment
+- `ai/memoryQuirks.js` — rare memory-imperfection hints
+- `ai/responsestyle.js` — dynamic response-style picker
+- `utils/humanDelay.js` — human-timed message delivery
 
-Per-bot copies have been removed — both bots now import from `@defnotean/shared` for these three modules.
+Per-bot copies have been removed — both bots now import from `@defnotean/shared` for these modules.
 
 ## When your change touches drifted code
 
@@ -94,7 +98,7 @@ Per [CONTRIBUTING.md](../CONTRIBUTING.md) "Before you start", talk to the mainta
 EXTRACTION_PLAN.md was **drafted 2026-04-23, not yet executed**. Phase progress:
 - **Phase 0 (reconcile drifts):** not started — `firewall`, `personality`, `longmemory` still differ between bots. (`twinSign` already reconciled — see Phase 2.)
 - **Phase 1 (workspace structure):** done — already a monorepo with `packages/{eris,irene,shared}`.
-- **Phase 2 (move files):** partial — `LRUCache`, `roleCategorizer`, `twinSign` already extracted (per-bot copies removed). Eight more files now confirmed IDENTICAL or near-identical and ready to extract: `ai/{keyPool,regexWorker,temporal,memoryQuirks,selfCanon,responsestyle}.js` + `utils/{twinState,humanDelay,toolRateLimit}.js`. ACCIDENTAL DRIFT files (`humanity`, `semantic`, `preoccupations`, `opinions`, `cooldown`, `providers/index`) need a brief reconcile pass before extraction.
+- **Phase 2 (move files):** partial — `LRUCache`, `roleCategorizer`, `twinSign`, plus `ai/{temporal,memoryQuirks,responsestyle}` + `utils/humanDelay` already extracted (per-bot copies removed). Files still pending: `ai/{keyPool,selfCanon}.js` + `utils/{twinState,toolRateLimit}.js` — these import bot-local `logger.js`/`config.js` and need a shared-logger strategy before extraction. ACCIDENTAL DRIFT files (`humanity`, `semantic`, `preoccupations`, `opinions`, `cooldown`, `providers/index`) need a brief reconcile pass before extraction.
 - **Phase 3 (deploy):** done — Render runs from this monorepo (see [DEPLOY_MIGRATION.md](../DEPLOY_MIGRATION.md)).
 - **Phase 4 (retire old repos):** blocked on Phase 0/2.
 

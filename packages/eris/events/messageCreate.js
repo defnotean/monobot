@@ -108,12 +108,12 @@
  *                                 buildTwinContext, detectMoment, periodicUpdate.
  *     - ai/memory.js            — buildMemoryContext.
  *     - ai/longmemory.js        — buildLongTermContext, analyzeExchange.
- *     - ai/responsestyle.js     — pickResponseStyle, shouldLaze,
- *                                 getImperfectionHint.
+ *     - @defnotean/shared/responsestyle — pickResponseStyle, shouldLaze,
+ *                                          getImperfectionHint.
  *     - ai/contextCompressor.js — compressHistory (history budget enforcer).
  *     - ai/tools.js / ai/toolRegistry.js — tool catalog + novelty block.
  *     - ai/bumpReminder.js      — detectBumpService, handleBumpConfirm.
- *     - utils/humanDelay.js     — sendHumanReply (realistic typing + split).
+ *     - @defnotean/shared/humanDelay — sendHumanReply (realistic typing + split).
  *     - utils/cooldown.js       — checkCooldown.
  *     - events/ready.js         — markActivity.
  *
@@ -171,21 +171,21 @@ import { detectBumpService, handleBumpConfirm } from "../ai/bumpReminder.js";
 // default, Gemini available via AI_PROVIDER=gemini). See ai/providers/index.js
 import { isRateLimited, runGeminiChat, toGeminiTools, looksLikeTask, quickReply, setRateLimitCallbacks } from "../ai/providers/index.js";
 import { checkInjection, logBlockedAttempt, spotlight } from "../ai/firewall.js";
-import { buildTemporalContext } from "../ai/temporal.js";
+import { buildTemporalContext } from "@defnotean/shared/temporal";
 import { buildPersonalityContext, trackInteraction as trackPersonality, _getData as getPersonalityData } from "../ai/personality.js";
 import { buildPreoccupationContext, tickPreoccupation } from "../ai/preoccupations.js";
-import { getMemoryQuirkHint } from "../ai/memoryQuirks.js";
+import { getMemoryQuirkHint } from "@defnotean/shared/memoryQuirks";
 import { buildOpinionContext } from "../ai/opinions.js";
 import { buildSelfCanonContext } from "../ai/selfCanon.js";
 import { buildTwinStateContext } from "../utils/twinState.js";
 import { buildLongTermContext, analyzeExchange } from "../ai/longmemory.js";
-import { pickResponseStyle, shouldLaze, getImperfectionHint } from "../ai/responsestyle.js";
+import { pickResponseStyle, shouldLaze, getImperfectionHint } from "@defnotean/shared/responsestyle";
 import { compressHistory } from "../ai/contextCompressor.js";
 import { EVERYONE_TOOLS, OWNER_TOOLS } from "../ai/tools.js";
 import { registry as toolRegistry } from "../ai/toolRegistry.js";
 import { executeTool } from "../ai/executor.js";
 import { quickSentiment } from "../ai/sentiment.js";
-import { sendHumanReply } from "../utils/humanDelay.js";
+import { sendHumanReply } from "@defnotean/shared/humanDelay";
 
 let _humanityCounter = 0;
 

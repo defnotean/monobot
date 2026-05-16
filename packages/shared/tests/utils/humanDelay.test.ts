@@ -5,7 +5,7 @@ import {
   splitHumanReply,
   TYPING_MIN_MS,
   TYPING_MAX_MS,
-} from "../../utils/humanDelay.js";
+} from "../../src/utils/humanDelay.js";
 
 describe("calculateTypingDelay", () => {
   it("is bounded below by TYPING_MIN_MS for trivial inputs", () => {
