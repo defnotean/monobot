@@ -722,8 +722,15 @@ Write ONE reflection — a higher-order observation about yourself. Example: "i'
   async function _runMemoryMaintenanceCycle() {
     try {
       const { runMemoryMaintenance } = await import("../ai/semantic.js");
-      const result = await runMemoryMaintenance();
-      log(`[Memory] Maintenance pass — pruned ${result?.pruned ?? 0} stale memories`);
+      // Scope to this bot — consolidation needs a botId to enumerate the
+      // overflowing users for. Without it consolidation no-ops and only the
+      // prune leg runs.
+      const result = await runMemoryMaintenance({ botId: config.botName });
+      log(
+        `[Memory] Maintenance pass — pruned ${result?.pruned ?? 0} stale memories, ` +
+        `consolidated ${result?.consolidatedUsers ?? 0} user(s)` +
+        (result?.consolidationSkipped ? ` (skipped ${result.consolidationSkipped} over budget)` : "")
+      );
     } catch (e) {
       log(`[Memory] Maintenance failed: ${e.message}`);
     }

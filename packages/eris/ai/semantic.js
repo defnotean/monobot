@@ -333,18 +333,62 @@ export async function searchRelevantMemories(botId, userId, messageText, limit =
 //     are exempt — those are the load-bearing ones humans actually carry.
 //   - dedupe-on-insert: lives in storeEpisode (above), bumps existing rows
 //     instead of stacking paraphrases.
-//   - consolidate: TODO — when a user is over MEMORY_CONSOLIDATE_LIMIT (default
-//     500) memories, the oldest ~100 should be LLM-summarized into one
-//     consolidated row and the originals deleted. Deferred: an LLM round-trip
-//     per overflowing user is a non-trivial cost surface and wants a separate
-//     pass with per-provider budgeting + a way to flag the summary so it isn't
-//     re-summarized. Prune + dedupe alone bound growth in practice.
+//   - consolidate: when a user has > MEMORY_CONSOLIDATION_THRESHOLD generic
+//     "exchange" memories, the oldest ~100 are LLM-summarized into a single
+//     "consolidated" row and the originals deleted. The LLM call uses the
+//     active provider's fast/cheap model. A per-process daily counter caps the
+//     spend; when the cap is hit we skip and try next cycle. On LLM failure
+//     the originals are NOT deleted — the cycle retries on the next pass.
 
 function envInt(key, fallback) {
   const raw = process.env[key];
   if (raw == null || raw === "") return fallback;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// Types that consolidation is allowed to touch. Mirrors the pruneType default:
+// emotionally-significant memories (bond, tension, venting, opinion, etc.)
+// are exempt — they're load-bearing and must never collapse into a summary.
+export const CONSOLIDATABLE_TYPE = "exchange";
+// Type written for the synthesized summary row. Distinct so future passes
+// don't re-summarize a summary (and so callers can filter it out of retrieval
+// if they want only raw episodes).
+export const CONSOLIDATED_TYPE = "consolidated";
+
+// ─── Daily cost cap ────────────────────────────────────────────────────────
+// Process-local counter — max LLM consolidation calls per rolling 24h window.
+// Counter resets when the window expires (lazy: checked on each call). Exposed
+// for tests via __setConsolidationBudget / __getConsolidationBudget.
+const _budget = { used: 0, windowStartedAt: Date.now() };
+const ONE_DAY_MS = 24 * 3600_000;
+
+function ensureBudgetWindow() {
+  if (Date.now() - _budget.windowStartedAt >= ONE_DAY_MS) {
+    _budget.used = 0;
+    _budget.windowStartedAt = Date.now();
+  }
+}
+
+function consolidationBudgetExhausted() {
+  ensureBudgetWindow();
+  const max = envInt("MEMORY_CONSOLIDATION_MAX_PER_DAY", 50);
+  return _budget.used >= max;
+}
+
+function consumeConsolidationBudget() {
+  ensureBudgetWindow();
+  _budget.used += 1;
+}
+
+// Test hooks — keep the budget controllable from outside without exposing
+// the closure variable directly.
+export function __setConsolidationBudget(used, windowStartedAt = Date.now()) {
+  _budget.used = used;
+  _budget.windowStartedAt = windowStartedAt;
+}
+export function __getConsolidationBudget() {
+  return { used: _budget.used, windowStartedAt: _budget.windowStartedAt };
 }
 
 /**
@@ -394,33 +438,284 @@ export async function pruneMemories(opts = {}) {
   }
 }
 
-/**
- * Consolidate the oldest memories for a given (bot_id, user_id) when they
- * exceed the per-user cap. PLACEHOLDER: the actual LLM-summarization step is
- * deferred — see the module-level note above. For now this no-ops and returns
- * a structured result so the scheduler can call it safely.
- *
- * TODO: when implemented, the flow is:
- *   1. count memories for (botId, userId)
- *   2. if > MEMORY_CONSOLIDATE_LIMIT (default 500): pull oldest ~100, summarize
- *      them via the configured LLM provider into a single "consolidated_summary"
- *      typed row, then delete the originals in a single statement.
- *   3. cap consolidations to N per maintenance cycle to bound cost.
- */
-export async function consolidateMemories(_botId, _userId, _opts = {}) {
-  // No-op pending LLM consolidation pass.
-  return { consolidated: false, reason: "not-implemented" };
+// Default LLM summarizer: uses the active provider's quickReply path (fast/cheap
+// model — Gemini Flash, NVIDIA fast, OpenAI-compat fast, etc.). Returns null
+// on any failure so the caller treats it as a soft failure and keeps the
+// originals. Imported lazily so semantic.js doesn't pull the entire provider
+// graph at module load.
+async function defaultSummarizer(fragments) {
+  try {
+    const { quickReply } = await import("./providers/index.js");
+    const sys = "Summarize the following 100 memory fragments into one paragraph capturing the through-line. Preserve dates and proper nouns when they matter. Reply with the paragraph only, no preamble.";
+    const numbered = fragments
+      .map((f, i) => `${i + 1}. ${f}`)
+      .join("\n")
+      .slice(0, 8000);
+    // quickReply takes (client, sysInstr, userText, context). The Gemini path
+    // ignores `client` because it constructs its own; other providers also
+    // accept null. We pass null and let the provider build its own client.
+    const text = await quickReply(null, sys, numbered, null);
+    return (typeof text === "string" && text.trim()) ? text.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * One full maintenance cycle: prune-by-age across all users for this bot.
- * Scheduled to run on a 6h interval from events/ready.js. Safe to call when
- * Supabase is not configured (no-ops).
+ * Consolidate the oldest generic memories for (botId, userId) when they exceed
+ * MEMORY_CONSOLIDATION_THRESHOLD (default 300). Flow:
+ *
+ *   1. Count "exchange"-type rows for (botId, userId).
+ *   2. If <= threshold → no-op, return { consolidated: false, reason }.
+ *   3. Fetch the oldest 100 rows.
+ *   4. Call the LLM to summarize → if it fails or returns empty, RETURN early
+ *      WITHOUT deleting (soft retry on next cycle).
+ *   5. Insert a single "consolidated"-type row with the summary.
+ *   6. Delete the 100 originals by id.
+ *   7. Increment the per-process daily budget counter.
+ *
+ * Options:
+ *   - threshold: override MEMORY_CONSOLIDATION_THRESHOLD env (default 300)
+ *   - batchSize: how many of the oldest to fold into one summary (default 100)
+ *   - summarize(fragments): inject a custom summarizer (used by tests). Must
+ *     return a string or null. Defaults to the active provider's quickReply.
+ *   - dryRun: when true, log what WOULD happen but don't write or delete.
+ *     Useful when the LLM dispatch path is too coupled or unavailable in a
+ *     given environment.
+ *
+ * Returns: { consolidated: boolean, reason?: string, inserted?: boolean,
+ *   deleted?: number, dryRun?: boolean }
+ */
+export async function consolidateMemories(botId, userId, opts = {}) {
+  if (!botId || !userId) {
+    return { consolidated: false, reason: "missing-identifiers" };
+  }
+
+  if (consolidationBudgetExhausted()) {
+    return { consolidated: false, reason: "budget-exhausted" };
+  }
+
+  let supabase;
+  try {
+    const { getSupabase } = await import("../database.js");
+    supabase = getSupabase();
+  } catch {
+    return { consolidated: false, reason: "no-supabase" };
+  }
+  if (!supabase) return { consolidated: false, reason: "no-supabase" };
+
+  const threshold = opts.threshold ?? envInt("MEMORY_CONSOLIDATION_THRESHOLD", 300);
+  const batchSize = opts.batchSize ?? 100;
+  const dryRun = !!opts.dryRun;
+  const summarize = typeof opts.summarize === "function" ? opts.summarize : defaultSummarizer;
+
+  // A single select has to answer two questions:
+  //   1. is this user strictly OVER the threshold (so consolidation kicks in)?
+  //   2. fetch the oldest `batchSize` rows to fold into one summary.
+  // Limit must therefore be at least max(threshold + 1, batchSize). The +1 is
+  // the cheap way to confirm "count > threshold" without a separate count()
+  // round-trip — if the select returns at least threshold+1 rows we know there
+  // are more than threshold without needing the exact total.
+  const selectLimit = Math.max(threshold + 1, batchSize);
+  let candidates;
+  try {
+    const { data, error } = await supabase
+      .from("eris_episodic_memories")
+      .select("id, content, created_at")
+      .eq("bot_id", botId)
+      .eq("user_id", userId)
+      .eq("type", CONSOLIDATABLE_TYPE)
+      .order("created_at", { ascending: true })
+      .limit(selectLimit);
+    if (error) return { consolidated: false, reason: "select-error" };
+    candidates = data || [];
+  } catch {
+    return { consolidated: false, reason: "select-error" };
+  }
+
+  // Under threshold → no-op. We need strictly more than the threshold for
+  // consolidation to kick in (so a user sitting AT the threshold doesn't get
+  // their oldest 100 erased every 6h).
+  if (candidates.length <= threshold) {
+    return { consolidated: false, reason: "under-threshold", count: candidates.length };
+  }
+
+  // Not enough rows for a full batch — e.g. threshold=10 but only 11 rows
+  // exist; we'd rather wait until the user has 100+ overflow than synthesize a
+  // 1-row "summary". Bail rather than form a thin batch.
+  if (candidates.length < batchSize) {
+    return { consolidated: false, reason: "insufficient-batch", count: candidates.length };
+  }
+
+  const toFold = candidates.slice(0, batchSize);
+
+  if (dryRun) {
+    log(`[Memory] consolidation dry-run: would fold ${toFold.length} memories for ${botId}/${userId}`);
+    return { consolidated: false, reason: "dry-run", dryRun: true, count: toFold.length };
+  }
+
+  // LLM summarization — soft failure: if the model returns null/empty, we
+  // keep the originals and try again next cycle. The budget is consumed
+  // BEFORE the call so a repeatedly-failing provider doesn't burn through
+  // the daily budget; the increment is conservative and bounds the worst
+  // case to MEMORY_CONSOLIDATION_MAX_PER_DAY failed attempts per day.
+  consumeConsolidationBudget();
+
+  const fragments = toFold.map(r => r.content || "").filter(Boolean);
+  let summary;
+  try {
+    summary = await summarize(fragments);
+  } catch (e) {
+    log(`[Memory] consolidation summarize threw: ${e.message}`);
+    return { consolidated: false, reason: "llm-error" };
+  }
+
+  if (!summary || typeof summary !== "string" || !summary.trim()) {
+    return { consolidated: false, reason: "llm-empty" };
+  }
+
+  // Insert the consolidated summary first. Only delete the originals AFTER
+  // the insert succeeds — if the insert fails we'd otherwise lose data with
+  // no record of what was consolidated.
+  const oldestAt = toFold[0]?.created_at;
+  const newestAt = toFold[toFold.length - 1]?.created_at;
+  const consolidatedRow = {
+    bot_id: botId,
+    user_id: userId,
+    channel_id: null,
+    guild_id: null,
+    type: CONSOLIDATED_TYPE,
+    content: `[consolidated ${toFold.length} memories ${oldestAt || ""}→${newestAt || ""}] ${summary}`.slice(0, 500),
+    keywords: [],
+  };
+
+  try {
+    const { error: insertErr } = await supabase
+      .from("eris_episodic_memories")
+      .insert(consolidatedRow);
+    if (insertErr) {
+      log(`[Memory] consolidation insert failed: ${insertErr.message}`);
+      return { consolidated: false, reason: "insert-error" };
+    }
+  } catch (e) {
+    log(`[Memory] consolidation insert threw: ${e.message}`);
+    return { consolidated: false, reason: "insert-error" };
+  }
+
+  // Delete the originals. If this fails (partial delete is possible), we've
+  // double-counted a few exchanges in the consolidated row + the leftover
+  // originals, but no data has been lost — much better than the reverse.
+  let deleted = 0;
+  try {
+    const ids = toFold.map(r => r.id).filter(Boolean);
+    let deleteQ = supabase
+      .from("eris_episodic_memories")
+      .delete()
+      .eq("bot_id", botId)
+      .eq("user_id", userId)
+      .eq("type", CONSOLIDATABLE_TYPE);
+    // Prefer .in() when the fake/real supabase supports it; fall back to
+    // per-id .eq() deletes through the chain otherwise. The chainable fake
+    // in tests only supports .eq(), so we expose both code paths.
+    if (typeof deleteQ.in === "function") {
+      deleteQ = deleteQ.in("id", ids);
+      const result = await deleteQ;
+      deleted = result?.count ?? ids.length;
+    } else {
+      // Sequential per-id delete — slower but works against the eq-only fake.
+      for (const id of ids) {
+        const r = await supabase
+          .from("eris_episodic_memories")
+          .delete()
+          .eq("bot_id", botId)
+          .eq("user_id", userId)
+          .eq("id", id);
+        if (!r?.error) deleted += r?.count ?? 1;
+      }
+    }
+  } catch (e) {
+    log(`[Memory] consolidation delete partial: ${e.message}`);
+  }
+
+  log(`[Memory] consolidated ${toFold.length} memories for ${botId}/${userId} → 1 summary (deleted ${deleted})`);
+  return { consolidated: true, inserted: true, deleted, count: toFold.length };
+}
+
+/**
+ * Run consolidation across every user that's over the threshold for this bot.
+ * Iterates users in batches, calling consolidateMemories per-user. Stops early
+ * when the daily budget is exhausted. Safe to call when Supabase is missing.
+ */
+export async function consolidateAllOverThreshold(opts = {}) {
+  const result = { users: 0, consolidated: 0, skipped: 0 };
+  try {
+    const { getSupabase } = await import("../database.js");
+    const supabase = getSupabase();
+    if (!supabase) return result;
+    if (!opts.botId) return result;
+
+    const threshold = opts.threshold ?? envInt("MEMORY_CONSOLIDATION_THRESHOLD", 300);
+
+    // Find candidate users via an aggregate query. Many supabase setups don't
+    // expose a clean GROUP BY through PostgREST so we fall back to fetching
+    // distinct user_ids the cheap way: a select with the type filter, then
+    // tally in memory. Capped at a generous upper bound so a huge table
+    // doesn't OOM the worker.
+    let rows;
+    try {
+      const { data } = await supabase
+        .from("eris_episodic_memories")
+        .select("user_id")
+        .eq("bot_id", opts.botId)
+        .eq("type", CONSOLIDATABLE_TYPE)
+        .limit(50_000);
+      rows = data || [];
+    } catch {
+      return result;
+    }
+
+    const counts = new Map();
+    for (const r of rows) {
+      const u = r.user_id;
+      if (!u) continue;
+      counts.set(u, (counts.get(u) || 0) + 1);
+    }
+    const over = [...counts.entries()].filter(([, n]) => n > threshold).map(([u]) => u);
+
+    for (const userId of over) {
+      if (consolidationBudgetExhausted()) {
+        result.skipped += 1;
+        continue;
+      }
+      const r = await consolidateMemories(opts.botId, userId, opts);
+      result.users += 1;
+      if (r?.consolidated) result.consolidated += 1;
+      else if (r?.reason === "budget-exhausted") result.skipped += 1;
+    }
+  } catch (e) {
+    log(`[Memory] consolidateAllOverThreshold failed: ${e.message}`);
+  }
+  return result;
+}
+
+/**
+ * One full maintenance cycle: prune-by-age, then consolidate users over the
+ * threshold. Scheduled to run on a 6h interval from events/ready.js. Safe to
+ * call when Supabase is not configured (no-ops).
  */
 export async function runMemoryMaintenance(opts = {}) {
-  const result = await pruneMemories(opts);
-  // Consolidation is opt-in until the LLM path lands — see consolidateMemories.
-  return { pruned: result.deleted };
+  const pruneResult = await pruneMemories(opts);
+  // Consolidation only runs when botId is provided — we need to scope the
+  // candidate-user scan. The 6h scheduler in events/ready.js passes botId.
+  let consolidationResult = { users: 0, consolidated: 0, skipped: 0 };
+  if (opts.botId) {
+    consolidationResult = await consolidateAllOverThreshold(opts);
+  }
+  return {
+    pruned: pruneResult.deleted,
+    consolidatedUsers: consolidationResult.consolidated,
+    consolidationSkipped: consolidationResult.skipped,
+  };
 }
 
 /**
