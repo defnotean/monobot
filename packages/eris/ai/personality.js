@@ -1,6 +1,77 @@
-// ─── Personality Learning System ─────────────────────────────────────────────
-// Makes bots grow like real people over time. Tracks interaction patterns,
-// evolves personality traits, learns catchphrases, adapts to users/servers.
+/**
+ * @file packages/eris/ai/personality.js
+ * @module eris/ai/personality
+ *
+ * Eris's personality, voice, and mood model — the long-lived state that makes
+ * her feel like a continuous character across restarts instead of a stateless
+ * chat completion. This module owns the slow-moving "who Eris is right now"
+ * data; the static base prompt template lives elsewhere (see
+ * `packages/eris/prompts/`) and is composed at request time by
+ * `executor.js`, which calls `buildPersonalityContext()` from this file and
+ * concatenates its output into the system prompt.
+ *
+ * What gets loaded:
+ *   - `traits`         — five-axis personality vector (warmth, sarcasm, chaos,
+ *                        helpfulness, energy), each clamped to [-1, 1].
+ *   - `mood_history`   — rolling 30-day window of per-day average sentiment,
+ *                        used as the anchor that drift slowly pulls toward.
+ *   - `opinions`       — durable stances Eris has formed (topic + reason +
+ *                        timestamp); read/written here, but populated mostly
+ *                        by sibling module `ai/opinions.js` via the
+ *                        `_getData()` / `_markOpinionsDirty()` accessors.
+ *   - `catchphrases`   — phrases that earned positive reactions; the top 20
+ *                        get fed back into the prompt as voice anchors.
+ *   - `user_styles`    — per-user adaptation (avg message length, emoji
+ *                        density, recurring topics).
+ *   - `server_vibes`   — per-guild aggregate sentiment + recurring topics.
+ *   - `lessons_learned` and `self_facts` — written by other modules,
+ *                        round-tripped here so the persistence schema stays
+ *                        in one place.
+ *
+ * Lazy-load pattern:
+ *   This module uses the older single-flag `if (_data) return _data` guard
+ *   inside an async `ensureLoaded()`. It is NOT race-safe under concurrent
+ *   boot-time callers — Irene's sibling module switched to a shared
+ *   `_loadPromise` pattern after observing duplicate Supabase selects and
+ *   colliding upserts during cold start. Eris has not been migrated yet;
+ *   if you start seeing duplicate `[Personality] Loaded for eris` log lines,
+ *   port Irene's pattern here.
+ *
+ * Mood / drift model:
+ *   Every `DRIFT_INTERVAL` (100) interactions, `driftPersonality()` nudges
+ *   each trait by small deltas (0.003–0.01) based on the recent sentiment
+ *   buffer and help-request ratio, then applies a 0.1% pull toward the
+ *   baseline of 0 — but only for traits already past |0.3|. The asymmetry
+ *   is intentional: positive sentiment moves warmth up faster than it moves
+ *   it down, so genuine warmth sticks; chaos is reinforced by high-variance
+ *   days. The slow decay (10x slower than Irene's) means Eris's drifted
+ *   personality is anchored more firmly than her twin's.
+ *
+ * Opinion persistence:
+ *   Opinions live in the same Supabase row as traits (`eris_personality_learning`).
+ *   Sibling modules mutate `_data.opinions` directly through `_getData()` and
+ *   call `_markOpinionsDirty()` to trigger the debounced save instead of
+ *   re-implementing the load/save plumbing. All persistence flows through
+ *   the 10-second debounced `scheduleSave()` or the immediate `flush()` that
+ *   should be wired into SIGINT/SIGTERM handlers.
+ *
+ * Per-turn injection into the system prompt:
+ *   `buildPersonalityContext(userId, guildId)` is the only function the
+ *   request pipeline needs. It returns a short bracketed-line summary of
+ *   anything currently noticeable: drifted traits past |0.05|, the
+ *   addressed user's style preferences, the server's vibe, and up to five
+ *   high-reaction catchphrases. The caller appends this string to the base
+ *   prompt; empty output (no signal yet) returns "" and is harmless to
+ *   concatenate.
+ *
+ * Placeholder substitution:
+ *   This module does NOT perform `{{OWNER_ID}}` / `{{TWIN_BOT_ID}}`
+ *   substitution. Those tokens live in the static prompt templates loaded
+ *   by `packages/eris/prompts/loader.ts`, which resolves them from
+ *   `config.js` (env-driven) before the request hits the model. Keep IDs
+ *   out of this file — `_getData()` returns user data verbatim, and IDs
+ *   stored here would leak into the open-source schema.
+ */
 
 import { log } from "../utils/logger.js";
 
