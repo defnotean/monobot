@@ -60,9 +60,6 @@ export const SERVICES = {
   },
 };
 
-// Legacy export kept so imports from before the rewrite don't break.
-export const DISBOARD_ID = SERVICES.disboard.botId;
-
 // Per-guild cross-service escalation buffer. Key: `${guildId}:${serviceKey}`
 // Values: { timer, channelId, scheduledAt, messageId, escalated, rank }
 const _activeTimers = new Map();
@@ -133,11 +130,9 @@ export async function handleBumpConfirm(message, serviceKeyOverride = null) {
   const svc = SERVICES[serviceKey];
 
   const settings = getGuildSettings(guildId) || {};
-  // Per-service enable flag. Default to true for DISBOARD (backward compat),
-  // false for others (opt-in via /bumpconfig service enable X).
+  // Per-service enable flag. Only services listed in bump_enabled_services run.
   const enabledServices = settings.bump_enabled_services;
   if (Array.isArray(enabledServices) && !enabledServices.includes(serviceKey)) return;
-  if (!Array.isArray(enabledServices) && serviceKey !== "disboard") return;
 
   // Record the bump for analytics (leaderboard/streak).
   try {
@@ -190,12 +185,6 @@ export async function handleBumpConfirm(message, serviceKeyOverride = null) {
 
   const scheduledAt = Date.now() + svc.cooldownMinutes * 60 * 1000;
 
-  // Persist per-service. The "primary" legacy fields stay in sync with the
-  // most-recent bump so old code paths keep working.
-  setGuildSetting(guildId, "bump_channel_id", channelId);
-  setGuildSetting(guildId, "bump_scheduled_at", scheduledAt);
-  setGuildSetting(guildId, "bump_last_service", serviceKey);
-
   // Per-service scheduled-at map: { [serviceKey]: { scheduledAt, channelId } }
   const perService = { ...(settings.bump_scheduled_by_service || {}) };
   perService[serviceKey] = { scheduledAt, channelId };
@@ -233,10 +222,6 @@ function _schedule(client, guildId, serviceKey, channelId, scheduledAt) {
       const perService = { ...(settings.bump_scheduled_by_service || {}) };
       delete perService[serviceKey];
       setGuildSetting(guildId, "bump_scheduled_by_service", perService);
-      // Also clear legacy fields if this was the most recent service.
-      if (settings.bump_last_service === serviceKey) {
-        setGuildSetting(guildId, "bump_scheduled_at", null);
-      }
     } catch {}
   }, delay);
 
@@ -631,7 +616,7 @@ async function payFirstBumperBonus(guildId, serviceKey, userId, client) {
 
     const guild = client?.guilds?.cache?.get(guildId);
     const settings = getGuildSettings(guildId) || {};
-    const channelId = settings.bump_reminder_channel_id || settings.bump_channel_id;
+    const channelId = settings.bump_reminder_channel_id;
     const channel = channelId ? (guild?.channels?.cache?.get(channelId) ?? await guild?.channels?.fetch?.(channelId).catch(() => null)) : null;
     if (channel?.isTextBased()) {
       channel.send({ content: `<@${userId}> first bump of the window — +${FIRST_BUMPER_BONUS_COINS} coins 🪙`, allowedMentions: { parse: ["users"] } }).catch(() => {});
@@ -700,19 +685,6 @@ export function restoreBumpTimers(client) {
         restored++;
       }
     }
-
-    // Legacy single-service fields — honor them if per-service is empty.
-    if (!Object.keys(perService).length && settings.bump_scheduled_at && settings.bump_channel_id) {
-      const legacyService = settings.bump_last_service || "disboard";
-      if (settings.bump_scheduled_at <= Date.now()) {
-        _fireReminder(client, guild.id, legacyService, settings.bump_channel_id, { wasOffline: true }).catch(() => {});
-        fireNowCount++;
-        setGuildSetting(guild.id, "bump_scheduled_at", null);
-      } else {
-        _schedule(client, guild.id, legacyService, settings.bump_channel_id, settings.bump_scheduled_at);
-        restored++;
-      }
-    }
   }
 
   if (restored || fireNowCount) {
@@ -726,10 +698,9 @@ export function snoozeReminder(guildId, serviceKey, minutes = 15, client = null)
   const key = keyFor(guildId, serviceKey);
   const existing = _activeTimers.get(key);
   const settings = getGuildSettings(guildId) || {};
-  const channelId = settings.bump_reminder_channel_id || settings.bump_channel_id;
+  const channelId = settings.bump_reminder_channel_id;
 
   const newAt = Date.now() + minutes * 60 * 1000;
-  setGuildSetting(guildId, "bump_scheduled_at", newAt);
   const perService = { ...(settings.bump_scheduled_by_service || {}) };
   perService[serviceKey] = { scheduledAt: newAt, channelId };
   setGuildSetting(guildId, "bump_scheduled_by_service", perService);

@@ -6,8 +6,3 @@ npm-debug.log*
 dist/
 coverage/
 *.log
-
-# Prompt Guard 2 ONNX model files — fetched per-environment via
-# `npm run download:prompt-guard` (see scripts/download-prompt-guard.js).
-# Total ~280MB; not appropriate for git.
-models/

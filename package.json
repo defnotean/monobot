@@ -16,7 +16,6 @@
     "test:eris": "npm test --workspace=@defnotean/eris",
     "test:irene": "npm test --workspace=@defnotean/irene",
     "lint:version-sync": "node scripts/verify-version-sync.js",
-    "download:prompt-guard": "node scripts/download-prompt-guard.js",
     "new:tool": "node scripts/scaffold-tool.js",
     "new:command": "node scripts/scaffold-command.js",
     "new:event": "node scripts/scaffold-event.js",
@@ -27,9 +26,6 @@
   },
   "author": "defnotean",
   "license": "ISC",
-  "dependencies": {
-    "onnxruntime-node": "^1.25.1"
-  },
   "overrides": {
     "protobufjs": "^7.5.5",
     "tar": "^7.5.13"

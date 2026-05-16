@@ -104,9 +104,9 @@ export async function execute(client) {
 
   // ── Ensure creator always has max affinity ───
   const { getRelationship, updateRelationship } = await import("../database.js");
-  const creatorRel = getRelationship(config.userId);
+  const creatorRel = getRelationship(config.ownerId);
   if (creatorRel.affinity_score < 100) {
-    updateRelationship(config.userId, 100 - creatorRel.affinity_score);
+    updateRelationship(config.ownerId, 100 - creatorRel.affinity_score);
     log(`[Bot] Creator affinity set to 100`);
   }
 
@@ -115,11 +115,11 @@ export async function execute(client) {
   // or servers that were un-whitelisted while the bot was offline.
   log(`[WHITELIST] startup sweep — ${client.guilds.cache.size} guilds in cache`);
   for (const guild of client.guilds.cache.values()) {
-    const ownerIsGuildOwner = guild.ownerId === config.userId;
+    const ownerIsGuildOwner = guild.ownerId === config.ownerId;
     const whitelisted       = isWhitelisted(guild.id);
     // Fetch bot owner member to check if they're in this guild
-    const ownerMember       = guild.members.cache.get(config.userId)
-      ?? await guild.members.fetch(config.userId).catch(() => null);
+    const ownerMember       = guild.members.cache.get(config.ownerId)
+      ?? await guild.members.fetch(config.ownerId).catch(() => null);
 
     if (!ownerIsGuildOwner && !whitelisted && !ownerMember) {
       log(`[GATEKEEP] Startup sweep — leaving unauthorized server "${guild.name}" (${guild.id})`);
@@ -694,7 +694,7 @@ Write as Irene thinking to herself. Lowercase.`,
 
   // Initial presence grab
   for (const guild of client.guilds.cache.values()) {
-    const member = guild.members.cache.get(config.userId);
+    const member = guild.members.cache.get(config.ownerId);
     if (member?.presence) {
       updatePresence(member.presence);
       break;

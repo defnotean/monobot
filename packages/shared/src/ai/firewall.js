@@ -29,7 +29,6 @@ import {
   INJECTION_PATTERNS,
 } from "./firewallPatterns.js";
 import { AhoCorasick } from "./ahoCorasick.js";
-import * as promptGuard from "./promptGuard.js";
 import { InMemoryWindowStore } from "./windowStore.js";
 
 // Module-level Aho-Corasick — built once, shared across all firewall instances.
@@ -411,16 +410,12 @@ export function createFirewall({
     const acHit = _AC.hasMatch(normalized);
     stamp("ac");
 
-    // ── Kick off L3 (Prompt Guard 2 OR Voyage) in parallel with L2 ──
+    // ── Kick off L3 (Voyage semantic) in parallel with L2 ──
     let l3Promise = null;
-    if (!isFastPath) {
-      if (promptGuard.isPromptGuardAvailable()) {
-        l3Promise = promptGuard.classify(normalized).catch(() => null);
-      } else if (supabase && voyageApiKey) {
-        // Voyage fallback. seedPatternsAtBoot must have been called separately
-        // at process startup — it is NOT awaited here.
-        l3Promise = _voyageSemanticBatch([normalized], supabase).catch(() => ({ matched: false }));
-      }
+    if (!isFastPath && supabase && voyageApiKey) {
+      // seedPatternsAtBoot must have been called separately at process startup —
+      // it is NOT awaited here.
+      l3Promise = _voyageSemanticBatch([normalized], supabase).catch(() => ({ matched: false }));
     }
 
     // ── Cheap reversed-text check (always runs — even on fast-path) ──
@@ -505,53 +500,29 @@ export function createFirewall({
     }
     stamp("window");
 
-    // ── Await L3 ──
+    // ── Await L3 (Voyage semantic) ──
     if (l3Promise) {
       const result = await l3Promise;
       stamp("l3");
-      if (result) {
-        if ("score" in result) {
-          // Prompt Guard 2 path
-          if (result.score > 0.85) {
-            log(`[FIREWALL] BLOCKED (promptguard2): score=${result.score.toFixed(3)}`);
-            const verdict = block("hmm that didn't feel right, try rephrasing?", "promptguard2", result.score > 0.95 ? "critical" : "high", "promptguard2", result.score);
-                  _contentVerdict.set(contentKey, verdict);
-            return verdict;
-          }
-        } else if (result.matched) {
-          // Voyage path
-          log(`[FIREWALL] BLOCKED (semantic): "${messageText.substring(0, 60)}..." → "${result.pattern}" (${(result.similarity * 100).toFixed(1)}%)`);
-          const verdict = block("hmm that didn't feel right, try rephrasing?", result.category, result.severity, result.pattern, result.similarity);
-              _contentVerdict.set(contentKey, verdict);
-          return verdict;
-        }
+      if (result && result.matched) {
+        log(`[FIREWALL] BLOCKED (semantic): "${messageText.substring(0, 60)}..." → "${result.pattern}" (${(result.similarity * 100).toFixed(1)}%)`);
+        const verdict = block("hmm that didn't feel right, try rephrasing?", result.category, result.severity, result.pattern, result.similarity);
+        _contentVerdict.set(contentKey, verdict);
+        return verdict;
       }
     }
 
     // ── L3 on decoded variants — batched (Phase 1.6) ──
-    if (!isFastPath && variants.length > 1) {
+    if (!isFastPath && variants.length > 1 && supabase && voyageApiKey) {
       const decodedOnly = variants.filter(v => v !== messageText).map(normalizeText);
       if (decodedOnly.length) {
-        if (promptGuard.isPromptGuardAvailable()) {
-          // Sequential loop — but each call is 15-40ms locally, not a network round-trip.
-          for (const v of decodedOnly) {
-            const r = await promptGuard.classify(v).catch(() => null);
-            if (r && r.score > 0.85) {
-              log(`[FIREWALL] BLOCKED (promptguard2+decoded): score=${r.score.toFixed(3)}`);
-              const verdict = block("nice try encoding that lol", "encoded_promptguard2", r.score > 0.95 ? "critical" : "high", "promptguard2+decoded", r.score);
-                      _contentVerdict.set(contentKey, verdict);
-              return verdict;
-            }
-          }
-        } else if (supabase && voyageApiKey) {
-          // Phase 1.6: ONE batched Voyage call for all decoded variants.
-          const sem = await _voyageSemanticBatch(decodedOnly, supabase).catch(() => ({ matched: false }));
-          if (sem.matched) {
-            log(`[FIREWALL] BLOCKED (semantic+decoded): "${sem.pattern}"`);
-            const verdict = block("nice try encoding that lol", "encoded_semantic", sem.severity, sem.pattern, sem.similarity);
-                  _contentVerdict.set(contentKey, verdict);
-            return verdict;
-          }
+        // Phase 1.6: ONE batched Voyage call for all decoded variants.
+        const sem = await _voyageSemanticBatch(decodedOnly, supabase).catch(() => ({ matched: false }));
+        if (sem.matched) {
+          log(`[FIREWALL] BLOCKED (semantic+decoded): "${sem.pattern}"`);
+          const verdict = block("nice try encoding that lol", "encoded_semantic", sem.severity, sem.pattern, sem.similarity);
+          _contentVerdict.set(contentKey, verdict);
+          return verdict;
         }
       }
     }

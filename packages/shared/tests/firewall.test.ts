@@ -11,10 +11,9 @@ import {
   InMemoryWindowStore,
 } from "../src/ai/firewall.js";
 
-// Voyage L3 is gated by truthy apiKey, so passing null disables external calls.
-// PromptGuard 2 ONNX is also unavailable in CI (no model file) — both L3 paths
-// silently no-op, leaving L1/L1.5/L2/L2.5 to do the work, which is exactly the
-// surface this test file targets.
+// Voyage L3 is gated by truthy apiKey, so passing null disables external calls,
+// leaving L1/L1.5/L2/L2.5 to do the work, which is exactly the surface this
+// test file targets.
 type Firewall = ReturnType<typeof createFirewall>;
 
 const mkFw = (overrides: Record<string, unknown> = {}): Firewall =>

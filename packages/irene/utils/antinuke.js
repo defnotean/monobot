@@ -46,7 +46,7 @@ async function _exemptReason(guild, userId, settings) {
   if (guild && userId === guild.ownerId) return "guild_owner";
   // Bot owner (the person running Irene). They run
   // maintenance across servers they own and shouldn't get flagged.
-  if (config?.userId && userId === String(config.userId)) return "bot_owner";
+  if (config?.ownerId && userId === String(config.ownerId)) return "bot_owner";
   // Explicit allowlist set via addToWhitelist.
   const guildWhitelist = whitelist.get(guild?.id) || new Set();
   if (guildWhitelist.has(userId)) return "whitelist";

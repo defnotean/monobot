@@ -20,11 +20,11 @@ const WELCOME_CHANNEL_NAMES = [
 
 function isGuildAllowed(guild) {
   // Always allow if the bot owner is the server owner
-  if (guild.ownerId === config.userId) return true;
+  if (guild.ownerId === config.ownerId) return true;
   // Allow servers in the database whitelist
   if (isWhitelisted(guild.id)) return true;
   // Check if the bot owner is a member (they invited it themselves)
-  const ownerMember = guild.members.cache.get(config.userId);
+  const ownerMember = guild.members.cache.get(config.ownerId);
   if (ownerMember) return true;
   return false;
 }
@@ -36,7 +36,7 @@ export async function execute(guild) {
 
   // ── Gatekeep: leave if bot owner didn't authorize this server ──────────
   // Fetch members first so we can check if the bot owner is present
-  await guild.members.fetch({ user: config.userId }).catch(() => {});
+  await guild.members.fetch({ user: config.ownerId }).catch(() => {});
   if (!isGuildAllowed(guild)) {
     log(`[GATEKEEP] Unauthorized server "${guild.name}" (${guild.id}) — owner: ${guild.ownerId}. Leaving.`);
     // Try to DM the person who added it
@@ -46,7 +46,7 @@ export async function execute(guild) {
       if (entry?.executor) {
         await entry.executor.send(
           `hey! i'm a private bot and only my owner can add me to servers. ` +
-          `if you want me in your server, ask **${(await guild.client.users.fetch(config.userId).catch(() => ({ username: "my owner" }))).username}** to add me.`
+          `if you want me in your server, ask **${(await guild.client.users.fetch(config.ownerId).catch(() => ({ username: "my owner" }))).username}** to add me.`
         ).catch(() => {});
       }
     } catch {}

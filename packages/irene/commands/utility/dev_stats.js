@@ -16,7 +16,7 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction) {
   const client = interaction.client;
-  if (interaction.user.id !== config.userId) {
+  if (interaction.user.id !== config.ownerId) {
     return interaction.reply({ content: "nah, this is for my dev only.", ephemeral: true });
   }
 

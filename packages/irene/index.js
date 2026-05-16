@@ -228,7 +228,7 @@ client.on("shardResume", async (id, replayed) => {
 
 client.on("presenceUpdate", (oldPresence, newPresence) => {
   try {
-    if (newPresence?.userId === config.userId) {
+    if (newPresence?.userId === config.ownerId) {
       updatePresence(newPresence);
     }
   } catch (err) {

@@ -113,7 +113,7 @@ export function startPresenceAPI(client) {
 
     // Only apply IP rate limiting to the public presence API.
     // We MUST exempt /tts/ because Lavalink makes a rapid HEAD request followed instantly by a GET request to play the audio.
-    if (req.url === `/presence/${config.userId}` || req.url === "/presence") {
+    if (req.url === `/presence/${config.ownerId}` || req.url === "/presence") {
       const clientIP = req.socket.remoteAddress;
       const now = Date.now();
       const last = _apiRateLimit.get(clientIP) ?? 0;
@@ -142,12 +142,12 @@ export function startPresenceAPI(client) {
     res.setHeader("Content-Type", "application/json");
     res.setHeader("Cache-Control", "no-cache");
 
-    if (req.url === `/presence/${config.userId}` || req.url === "/presence") {
+    if (req.url === `/presence/${config.ownerId}` || req.url === "/presence") {
       res.writeHead(200);
       res.end(_cachedPresenceJson);
     } else if (req.url === "/health") {
       res.writeHead(200);
-      res.end(JSON.stringify({ ok: true, user: config.userId, bot: client.user?.tag || "connecting..." }));
+      res.end(JSON.stringify({ ok: true, user: config.ownerId, bot: client.user?.tag || "connecting..." }));
     } else if (req.url?.startsWith("/tts/")) {
       // Serve generated TTS audio files
       const rawId = req.url.split("/tts/")[1] || "";
@@ -506,7 +506,7 @@ export function startPresenceAPI(client) {
             const { requester_id, guild_id, channel_id, command, args } = JSON.parse(body);
 
             // 2. Verify requester is owner or trusted
-            const isOwner = requester_id === config.userId;
+            const isOwner = requester_id === config.ownerId;
             const trustedList = db.getTrustedUsers(guild_id);
             const isTrusted = Array.isArray(trustedList) && trustedList.includes(requester_id);
             if (!isOwner && !isTrusted) {

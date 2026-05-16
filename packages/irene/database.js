@@ -831,16 +831,14 @@ function _parseColor(value) {
   return parseInt(raw, 16);
 }
 
-// Resolve the effective settings for a guild. Handles legacy
-// ticket_mod_role_ids data (pre-split) so old configs keep working.
+// Resolve the effective settings for a guild.
 export function getTicketConfig(guildId) {
   const gs = ensureGuild(guildId);
-  const legacy = Array.isArray(gs.ticket_mod_role_ids) ? gs.ticket_mod_role_ids : [];
   return {
     category_id:   gs.ticket_category_id || null,
     types:         Array.isArray(gs.ticket_types) ? gs.ticket_types : [],
-    view_role_ids: Array.isArray(gs.ticket_view_role_ids) ? gs.ticket_view_role_ids : legacy,
-    ping_role_ids: Array.isArray(gs.ticket_ping_role_ids) ? gs.ticket_ping_role_ids : legacy,
+    view_role_ids: Array.isArray(gs.ticket_view_role_ids) ? gs.ticket_view_role_ids : [],
+    ping_role_ids: Array.isArray(gs.ticket_ping_role_ids) ? gs.ticket_ping_role_ids : [],
     view_auto_category: gs.ticket_view_auto_category || null,
     ping_auto_category: gs.ticket_ping_auto_category || null,
     welcome_title:       gs.ticket_welcome_title || null,
@@ -1619,15 +1617,6 @@ export function deleteTempVc(channelId) {
 }
 
 export function getAllTempVcs() {
-  // One-time migration: move any data from the old _global location to the top-level key.
-  // Safe to run on every startup — only fires if old data still exists.
-  const legacyData = data.guild_settings?.["_global"]?.temp_vcs;
-  if (legacyData && Object.keys(legacyData).length > 0) {
-    if (!data.temp_vcs) data.temp_vcs = {};
-    Object.assign(data.temp_vcs, legacyData);
-    delete data.guild_settings["_global"].temp_vcs;
-    save();
-  }
   return data.temp_vcs ?? {};
 }
 
