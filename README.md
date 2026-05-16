@@ -1,5 +1,7 @@
 # defnotean-bots-monorepo
 
+[![Tests](https://github.com/defnotean/defnotean-bots-monorepo/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/defnotean/defnotean-bots-monorepo/actions/workflows/test.yml)
+
 Monorepo housing the twin-bot system: two Discord bots (Eris + Irene) and a shared utilities package.
 
 | Package | What it is | Deploy target |
