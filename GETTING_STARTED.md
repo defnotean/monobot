@@ -7,14 +7,14 @@ This guide takes you from a fresh `git clone` to a running bot in roughly 15 min
 - **Node.js 18+** (`node -v` to check; 20+ recommended)
 - **npm 9+** (ships with Node)
 - A **Discord bot** for whichever bot you want to run — create one at [discord.com/developers/applications](https://discord.com/developers/applications). You need the bot's **token** and **application ID**.
-- An **AI provider key**. Production currently uses OpenRouter (`AI_PROVIDER=openrouter`) with `OPENROUTER_API_KEY` or `OPENROUTER_API_KEYS`; Gemini still works with `AI_PROVIDER=gemini` and `GEMINI_API_KEY`.
+- An **AI provider key**. Gemini (`AI_PROVIDER=gemini` + `GEMINI_API_KEY`) is the simplest start. See [docs/llm-provider-guide.md](./docs/llm-provider-guide.md) for OpenRouter, Groq, Cerebras, or fully-local Ollama / LM Studio setup (no API key needed for the local options).
 - Optional: **Supabase project** (persistence), **Voyage API key** (semantic memory), **Lavalink server** (Irene music features)
 
 ## 1. Clone and install
 
 ```bash
-git clone https://github.com/defnotean/bots-monorepo MonoBot
-cd MonoBot
+git clone https://github.com/defnotean/monobot
+cd monobot
 npm install
 ```
 
@@ -38,9 +38,11 @@ cp packages/eris/.env.example  packages/eris/.env
 cp packages/irene/.env.example packages/irene/.env
 ```
 
-**Minimum to boot Eris:** `DISCORD_TOKEN`, `CLIENT_ID`, and one key for the selected `AI_PROVIDER`. For the current OpenRouter setup, use `OPENROUTER_API_KEY` or `OPENROUTER_API_KEYS`. Supabase warns if missing but the bot still runs ephemerally.
+**Minimum to boot Eris:** `DISCORD_TOKEN`, `CLIENT_ID`, and one AI key (e.g. `GEMINI_API_KEY` if `AI_PROVIDER=gemini`). Supabase warns if missing but the bot still runs in-memory (no economy/memory persistence).
 
-**Minimum to boot Irene:** `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_USER_ID`, one key for the selected `AI_PROVIDER`, `SUPABASE_URL`, `SUPABASE_KEY`, `TWIN_API_SECRET`.
+**Minimum to boot Irene:** `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_USER_ID`, and one AI key. `SUPABASE_URL`/`SUPABASE_KEY` are strongly recommended — Irene boots without them but **loses all moderation state, custom commands, tickets, reminders, etc. on every restart** (set `REQUIRE_PERSISTENCE=1` to make missing DB a fatal error instead). `TWIN_API_SECRET` is only needed if you're also running Eris and want twin coordination — skip it for single-bot setups.
+
+Want a non-default AI provider (Groq, OpenRouter, Cerebras, local Ollama, LM Studio, etc.)? See [docs/llm-provider-guide.md](./docs/llm-provider-guide.md). Self-hosting on your own hardware? See [docs/self-hosting.md](./docs/self-hosting.md).
 
 The `.env.example` files mark every variable as required, conditional, or optional, and include a link or path to where you obtain each key.
 
@@ -103,7 +105,7 @@ Tests use `vitest` and don't touch Discord or Supabase — safe to run anywhere.
 | Symptom | Fix |
 |---|---|
 | `Cannot find module '@discordjs/opus'` warning | Harmless — voice features disabled. To enable, install Windows Build Tools / Xcode CLT and run `npm install --include=optional` |
-| `[WARN] SUPABASE_URL / SUPABASE_KEY missing` | Eris: bot runs without persistence (fine for local). Irene: required, get a free Supabase project |
+| `[WARN] SUPABASE_URL / SUPABASE_KEY missing` | Eris: runs without persistence (fine for testing). Irene: boots but loses state on every restart — set up a free Supabase project, run one locally (see [self-hosting.md](./docs/self-hosting.md)), or set `REQUIRE_PERSISTENCE=1` to fail-fast |
 | Bot connects but doesn't respond to mentions | Check **Message Content Intent** is enabled in Developer Portal, and `BOT_OWNER_ID` matches your Discord user ID |
 | `[FATAL] DISCORD_TOKEN is required` | `.env` not found or token line malformed — check `packages/<bot>/.env` is in the right folder |
 | Slash commands missing in Discord | Re-run `npm run deploy --workspace=@defnotean/<bot>` |

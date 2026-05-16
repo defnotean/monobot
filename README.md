@@ -8,6 +8,8 @@ Monorepo housing the twin-bot system: two Discord bots (Eris + Irene) and a shar
 | [`packages/irene`](./packages/irene) | Irene — the good twin (server moderation, tickets, music, ~200 tools) | Render service: `irene-bot` |
 | [`packages/shared`](./packages/shared) | Shared core utilities: HMAC twin signing, LRU cache, role categorizer, SSRF-safe fetch | Imported by both bots via `@defnotean/shared/<module>` |
 
+**Each bot runs independently** — deploy just Eris, just Irene, or both. When both run, they coordinate over an HMAC-signed REST surface (the "twin protocol"). Single-bot setups skip that entirely.
+
 ## New here?
 
 **[docs/start-here.md](./docs/start-here.md)** is the front door — a 10-minute orientation with the mental model, the handful of files that hold most of the behavior, and a "pick your track" guide that points you at the right doc next. Start there and let it route you.

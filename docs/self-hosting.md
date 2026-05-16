@@ -29,7 +29,7 @@ Runs on anything with **Node.js 20+** — Linux, macOS, Windows. Tested daily on
 
 ## The 5-minute version (PM2)
 
-[PM2](https://pm2.keymetrics.io/) is the default for self-hosted Node apps. It restarts on crash, restarts on reboot, and rotates logs.
+[PM2](https://pm2.keymetrics.io/) is the default for self-hosted Node apps and **works the same on Linux, macOS, and Windows**. It restarts on crash, restarts on reboot, and rotates logs. Start here regardless of OS; the platform-specific sections below are for people who want native service integration.
 
 ```bash
 git clone https://github.com/defnotean/monobot
@@ -187,14 +187,40 @@ Add Lavalink to your process manager (PM2 / systemd) the same way you did the bo
 
 ## Persistence
 
-Both bots use **Supabase** for the database. The free tier is generous and works exactly like the Render setup — point them at any Supabase project; nothing is Render-specific.
+Both bots talk to the database through `@supabase/supabase-js`, which accepts **any PostgREST-compatible endpoint**. That gives you four options for the data layer — pick whichever fits your setup:
 
-If you'd rather run Postgres yourself, the schema lives in `packages/<bot>/migrations/*.sql`. Apply them to a local Postgres and either set `SUPABASE_URL`/`SUPABASE_KEY` to a [supabase-js](https://supabase.com/docs/reference/javascript) compatible endpoint, or run [Supabase self-hosted](https://supabase.com/docs/guides/self-hosting).
+### Path A — Cloud Supabase (zero setup, free tier)
 
-| Bot | Persistence required? |
+```env
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_KEY=<your-anon-or-service-key>
+```
+
+The default. Free tier is generous enough for hundreds of guilds.
+
+### Path B — Self-hosted Supabase via Docker
+
+Follow [supabase.com/docs/guides/self-hosting](https://supabase.com/docs/guides/self-hosting) — typically a `docker-compose up` from the official supabase/docker repo. Then:
+
+```env
+SUPABASE_URL=http://localhost:54321
+SUPABASE_KEY=<service-role-key-from-the-docker-env-file>
+```
+
+Apply the schema in `packages/<bot>/migrations/*.sql` to the bundled Postgres (`psql` it in, or copy/paste in the Supabase Studio SQL editor).
+
+### Path C — Plain Postgres + PostgREST
+
+If you already run Postgres, install the `pgvector` extension, apply the migrations in `packages/<bot>/migrations/*.sql`, and put [PostgREST](https://postgrest.org/) in front. Point `SUPABASE_URL` at PostgREST's port. For semantic memory to work fully, also define a `search_memories(query_embedding vector, ...)` RPC — without it, semantic search silently degrades to keyword-only (no errors, just less smart).
+
+### Path D — No persistence at all
+
+Leave `SUPABASE_URL` / `SUPABASE_KEY` unset.
+
+| Bot | Without a DB |
 |---|---|
-| **Eris** | No — runs in a degraded mode without it (no economy, no memory, just chat) |
-| **Irene** | Yes |
+| **Eris** | Boots, chat works, no economy/memory/mood tracking. Fine for casual self-host. |
+| **Irene** | Boots but **all moderation warns, custom commands, tickets, reminders, giveaways, settings reset on every restart**. Set `REQUIRE_PERSISTENCE=1` in `.env` to make the missing DB a fatal startup error instead of a silent degrade. |
 
 ## Common gotchas
 

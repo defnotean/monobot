@@ -102,7 +102,11 @@ export function getSupabase() { return supabase; }
 
 export async function initDatabase() {
   if (!config.supabaseEnabled) {
-    console.warn("[DB] No SUPABASE_URL/SUPABASE_KEY set — settings won't persist across deploys");
+    console.warn("[DB] ⚠️  IRENE WITHOUT PERSISTENCE — all moderation state, settings,");
+    console.warn("[DB] ⚠️  warns, tickets, reminders, giveaways will RESET on every restart.");
+    console.warn("[DB] ⚠️  Set SUPABASE_URL/SUPABASE_KEY (see docs/self-hosting.md for");
+    console.warn("[DB] ⚠️  local-Postgres or self-hosted-Supabase setup), or set");
+    console.warn("[DB] ⚠️  REQUIRE_PERSISTENCE=1 in .env to fail-fast instead.");
     return;
   }
 
