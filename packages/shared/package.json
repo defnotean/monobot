@@ -12,6 +12,7 @@
     "./LRUCache": "./src/LRUCache.js",
     "./safeFetch": "./src/safeFetch.js",
     "./rateLimit": "./src/rateLimit.js",
+    "./logRedact": "./src/logRedact.js",
     "./firewall": "./src/ai/firewall.js",
     "./firewallPatterns": "./src/ai/firewallPatterns.js",
     "./slangGuard.js": "./src/ai/slangGuard.js",

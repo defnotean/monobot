@@ -14,4 +14,5 @@ export * from "./twinSign.js";
 export * from "./LRUCache.js";
 export * from "./safeFetch.js";
 export * from "./rateLimit.js";
+export * from "./logRedact.js";
 export { createFirewall, spotlight, normalizeText, InMemoryWindowStore, RedisWindowStore } from "./ai/firewall.js";

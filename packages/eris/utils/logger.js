@@ -3,6 +3,12 @@
 import { appendFile, stat, rename } from "fs/promises";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { redactLogLine, redactValue } from "@defnotean/shared/logRedact";
+
+// Re-export so callers that want to manually redact a structured value (e.g.
+// `log(\`tool: \${name}(\${JSON.stringify(redact(args))})\`)`) don't need to
+// reach into @defnotean/shared themselves.
+export { redactValue as redact };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LOG_FILE = join(__dirname, "..", "bot.log");
@@ -99,8 +105,16 @@ let _buffer = [];
 let _timer = null;
 
 export function log(message) {
+  // Last-mile redaction. If a caller passed a non-string (e.g. a raw Error),
+  // stringify first; otherwise scan-and-replace for env-var values + token-
+  // shaped substrings, then truncate to MAX_LOG_LINE_BYTES. Cheap insurance
+  // against future callers that forget to sanitize.
+  const safeMessage = typeof message === "string"
+    ? redactLogLine(message)
+    : redactLogLine(typeof message === "object" ? JSON.stringify(redactValue(message)) : String(message));
+
   const fullTs = new Date().toISOString().slice(0, 19).replace("T", " ");
-  _buffer.push(`[${fullTs}] ${message}\n`);
+  _buffer.push(`[${fullTs}] ${safeMessage}\n`);
   if (!_timer) {
     _timer = setTimeout(async () => {
       const lines = _buffer.join("");
@@ -113,5 +127,5 @@ export function log(message) {
       } catch {}
     }, 500);
   }
-  console.log(_formatForConsole(message));
+  console.log(_formatForConsole(safeMessage));
 }

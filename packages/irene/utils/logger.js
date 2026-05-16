@@ -5,6 +5,12 @@ import { modEmbed } from "./embeds.js";
 import { appendFile, stat, rename, writeFile } from "fs/promises";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { redactLogLine, redactValue } from "@defnotean/shared/logRedact";
+
+// Re-export so callers that want to manually redact a structured value (e.g.
+// `log(\`tool: \${name}(\${JSON.stringify(redact(args))})\`)`) don't need to
+// reach into @defnotean/shared themselves.
+export { redactValue as redact };
 
 const LOG_CHANNEL_NAMES = [
   "mod-log", "mod-logs", "modlog", "modlogs",
@@ -134,12 +140,20 @@ function _scheduleFlush() {
 }
 
 export function log(message) {
+  // Last-mile redaction. If a caller passed a non-string (e.g. a raw Error),
+  // stringify first; otherwise scan-and-replace for env-var values + token-
+  // shaped substrings, then truncate to MAX_LOG_LINE_BYTES. Cheap insurance
+  // against future callers that forget to sanitize.
+  const safeMessage = typeof message === "string"
+    ? redactLogLine(message)
+    : redactLogLine(typeof message === "object" ? JSON.stringify(redactValue(message)) : String(message));
+
   const fullTs = new Date().toISOString().slice(0, 19).replace("T", " ");
   // File line: plain text so grep/tail stay readable and ANSI never leaks
-  _logBuffer.push(`[${fullTs}] ${message}\n`);
+  _logBuffer.push(`[${fullTs}] ${safeMessage}\n`);
   _scheduleFlush();
   // Console line: pretty
-  console.log(_formatForConsole(message));
+  console.log(_formatForConsole(safeMessage));
 }
 
 /**

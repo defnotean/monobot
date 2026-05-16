@@ -16,7 +16,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import config from "./config.js";
 import { updatePresence, startPresenceAPI } from "./presence.js";
-import { log } from "./utils/logger.js";
+import { log, redact } from "./utils/logger.js";
 import { initDatabase } from "./database.js";
 import { initMusic } from "./music/player.js";
 
@@ -357,12 +357,16 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 // ─── Global safety nets — keep the bot alive no matter what ─────────────────
-// Unhandled promise rejections (e.g. a misbehaving event handler)
+// Unhandled promise rejections (e.g. a misbehaving event handler).
+// Stack lines can occasionally embed a failing URL (with query-string auth)
+// or an upstream provider's echoed error body — redact() scrubs token-shaped
+// substrings BEFORE the logger sees them, and the logger truncates anything
+// past MAX_LOG_LINE_BYTES to prevent a runaway stack from filling bot.log.
 process.on("unhandledRejection", (reason) => {
-  log(`[UNHANDLED REJECTION] ${reason?.stack ?? reason}`);
+  log(`[UNHANDLED REJECTION] ${redact(reason?.stack ?? reason)}`);
 });
 
 // Uncaught synchronous exceptions
 process.on("uncaughtException", (err) => {
-  log(`[UNCAUGHT EXCEPTION] ${err?.stack ?? err}`);
+  log(`[UNCAUGHT EXCEPTION] ${redact(err?.stack ?? err)}`);
 });

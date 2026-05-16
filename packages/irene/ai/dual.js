@@ -12,7 +12,7 @@
 import { executeTool } from "./executor.js";
 import { ADMIN_TOOLS } from "./tools.js";
 import { registry } from "./toolRegistry.js";
-import { log } from "../utils/logger.js";
+import { log, redact } from "../utils/logger.js";
 import config from "../config.js";
 
 const GEMINI_MODEL = config.geminiModel;               // worker AI — most capable, deep reasoning + tools
@@ -550,7 +550,11 @@ export async function runGeminiChat({
         }
         calledSignatures.add(signature);
 
-        log(`[Gemini] ${name}(${JSON.stringify(args)})`);
+        // Run args through the shared redactor BEFORE stringifying so
+        // secret-shaped values + secret-named keys (apiKey, token, etc.) get
+        // scrubbed even if the line escapes the file-transport regex pass.
+        // The logger truncates anything past MAX_LOG_LINE_BYTES on its own.
+        log(`[Gemini] ${name}(${JSON.stringify(redact(args))})`);
 
         const isAdminTool = ADMIN_TOOLS.some((t) => t.name === name);
         const timeoutMs = VERY_SLOW_TOOLS.has(name) ? config.timeouts.toolVerySlow
