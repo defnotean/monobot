@@ -3,7 +3,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
       day: "monday"
     open-pull-requests-limit: 5
     reviewers:
@@ -19,7 +19,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/packages/eris"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
       day: "monday"
     open-pull-requests-limit: 5
     reviewers:
@@ -35,7 +35,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/packages/irene"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
       day: "monday"
     open-pull-requests-limit: 5
     reviewers:
@@ -51,7 +51,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/packages/shared"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
       day: "monday"
     open-pull-requests-limit: 5
     reviewers:
@@ -67,7 +67,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
       day: "monday"
     open-pull-requests-limit: 5
     reviewers:

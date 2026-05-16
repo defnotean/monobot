@@ -1,6 +1,6 @@
 # defnotean-bots-monorepo
 
-[![Tests](https://github.com/defnotean/defnotean-bots-monorepo/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/defnotean/defnotean-bots-monorepo/actions/workflows/test.yml)
+[![Tests](https://github.com/defnotean/monobot/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/defnotean/monobot/actions/workflows/test.yml)
 
 Monorepo housing the twin-bot system: two Discord bots (Eris + Irene) and a shared utilities package.
 
@@ -22,22 +22,56 @@ In a hurry to just get a bot running? **[GETTING_STARTED.md](./GETTING_STARTED.m
 
 ## Reference docs
 
+### Orientation (start here)
 | File | Use it when |
 |---|---|
+| [docs/start-here.md](./docs/start-here.md) | 10-minute new-contributor orientation |
 | [docs/glossary.md](./docs/glossary.md) | A term in the code doesn't make sense |
 | [docs/where-do-i-edit.md](./docs/where-do-i-edit.md) | "I want to change X — what file?" decision tree |
-| [docs/cheatsheet.md](./docs/cheatsheet.md) | Copy-paste recipes for the 10 most common tasks |
-| [docs/debugging-playbook.md](./docs/debugging-playbook.md) | "X is broken — where do I look?" symptom→file lookups |
-| [docs/testing-guide.md](./docs/testing-guide.md) | Vitest patterns, mocking Discord/Supabase |
-| [docs/local-dev-loop.md](./docs/local-dev-loop.md) | Fastest inner-loop workflow (watch mode, twin local testing, etc.) |
+| [docs/cheatsheet.md](./docs/cheatsheet.md) | Copy-paste recipes for the 15 most common tasks |
+
+### How it works
+| File | Use it when |
+|---|---|
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | High-level system map — twin model, AI pipeline, persistence, deployment shapes |
 | [docs/ai-pipeline-eris.md](./docs/ai-pipeline-eris.md) | How a Discord message becomes an Eris reply (line-by-line trace) |
 | [docs/ai-pipeline-irene.md](./docs/ai-pipeline-irene.md) | Same for Irene |
-| [docs/presence-api.md](./docs/presence-api.md) | The HMAC twin coordination layer + the dashboard REST surface |
-| [docs/drift-inventory.md](./docs/drift-inventory.md) | Eris ↔ Irene divergence at a glance — read before touching shared modules |
+| [docs/TOOLCALLING.md](./docs/TOOLCALLING.md) | Deep-dive on the AI tool system — registry, dispatch, contracts, aliasing |
+| [docs/TWIN-PROTOCOL.md](./docs/TWIN-PROTOCOL.md) | HMAC twin coordination — signing, replay, rate limits, every endpoint |
+| [docs/presence-api.md](./docs/presence-api.md) | The dashboard REST surface |
+| [docs/PERSISTENCE.md](./docs/PERSISTENCE.md) | Data layer — schema, migrations, debounced flush, atomic ops, in-memory mode |
+| [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) | Exhaustive env-var reference (87 vars across both bots) |
+
+### Working in the codebase
+| File | Use it when |
+|---|---|
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Workflow, conventions, your first PR |
+| [docs/CONTRIBUTING-CODE.md](./docs/CONTRIBUTING-CODE.md) | Code style + naming + async patterns + commit conventions |
+| [docs/local-dev-loop.md](./docs/local-dev-loop.md) | Fastest inner-loop workflow (watch mode, twin local testing, migrations) |
 | [docs/dev-guild-workflow.md](./docs/dev-guild-workflow.md) | Setting up a safe dev Discord guild for testing |
+| [docs/testing-guide.md](./docs/testing-guide.md) | Vitest patterns, mocking Discord/Supabase, fake-timer & seeded-RNG recipes |
+| [docs/debugging-playbook.md](./docs/debugging-playbook.md) | "X is broken — where do I look?" symptom→file lookups |
+| [docs/drift-inventory.md](./docs/drift-inventory.md) | Eris ↔ Irene divergence at a glance — read before touching shared modules |
+
+### Running it (deployment)
+| File | Use it when |
+|---|---|
 | [docs/self-hosting.md](./docs/self-hosting.md) | Running on your own hardware (laptop / home server / VPS) instead of Render |
+| [docs/llm-provider-guide.md](./docs/llm-provider-guide.md) | Provider setup (Gemini / NVIDIA / OpenRouter / Ollama / LM Studio) |
 | [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) | Render deployment runbook + known deploy gotchas |
-| [SECURITY.md](./SECURITY.md) | Reporting vulnerabilities + the supported-versions / disclosure policy |
+| [docs/SCALING.md](./docs/SCALING.md) | What scales horizontally and what doesn't; multi-replica caveats |
+| [docs/MONITORING.md](./docs/MONITORING.md) | What's observable today, what's missing, alert recipes |
+
+### Security
+| File | Use it when |
+|---|---|
+| [SECURITY.md](./SECURITY.md) | Reporting vulnerabilities + supported-versions / disclosure policy |
+| [docs/audits/README.md](./docs/audits/README.md) | Index of subsystem audits (twin, web, GitHub, PC-agent, gambling, moderation, env, logging) |
+
+### Release notes
+| File | Use it when |
+|---|---|
+| [CHANGELOG.md](./CHANGELOG.md) | What changed in each version (Keep-a-Changelog format) |
 
 ## Security
 
@@ -47,7 +81,7 @@ Found a vulnerability? Please **do not** open a public issue. See [SECURITY.md](
 
 ```bash
 npm install                    # installs all workspace deps at root, hoists where possible
-npm run test                   # runs ~641 tests across both bots
+npm run test                   # runs ~1100 tests across both bots + shared
 npm run start:eris             # starts Eris locally (needs .env in packages/eris/)
 npm run start:irene            # starts Irene locally (needs .env in packages/irene/)
 npm run dev:eris               # tsx --watch index.ts for fast inner loop
