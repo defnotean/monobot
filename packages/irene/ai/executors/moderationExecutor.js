@@ -49,13 +49,16 @@ export async function execute(toolName, input, message, ctx) {
 
   switch (toolName) {
     case "ban_user": {
+      // Permission re-check runs FIRST — before findMember, hierarchy check,
+      // any DB write, or Discord API call — so a caller without BanMembers
+      // can't probe membership or trigger lookups via this tool.
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.BanMembers, guild))
+        return "You can't ban users.";
       const member = findMember(guild, input.username);
       if (!member) return `Couldn't find user "${input.username}"`;
       if (member.id === message.client.user.id) return "I can't ban myself lol";
       const banHierErr = checkHierarchy(message.member, member, guild);
       if (banHierErr) return banHierErr;
-      if (!_memberHasPerm(message.member, PermissionFlagsBits.BanMembers, guild))
-        return "You can't ban users.";
       const reason = input.reason || "No reason";
       await member.ban({ deleteMessageDays: input.delete_messages || 0, reason: _attributedReason(message.author, reason) });
       // Fire cross-bot punish signal — Eris will apply economy consequences
@@ -83,12 +86,12 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "kick_user": {
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.KickMembers, guild))
+        return "You can't kick users.";
       const member = findMember(guild, input.username);
       if (!member) return `Couldn't find user "${input.username}"`;
       const kickHierErr = checkHierarchy(message.member, member, guild);
       if (kickHierErr) return kickHierErr;
-      if (!_memberHasPerm(message.member, PermissionFlagsBits.KickMembers, guild))
-        return "You can't kick users.";
       const reason = input.reason || "No reason";
       await member.kick(_attributedReason(message.author, reason));
       firePunishSignal({ guildId: guild.id, userId: member.id, action: "kick", reason }).catch(() => {});
@@ -110,6 +113,14 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "warn_user": {
+      // Match the /warn slash-command gate: ModerateMembers is the canonical
+      // permission for warn (the slash command sets it as defaultMemberPerms
+      // and re-checks via requirePermission). Without this gate, the
+      // upstream ADMIN_TOOLS check is the only barrier — and a stale
+      // trusted_users entry can let a now-non-mod issue warnings + trigger
+      // auto-escalation bans.
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.ModerateMembers, guild))
+        return "You can't warn users.";
       const member = findMember(guild, input.username);
       if (!member) return `Couldn't find user "${input.username}"`;
       const warnHierErr = checkHierarchy(message.member, member, guild);
@@ -147,44 +158,54 @@ export async function execute(toolName, input, message, ctx) {
         .setTimestamp();
       await member.send({ embeds: [warnDmEmbed] }).catch(() => {});
 
-      // Feature 14: Auto-escalation
+      // Feature 14: Auto-escalation — AI-PATH CAP
+      //
+      // AUDIT (docs/audits/AUDIT-irene-moderation.md, risk #4):
+      //   A single LLM hallucination producing `warn_user` on a user
+      //   already at `ban_at - 1` would silently auto-ban with no
+      //   confirmation. Per the council convergence in
+      //   ai/rulesEscalation.js ("No auto-ban. Bans are mod-only.") and
+      //   the audit's risk-#4 remediation, the AI tool path must NEVER
+      //   auto-ban or auto-kick.
+      //
+      // Policy: AI-initiated warns cap escalation at TIMEOUT (24h max).
+      // BAN and KICK on warn-threshold are slash-command-only — a mod
+      // running `/warn add` makes that choice consciously. The AI path
+      // can warn, time out (up to 24h), and surface the would-be action
+      // in mod-log so a human can run `/ban` or `/kick` themselves.
       const escalation = getEscalation(guild.id);
       const count = warnings.length;
       let escalationNote = "";
 
-      if (escalation.ban_at && count >= escalation.ban_at) {
+      // Determine the highest configured tier the user has crossed.
+      let crossedTier = null;
+      if (escalation.ban_at && count >= escalation.ban_at) crossedTier = "ban";
+      else if (escalation.kick_at && count >= escalation.kick_at) crossedTier = "kick";
+      else if (escalation.mute_at && count >= escalation.mute_at) crossedTier = "mute";
+
+      if (crossedTier === "ban" || crossedTier === "kick") {
+        // AI path CAPs at 24h timeout. Surface the would-be action in
+        // mod-log so a human can run `/ban` or `/kick` consciously.
         try {
-          await member.ban({ reason: _attributedReason(message.author, `Auto-escalation: ${count} warnings`) });
+          const capMs = 24 * 60 * 60_000; // 24h max
+          await member.timeout(capMs, _attributedReason(message.author, `AI-path cap: ${count} warnings (would have ${crossedTier}ed under server policy)`));
           await sendModLog(guild, logEvent({
-            kind: "ban",
+            kind: "timeout",
             target: member.user,
-            reason: `Auto-escalation: ${count} warnings`,
+            reason: `AI-path cap: ${count} warnings`,
             meta: {
-              "Trigger": "auto-escalation",
+              "Duration": "24h",
+              "Until": `<t:${Math.floor((Date.now() + capMs) / 1000)}:R>`,
+              "Trigger": "auto-escalation (capped)",
               "Warning Count": `${count}`,
-              "Ban Threshold": `${escalation.ban_at}`,
-              "Invoked Via": "AI tool (automatic)",
+              "Configured Action": crossedTier,
+              "Policy Note": `AI path caps at 24h timeout; ${crossedTier} requires mod slash-command`,
+              "Invoked Via": "AI tool (automatic, capped)",
             },
           }));
-          escalationNote = ` — auto-banned (${count} warnings)`;
+          escalationNote = ` — auto-timed out 24h (would-be ${crossedTier} requires mod action)`;
         } catch {}
-      } else if (escalation.kick_at && count >= escalation.kick_at) {
-        try {
-          await member.kick(_attributedReason(message.author, `Auto-escalation: ${count} warnings`));
-          await sendModLog(guild, logEvent({
-            kind: "kick",
-            target: member.user,
-            reason: `Auto-escalation: ${count} warnings`,
-            meta: {
-              "Trigger": "auto-escalation",
-              "Warning Count": `${count}`,
-              "Kick Threshold": `${escalation.kick_at}`,
-              "Invoked Via": "AI tool (automatic)",
-            },
-          }));
-          escalationNote = ` — auto-kicked (${count} warnings)`;
-        } catch {}
-      } else if (escalation.mute_at && count >= escalation.mute_at) {
+      } else if (crossedTier === "mute") {
         try {
           await member.timeout(10 * 60 * 1000, _attributedReason(message.author, `Auto-escalation: ${count} warnings`)); // 10 min timeout
           await sendModLog(guild, logEvent({
@@ -208,12 +229,12 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "timeout_user": {
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.ModerateMembers, guild))
+        return "You can't timeout users.";
       const member = findMember(guild, input.username);
       if (!member) return `Couldn't find user "${input.username}"`;
       const timeoutHierErr = checkHierarchy(message.member, member, guild);
       if (timeoutHierErr) return timeoutHierErr;
-      if (!_memberHasPerm(message.member, PermissionFlagsBits.ModerateMembers, guild))
-        return "You can't timeout users.";
       const ms = DURATION_MS[input.duration];
       if (!ms) return `Invalid duration: ${input.duration}`;
       await member.timeout(ms, _attributedReason(message.author, input.reason || "No reason"));
@@ -463,6 +484,12 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "purge_messages": {
+      // Match /purge slash-command gate (ManageMessages). Audit flagged this
+      // as HIGH severity — previously relied on the upstream ADMIN_TOOLS
+      // gate alone, so a stale trusted_users entry could drive a 500-message
+      // delete with no per-perm re-check.
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.ManageMessages, guild))
+        return "You can't purge messages.";
       const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
 
@@ -630,13 +657,13 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "tempban": {
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.BanMembers, guild))
+        return "You can't tempban users.";
       const target = findMember(guild, input.username);
       if (!target) return `Couldn't find user "${input.username}"`;
       if (target.id === message.client.user.id) return "I can't ban myself lol";
       const hierErr = checkHierarchy(message.member, target, guild);
       if (hierErr) return hierErr;
-      if (!_memberHasPerm(message.member, PermissionFlagsBits.BanMembers, guild))
-        return "You can't tempban users.";
       if (!target.bannable) return `I can't ban ${target.user.tag} — they have higher permissions than me`;
 
       const durationStr = input.duration || "1h";
