@@ -99,6 +99,7 @@ Tests use `vitest` and don't touch Discord or Supabase — safe to run anywhere.
 - **[CONTRIBUTING.md](./CONTRIBUTING.md)** — workflow, conventions, your first PR
 - **[docs/ai-pipeline-eris.md](./docs/ai-pipeline-eris.md)** / **[docs/ai-pipeline-irene.md](./docs/ai-pipeline-irene.md)** — how a Discord message becomes a reply
 - **[docs/presence-api.md](./docs/presence-api.md)** — twin coordination layer (HMAC-signed REST between the two bots)
+- **[SECURITY.md](./SECURITY.md)** — how to report a vulnerability + supported versions
 
 ## Troubleshooting
 

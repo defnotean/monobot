@@ -37,6 +37,11 @@ In a hurry to just get a bot running? **[GETTING_STARTED.md](./GETTING_STARTED.m
 | [docs/dev-guild-workflow.md](./docs/dev-guild-workflow.md) | Setting up a safe dev Discord guild for testing |
 | [docs/self-hosting.md](./docs/self-hosting.md) | Running on your own hardware (laptop / home server / VPS) instead of Render |
 | [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) | Render deployment runbook + known deploy gotchas |
+| [SECURITY.md](./SECURITY.md) | Reporting vulnerabilities + the supported-versions / disclosure policy |
+
+## Security
+
+Found a vulnerability? Please **do not** open a public issue. See [SECURITY.md](./SECURITY.md) for the private disclosure channel, supported versions, and the response timeline. Deeper subsystem audits live under [docs/audits/](./docs/audits/README.md).
 
 ## Development
 
