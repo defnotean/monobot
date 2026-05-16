@@ -141,6 +141,27 @@ For laptops on residential ISPs (dynamic IP, NAT, no static DNS), a tunnel beats
 
 Set `EXTERNAL_URL` in the bot's `.env` to whatever public URL the tunnel hands you so the bot's CORS policy lets dashboard requests in.
 
+## Local AI providers (Ollama / LM Studio / OpenAI-compatible)
+
+You don't need a cloud AI subscription. Both bots route chat through a generic OpenAI-compatible chat-completions client, and `AI_PROVIDER=ollama` or `AI_PROVIDER=lmstudio` auto-disables the API-key requirement and points at the local default port. Any other OpenAI-compatible local server (vLLM, text-generation-webui, llama.cpp server, etc.) works the same.
+
+See **[docs/llm-provider-guide.md](./llm-provider-guide.md)** for env snippets and the full provider matrix.
+
+### Caveats specific to local models
+
+- **Tool calling.** The bot's task features (commands, moderation, music control, all `tool_calls`-driven flows) require the model to produce well-formed `tool_calls`. Plain chat works on any model, but small or non-instruct models often hallucinate tool names or output malformed JSON. Families that handle tools reliably: **Llama 3.1+ Instruct**, **Qwen 2.5+ Instruct**, **Mistral Nemo Instruct**. Test a simple task command (`/coinflip` on Eris, `/play <song>` on Irene) before relying on it.
+- **Context window.** Local models often have 8k–32k context; the bot's `PROMPT_BUDGET` is ~12k characters (~3k tokens), well within range. If you see truncation, lower `PROMPT_BUDGET` or pick a wider-context model.
+- **Embeddings are separate.** Semantic memory and the L3 injection-firewall layer use Voyage AI. Set `VOYAGE_API_KEY` to enable them (Voyage has a free tier); both gracefully no-op if it's unset. Local *chat* doesn't switch on local embeddings automatically.
+- **Vision tools** (image analysis, meme description) currently rely on Gemini — on a fully-local setup they degrade. A local vision model (e.g. Llama 3.2 Vision via Ollama) would need a small adapter that isn't wired up yet.
+
+### Hardware notes for local models
+
+- **7B-class, Q4 quantized** — runs on ~6 GB VRAM or CPU + 16 GB RAM. Latency 1–5s, fine for Discord.
+- **13B–32B quantized** — wants a real GPU (12–24 GB VRAM) for usable latency.
+- **70B** — needs 48+ GB VRAM or aggressive offloading; expect 10–30s per reply. Slash commands defer automatically so the 3-second interaction timeout isn't fatal, but chat will feel slow.
+
+If you don't have a GPU but still want a *free* AI backend, **Groq** and **Cerebras** (both OpenAI-compatible, both with generous free tiers) are excellent fallbacks — see the provider guide.
+
 ## Lavalink (Irene's music)
 
 Skip this section if you're not running Irene's music commands.
