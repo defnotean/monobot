@@ -289,6 +289,13 @@ const config = {
   lastfmApiKey: env("LASTFM_API_KEY"),
   klipyApiKey: env("KLIPY_API_KEY"),
   githubToken: ghToken,
+  // Repo allowlist for GitHub write operations (github_create_issue, etc.).
+  // Comma/whitespace-separated list of "owner/repo" entries. Required defense
+  // for the broad-scope shared PAT — owner-gate alone is not sufficient. If
+  // unset, write ops are refused with a clear error.
+  githubRepoAllowlist: envList(["GITHUB_REPO_ALLOWLIST"])
+    .map((entry) => entry.toLowerCase())
+    .filter((entry) => entry.includes("/")),
   renderApiKey: env("RENDER_API_KEY"),
   dreamChannelId: env("DREAM_CHANNEL_ID"),
   briefingChannelId: env("BRIEFING_CHANNEL_ID"),

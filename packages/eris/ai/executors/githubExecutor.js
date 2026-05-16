@@ -50,6 +50,29 @@ function resolveRepo(input) {
   return { owner: input.owner || input.org, repo: raw };
 }
 
+// Allowlist gate for GitHub write ops. The PAT used by Octokit is broad-scope
+// and shared across the bot — if the owner-gate is ever bypassed (logic bug,
+// future delegated tools, etc.), an attacker would inherit the full PAT. The
+// allowlist rejects any write target that isn't explicitly opted-in via
+// GITHUB_REPO_ALLOWLIST. Unset list = writes disabled entirely.
+export function ensureRepoAllowed(owner, repo) {
+  const list = config.githubRepoAllowlist || [];
+  if (!list.length) {
+    return "github write ops disabled: GITHUB_REPO_ALLOWLIST not configured. Set it to a comma-separated list of owner/repo entries to enable writes.";
+  }
+  const target = `${(owner || "").toLowerCase()}/${(repo || "").toLowerCase()}`;
+  if (!list.includes(target)) {
+    return `github write op rejected: ${owner}/${repo} is not in GITHUB_REPO_ALLOWLIST`;
+  }
+  return null;
+}
+
+// Render service IDs are alphanumeric with `-` and `_` only. Strictly validate
+// before interpolating into the API URL, then encodeURIComponent as a belt-and-
+// suspenders defense in case validation ever drifts. An untrusted serviceId
+// could otherwise inject path segments or query string into the Render API URL.
+export const RENDER_SERVICE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 export async function execute(toolName, input, message, _context) {
   if (!HANDLED.has(toolName)) return undefined;
 
@@ -204,6 +227,8 @@ export async function execute(toolName, input, message, _context) {
         const body = input.body || input.description || "";
         if (!owner || !repo) return "need a repo in owner/repo format";
         if (!title) return "need an issue title";
+        const denyReason = ensureRepoAllowed(owner, repo);
+        if (denyReason) return denyReason;
         const { data: issue } = await octokit.issues.create({
           owner, repo, title, body, labels: input.labels || [],
         });
@@ -240,7 +265,11 @@ export async function execute(toolName, input, message, _context) {
       try {
         const serviceId = input.service_name || input.service_id || input.id;
         if (!serviceId) return "no service id provided";
-        const res = await fetch(`https://api.render.com/v1/services/${serviceId}`, {
+        if (!RENDER_SERVICE_ID_PATTERN.test(String(serviceId))) {
+          return "invalid render service id (expected alphanumeric, underscore, or hyphen only)";
+        }
+        const encoded = encodeURIComponent(String(serviceId));
+        const res = await fetch(`https://api.render.com/v1/services/${encoded}`, {
           headers: { Authorization: `Bearer ${config.renderApiKey}` },
         });
         const data = await res.json();
@@ -263,6 +292,11 @@ export async function execute(toolName, input, message, _context) {
       const service = input.service || "render";
       const projectId = input.project_id || input.id;
       if (!projectId) return "no project/service id provided";
+      // The stored id is fed back into Render API URLs by the deploy-watch
+      // poller, so validate the same way as check_deploy.
+      if (!RENDER_SERVICE_ID_PATTERN.test(String(projectId))) {
+        return "invalid render service id (expected alphanumeric, underscore, or hyphen only)";
+      }
       const ok = await db.addDeployWatch(service, projectId, message.channel.id);
       return ok ? `now watching deploys for ${projectId} on ${service}` : "failed to set deploy watch";
     }
