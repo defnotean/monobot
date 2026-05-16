@@ -22,11 +22,41 @@ function moodLabel(score) {
   return "furious";
 }
 
+// Parse an origin/URL string into its canonical "scheme://host:port" form. A
+// prior version used `origin.startsWith(allowed)`, which let attackers register
+// `evil.com.attacker.com` and match an allowlist entry of `https://evil.com`.
+// Returning `null` for unparseable input means the caller treats it as a miss.
+function normalizeOrigin(value) {
+  if (!value || typeof value !== "string") return null;
+  try {
+    const u = new URL(value);
+    // URL.origin already collapses default ports to the empty string, so
+    // "https://x" and "https://x:443" compare equal — exactly what we want.
+    return u.origin;
+  } catch {
+    return null;
+  }
+}
+
+// Exact-origin allowlist check. Both sides are normalized through the URL
+// parser so that a request from `https://evil.com.attacker.com` can never
+// satisfy an allowlist entry of `https://evil.com`, regardless of trailing
+// slashes or whitespace in the configured value.
+export function isOriginAllowed(origin, allowedOrigins) {
+  const reqOrigin = normalizeOrigin(origin);
+  if (!reqOrigin) return false;
+  for (const allowed of allowedOrigins) {
+    const allowedOrigin = normalizeOrigin(allowed);
+    if (allowedOrigin && allowedOrigin === reqOrigin) return true;
+  }
+  return false;
+}
+
 export async function handleApiRequest(req, res) {
   // CORS — only allow same-origin and configured dashboard domains
   const allowedOrigins = [process.env.EXTERNAL_URL, process.env.RENDER_EXTERNAL_URL, config.twinApiUrl, process.env.DASHBOARD_URL].filter(Boolean);
   const origin = req.headers.origin;
-  if (origin && allowedOrigins.some(o => origin.startsWith(o))) {
+  if (origin && isOriginAllowed(origin, allowedOrigins)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
   // No wildcard CORS — if origin doesn't match, no CORS header is set (browser blocks it)
@@ -324,23 +354,23 @@ export async function handleApiRequest(req, res) {
     // economy consequences (e.g. zero the user's balance if the guild has
     // opted in via the `cross_bot_punish` setting).
     //
-    // Authenticated with HMAC (X-Twin-Timestamp + X-Twin-Signature) so a
-    // leaked body payload can't be replayed. Falls back to the legacy
-    // shared-secret-in-body for backwards-compat with old Irene builds.
+    // Authenticated with HMAC (X-Twin-Timestamp + X-Twin-Signature). The
+    // legacy `body.secret` fallback was removed — every caller (Irene,
+    // dashboard, scripts) must sign the request through shared/twinSign.
     if (path === "/api/twin/punish" && req.method === "POST") {
       const twinSecret = process.env.TWIN_API_SECRET;
       if (!twinSecret) { json(res, 500, { error: "twin secret not configured on server" }); return; }
 
-      // Accept EITHER a valid HMAC OR a matching legacy body.secret. The
-      // HMAC path is strictly preferred (replay protection + no wire-leak).
+      // HMAC-only. A request without signed headers is rejected outright;
+      // body.secret used to be accepted as a fallback but the wire-leak
+      // and lack of replay protection made it not worth the back-compat.
       const hasHmacHeaders = !!(req.headers["x-twin-timestamp"] && req.headers["x-twin-signature"]);
-      if (hasHmacHeaders) {
-        const v = verifyTwinRequest(req.headers, rawBody, twinSecret);
-        if (!v.ok) { json(res, 403, { error: `twin auth: ${v.reason}` }); return; }
-      } else if (!safeStringEqual(body?.secret, twinSecret)) {
-        json(res, 403, { error: "missing twin auth (hmac headers or body.secret)" });
+      if (!hasHmacHeaders) {
+        json(res, 401, { error: "twin auth required (missing HMAC headers)" });
         return;
       }
+      const v = verifyTwinRequest(req.headers, rawBody, twinSecret);
+      if (!v.ok) { json(res, 401, { error: `twin auth: ${v.reason}` }); return; }
 
       // Schema validation — reject malformed inputs BEFORE touching balances.
       if (!body?.user_id || typeof body.user_id !== "string" || !/^\d{5,20}$/.test(body.user_id)) {

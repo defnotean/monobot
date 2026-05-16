@@ -20,7 +20,7 @@ async function wrapWebOutput(content, userId) {
 }
 
 // Helper for ask_eris — POSTs to Eris's /api/twin/* are gated by HMAC headers
-// (or a legacy body.secret); GETs are ungated. We sign POSTs only.
+// (the legacy body.secret fallback was removed); GETs are ungated. We sign POSTs only.
 // Exported for unit testing — see tests/ai/executors/advancedExecutor.test.ts.
 export async function callEris(path, opts = {}) {
   const baseUrl = config.twinApiUrl;
