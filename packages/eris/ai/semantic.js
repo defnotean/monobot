@@ -4,6 +4,7 @@
 // she joked about them being "sus" for getting accused of cheating —
 // even though those exact words aren't in the current conversation.
 
+import { createHash } from "node:crypto";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
 
@@ -25,7 +26,14 @@ const _VOYAGE_MIN_GAP = 5000;
 const _searchCache = new Map();
 const _SEARCH_CACHE_TTL = 60000;
 function canCallVoyage() { const n = Date.now(); if (n - _voyageLastCall.ts < _VOYAGE_MIN_GAP) return false; _voyageLastCall.ts = n; return true; }
-function msgHash(t) { let h = 0; const s = (t||"").substring(0,100).toLowerCase(); for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0; return h.toString(36); }
+// Cache-key hash. Prior implementation was a 32-bit DJB2-style int (~4B keyspace)
+// over the first 100 chars — that hits the birthday-paradox collision wall around
+// ~65k distinct messages, which is well within reach for any long-running channel.
+// SHA-256 truncated to 16 hex chars (64 bits) gives a ~5B collision floor, which
+// is overkill for a 60s LRU cache but cheap and removes the entire collision class.
+// Hashing the full message (not just the first 100 chars) eliminates cases where
+// two messages share a 100-char prefix but diverge later.
+function msgHash(t) { return createHash("sha256").update((t || "").toLowerCase()).digest("hex").slice(0, 16); }
 
 // ─── Generate Embedding ─────────────────────────────────────────────────────
 
