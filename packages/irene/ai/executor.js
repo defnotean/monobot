@@ -1,8 +1,80 @@
-// ─── packages/irene/ai/executor.js ──────────────────────────────────────
-// Single dispatch entry point (`executeTool`): aliases → rate limits →
-// cache → walk SUB_EXECUTORS array (first non-undefined wins). Each
-// sub-executor in ai/executors/ owns a domain via a HANDLED Set.
-// See docs/ai-pipeline-irene.md §5.
+/**
+ * @file packages/irene/ai/executor.js
+ *
+ * Irene's AI tool dispatch — the single entry point (`executeTool`) that the
+ * model's tool-call output funnels through. Roughly 200 tools span moderation,
+ * channel/role management, voice/music, leveling, memory, personalization,
+ * server setup, and a handful of utility/web tools. Every tool the AI invokes
+ * lands here, gets routed, and produces a string the model sees as the tool
+ * result on its next turn.
+ *
+ * ## How this differs from Eris's executor
+ * Eris (`packages/eris/ai/executor.js`) is the lightweight twin — chat-focused,
+ * with a much smaller tool surface (memory + a few utilities). Irene is the
+ * server-management half of the pair: she owns the moderation toolkit (ban /
+ * kick / timeout / purge / lockdown), the full Discord API surface (channels,
+ * roles, emojis, invites, threads, webhooks), the music player, voice features,
+ * leveling, birthdays, custom commands, auto-responders, starboard, and the
+ * temp-VC system. The two bots talk to each other across the twin boundary via
+ * `ask_eris` (HMAC-signed POSTs to Eris's `/api/twin/*` — see
+ * `executors/advancedExecutor.js#callEris`).
+ *
+ * ## Dispatch flow
+ * `executeTool(toolName, input, message)`:
+ *   1. Normalize via `TOOL_ALIASES` (e.g. `play` → `play_music`, `ban` →
+ *      `ban_user`) — covers common shorthand the model emits.
+ *   2. Per-user rate-limit check (`checkToolRateLimit`).
+ *   3. Read-tool cache lookup (`getCachedResult`) — list_channels / list_roles
+ *      / get_server_info etc. are cached 15s per guild+args.
+ *   4. Write-tool cache invalidation — scoped to the writing guild only.
+ *   5. `_executeToolInner`:
+ *      a. Guard against guild-required tools running in DMs
+ *         (`GUILD_REQUIRED_TOOLS`).
+ *      b. Build a shared `ctx` (guild, helpers, by-string) for sub-executors.
+ *      c. Walk `SUB_EXECUTORS` in order — first one to return non-undefined
+ *         wins. Each sub-executor owns a domain and short-circuits its own
+ *         tool names.
+ *      d. Fall back to the inline `switch` for tools not yet extracted into a
+ *         sub-executor.
+ *   6. Cache the result if the tool is in `CACHEABLE_TOOLS`.
+ *
+ * ## Category breakdown (sub-executors)
+ *  - channelExecutor   — create/delete/edit channels, categories, threads
+ *  - roleExecutor      — create/edit/give/remove roles, reaction roles, color picker
+ *  - moderationExecutor — ban / kick / timeout / warn / purge / lockdown
+ *  - voiceExecutor     — move/disconnect users in voice, voice listen toggle
+ *  - setupExecutor     — welcome / autorole / starboard / tickets / verification
+ *  - personalizeExecutor — server persona/avatar/banner, per-channel personality
+ *  - audioExecutor     — music playback, queue, filters, lyrics mode, TTS
+ *  - levelingExecutor  — XP toggles, level rewards, leaderboards
+ *  - advancedExecutor  — twin coordination (`ask_eris`), web_search / web_read,
+ *                        calculate, reminders, scheduled tasks, image gen
+ *  - memoryExecutor    — remember_fact / recall / forget / directives
+ *  - toggleExecutor    — feature flags (auto-responders, invite filter, etc.)
+ *  - messageExecutor   — send_message, animated messages, snipe, find_message
+ *  - serverExecutor    — server-level admin (whitelist, trust, log channel)
+ * Inline cases handle the long tail (temp VC, custom commands, birthdays,
+ * gifs, welcome customization, list_emojis, list_bans, random_member, etc.).
+ *
+ * ## Per-tool error contract
+ * Tools return a user-facing string on success OR on expected failure
+ * (e.g. `"Couldn't find role \"foo\""`, `"this only works in a server, not DMs"`).
+ * The cache deliberately refuses to store strings that look like errors
+ * (`/^(Error:|Couldn't|Failed|Sorry,|I don't have|No guild)/i`) so retries hit
+ * the real handler. A handful of helpers (notably `callEris` and Eris-twin
+ * responses) use `{ error: "..." }` objects internally — `erisErrorText` in
+ * advancedExecutor normalizes those into the same user-facing string shape.
+ * Unknown tools fall through to `"Unknown action: ${toolName}"`.
+ *
+ * ## Cross-references
+ *  - Tool schemas:        `packages/irene/ai/tools.js`
+ *  - Tool registry:       `packages/irene/ai/toolRegistry.js`
+ *  - Rate limiter:        `packages/irene/utils/toolRateLimit.js`
+ *  - Twin client/contract: `packages/irene/ai/executors/advancedExecutor.js`
+ *  - Eris counterpart:    `packages/eris/ai/executor.js`
+ *  - Reference test:      `packages/irene/tests/ai/executors/listEmojis.test.ts`
+ *  - Twin signing test:   `packages/irene/tests/ai/executors/advancedExecutor.test.ts`
+ */
 
 // ─── Tool Execution Engine ──────────────────────────────────────────────────
 // Thin router — delegates to domain-specific sub-executors, falls back to
