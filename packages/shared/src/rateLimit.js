@@ -1,3 +1,56 @@
+/**
+ * @file rateLimit.js
+ * @module @monobot/shared/rateLimit
+ *
+ * @description
+ * In-memory, sliding-window, per-key rate limiter intended for endpoints
+ * where a full Redis / Durable Object solution would be overkill. Each key
+ * tracks an in-place array of recent hit timestamps; a request is allowed
+ * when the count of timestamps inside the trailing `windowMs` is below
+ * `limit`, and rejected otherwise. The window slides naturally — stale
+ * timestamps are pruned on every `allow()` call, so blocked callers recover
+ * without any explicit "reset" tick.
+ *
+ * @summary Key exports
+ *  - {@link createRateLimiter} — factory returning `{ allow, reset, _size }`.
+ *
+ * @summary Algorithm
+ *  Sliding window with lazy pruning. For each `allow(key, now)`:
+ *    1. Look up (or create) the timestamp array for `key`.
+ *    2. Splice off entries older than `now - windowMs`.
+ *    3. If the surviving array length is >= `limit`, return `false` (deny).
+ *    4. Otherwise push `now` and return `true` (allow).
+ *  This is O(hits-in-window) per call, not O(total-hits).
+ *
+ * @summary Memory bound (`maxKeys`)
+ *  Tracked keys are capped by `maxKeys` (default 1000). On overflow the
+ *  factory evicts the entry whose most-recent hit is the oldest — a cheap
+ *  LRU-ish heuristic. This is a memory guard for normal traffic, not a
+ *  security boundary against a high-cardinality flooder; a determined
+ *  attacker can churn keys and force eviction of legitimate ones.
+ *
+ * @summary Scope caveat — per-process state
+ *  All counters live in this Node process's heap. Two replicas behind a
+ *  load balancer each enforce the limit independently, so the effective
+ *  cap is roughly `limit × replicaCount`. Single-process deployments (the
+ *  current MonoBot topology) are unaffected. If/when we horizontally scale
+ *  the HTTP surface, swap this for a shared store (Redis INCR with TTL,
+ *  Cloudflare Durable Object, etc.). See SCALING.md once that doc lands.
+ *
+ * @summary Where it's used
+ *  - `packages/irene/presence.js` — gates `/api/twin/state` per signing
+ *    identity so a misbehaving twin can't flood the presence channel.
+ *  - `packages/eris/api/dashboard.js` — protects dashboard endpoints
+ *    against per-IP brute force / scrape loops.
+ *
+ * @summary Suggested limits
+ *  - Per-IP public read endpoint: `{ limit: 60, windowMs: 60_000 }`.
+ *  - Per-identity webhook / twin push: `{ limit: 30, windowMs: 10_000 }`.
+ *  - Per-user write/mutation: `{ limit: 10, windowMs: 60_000 }`.
+ *  - Per-IP auth/login attempt: `{ limit: 5, windowMs: 60_000 }`.
+ *  Tune by observing real traffic; start permissive and tighten.
+ */
+
 // ─── In-Memory Sliding-Window Rate Limiter ──────────────────────────────────
 // Cheap per-key request limiter for endpoints where a full Redis/DO solution
 // would be overkill. Stores a bounded ring of recent hit timestamps per key
