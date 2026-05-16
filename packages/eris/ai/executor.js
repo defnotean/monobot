@@ -11,6 +11,9 @@
 import * as db from "../database.js";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
+import { EVERYONE_TOOLS, OWNER_TOOLS } from "./tools.js";
+import { LRUCache } from "@defnotean/shared/LRUCache";
+import { checkToolRateLimit } from "../utils/toolRateLimit.js";
 
 // ─── Existing JS sub-executors ──────────────────────────────────────────────
 import { executeEconomyTool } from "./economyExecutor.js";
@@ -33,8 +36,10 @@ import { execute as executeMisc } from "./executors/miscExecutor.js";
 
 // ─── Main executor ───────────────────────────────────────────────────────────
 
-// Complete tool name alias map — all 110+ Evil tools
-const TOOL_ALIASES = {
+// Complete tool name alias map — all 110+ Evil tools.
+// Exported so tests + the boot-time validator below can audit drift between
+// alias targets and the canonical tool registry (tools.js).
+export const TOOL_ALIASES = {
   remember: "remember_fact", save_fact: "remember_fact", memorize: "remember_fact",
   forget: "forget_fact", forget_everything: "forget_all", clear_memories: "forget_all",
   recall: "recall_memories", memories: "recall_memories", facts: "recall_memories",
@@ -134,8 +139,115 @@ const TOOL_ALIASES = {
   set_mood: "adjust_mood", cheer_up: "adjust_mood", nap: "adjust_mood",
 };
 
-import { LRUCache } from "@defnotean/shared/LRUCache";
-import { checkToolRateLimit } from "../utils/toolRateLimit.js";
+// ─── Alias resolution + registry validation ────────────────────────────────
+// Two helpers that are exported for unit testing. Both treat the registry as
+// the union of EVERYONE_TOOLS + OWNER_TOOLS in tools.js — that's the only
+// surface the model ever sees, and the only set the dispatcher can serve.
+
+/**
+ * Resolve a (possibly aliased) tool name against the canonical registry.
+ *
+ * The returned shape lets the caller distinguish three outcomes:
+ *   1. Direct hit:            { name, aliasUsed: false, known: true }
+ *   2. Alias hit:             { name (canonical), aliasUsed: true, originalName, known: true }
+ *   3. Still unknown after alias lookup: { name, originalName, known: false, error: { unknown, normalized } }
+ *
+ * Case 3 is the structured error the model can read back: it tells the model
+ * both the literal string it emitted (`unknown`) and the post-alias name we
+ * tried to dispatch on (`normalized`). The previous generic
+ * "unknown tool: foo" string buried that signal inside the sub-executor
+ * fallback path, so a Gemini-side typo on a real tool (e.g. `recall_facts`
+ * → not aliased → fell through 12 sub-executors → generic error) gave the
+ * model no usable hint on how to self-correct.
+ *
+ * @param {string} toolName            — the name the model emitted
+ * @param {Set<string>} [registry]     — defaults to EVERYONE+OWNER tool names; override for tests
+ */
+export function resolveToolName(toolName, registry = _toolRegistryNames) {
+  const original = toolName;
+  const aliasTarget = Object.prototype.hasOwnProperty.call(TOOL_ALIASES, toolName)
+    ? TOOL_ALIASES[toolName]
+    : null;
+  const normalized = aliasTarget || toolName;
+
+  if (!registry.has(normalized)) {
+    return {
+      name: normalized,
+      originalName: original,
+      aliasUsed: aliasTarget !== null,
+      known: false,
+      error: { unknown: original, normalized },
+    };
+  }
+
+  return {
+    name: normalized,
+    originalName: original,
+    aliasUsed: aliasTarget !== null,
+    known: true,
+  };
+}
+
+/**
+ * Boot-time audit: every TOOL_ALIASES *value* must point to a real registered
+ * tool. If drift is found we throw a clear error listing the offenders, so a
+ * stale alias is caught at startup instead of silently mapping a typo onto
+ * another typo at request time.
+ *
+ * Accepts an optional `registry` (Set or array of names) to make the helper
+ * testable in isolation — production calls pass the live tool list.
+ *
+ * @param {Set<string>|string[]} [registry]
+ * @param {object} [opts]
+ * @param {boolean} [opts.throwOnDrift=true]  — set false for "soft" mode (log + return)
+ * @returns {string[]} the list of alias targets that are NOT in the registry
+ */
+export function validateToolAliases(registry = _toolRegistryNames, opts = {}) {
+  const { throwOnDrift = true } = opts;
+  const registrySet = registry instanceof Set ? registry : new Set(registry || []);
+
+  const offenders = [];
+  for (const [alias, target] of Object.entries(TOOL_ALIASES)) {
+    if (!registrySet.has(target)) offenders.push({ alias, target });
+  }
+
+  if (offenders.length === 0) return [];
+
+  const lines = offenders.map((o) => `  - ${o.alias} -> ${o.target}`).join("\n");
+  const msg =
+    `[EXECUTOR] TOOL_ALIASES drift detected: ${offenders.length} alias(es) ` +
+    `point to tool names not in the registry. The model would silently ` +
+    `auto-correct to a nonexistent tool. Fix tools.js or remove the alias.\n` +
+    lines;
+
+  if (throwOnDrift) {
+    throw new Error(msg);
+  }
+
+  // Soft mode: visible warning, no crash. Used if a future build wants to ship
+  // with known drift while a tool rename rolls out.
+  log(msg);
+  return offenders.map((o) => o.target);
+}
+
+// Canonical name set, computed once at module load. Used by resolveToolName
+// (default arg) and the boot-time audit below.
+const _toolRegistryNames = new Set(
+  [...EVERYONE_TOOLS, ...OWNER_TOOLS].map((t) => t.name)
+);
+
+// Boot-time audit. Throws on drift unless ERIS_SKIP_ALIAS_VALIDATION=1 is set,
+// which is the escape hatch for test runs that need to import the module
+// without enforcing the full registry contract (e.g. when mocking).
+if (process.env.ERIS_SKIP_ALIAS_VALIDATION !== "1") {
+  validateToolAliases(_toolRegistryNames, { throwOnDrift: true });
+}
+
+// Counter for AI-hallucinated tools. Logged on first occurrence and every 10th
+// thereafter so repeated hallucinations are visible without log spam. Declared
+// up here so the executeTool top-of-function unknown-tool path can reference
+// it (the inner sub-executor fallback below uses the same Map).
+const _unknownToolCounts = new Map();
 
 // ─── Tool Result Cache (LRU, 200 entries, 15s TTL) ────────────────────────
 const _toolCache = new LRUCache(200, 15_000);
@@ -201,11 +313,29 @@ const TWO_USER_TOOLS = new Set([
 ]);
 
 export async function executeTool(toolName, input, message) {
-  // Auto-correct common Gemini tool name mistakes
-  if (TOOL_ALIASES[toolName]) {
-    log(`[EXECUTOR] Auto-corrected tool: ${toolName} → ${TOOL_ALIASES[toolName]}`);
-    toolName = TOOL_ALIASES[toolName];
+  // Resolve aliases AND verify the post-alias name exists in the registry.
+  // If the model emits a name that doesn't exist (even after alias lookup),
+  // we return a structured payload telling the model both what it wrote and
+  // what we tried to dispatch — so a follow-up turn can self-correct instead
+  // of getting a vague "unknown tool" string that obscures the fix.
+  const resolution = resolveToolName(toolName);
+  if (!resolution.known) {
+    _unknownToolCounts.set(resolution.originalName, (_unknownToolCounts.get(resolution.originalName) || 0) + 1);
+    const count = _unknownToolCounts.get(resolution.originalName);
+    if (count === 1 || count % 10 === 0) {
+      log(`[EXECUTOR] Unknown tool after alias: original=${resolution.originalName} normalized=${resolution.error.normalized} (hit #${count})`);
+    }
+    // String form keeps the existing wire shape (tools return strings) while
+    // surfacing BOTH names so the model can self-correct. Downstream prompts
+    // can grep for "unknown tool" and parse the JSON tail if they want a
+    // structured handle.
+    return `unknown tool: ${JSON.stringify(resolution.error)}`;
   }
+
+  if (resolution.aliasUsed) {
+    log(`[EXECUTOR] Auto-corrected tool: ${resolution.originalName} → ${resolution.name}`);
+  }
+  toolName = resolution.name;
 
   const userId = message?.author?.id;
 
@@ -356,7 +486,3 @@ async function _executeToolInner(toolName, input, message) {
   return `unknown tool: ${toolName}`;
 
 }
-
-// Counter for AI-hallucinated tools. Logged on first occurrence and every 10th
-// thereafter so repeated hallucinations are visible without log spam.
-const _unknownToolCounts = new Map();

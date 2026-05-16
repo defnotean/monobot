@@ -1,0 +1,75 @@
+import { describe, expect, it } from "vitest";
+// @ts-expect-error JS module without types
+import { TOOL_ALIASES, resolveToolName, validateToolAliases } from "../../ai/executor.js";
+// @ts-expect-error JS module without types
+import { EVERYONE_TOOLS, OWNER_TOOLS } from "../../ai/tools.js";
+
+// Covers the three pieces of the alias-vs-registry contract added so the model
+// gets a structured signal when its emitted tool name is not real (rather than
+// silently sliding through the default-case "unknown tool" string in the
+// sub-executor fallback path).
+//
+//   (a) a real alias resolves to its canonical registered tool
+//   (b) an unknown post-alias name produces a structured error
+//   (c) the validator surfaces drift between TOOL_ALIASES values and the registry
+
+describe("executor alias resolution + registry validation", () => {
+  it("(a) resolves a known alias to its canonical registered tool name", () => {
+    const registered = new Set([...EVERYONE_TOOLS, ...OWNER_TOOLS].map((t: any) => t.name));
+
+    // `balance` is one of the more-traveled aliases in TOOL_ALIASES.
+    // Asserting on the literal map first locks down the alias itself, then we
+    // verify resolveToolName mirrors that mapping AND the target is in the registry.
+    expect(TOOL_ALIASES.balance).toBe("check_balance");
+
+    const resolved = resolveToolName("balance");
+    expect(resolved.known).toBe(true);
+    expect(resolved.aliasUsed).toBe(true);
+    expect(resolved.originalName).toBe("balance");
+    expect(resolved.name).toBe("check_balance");
+    expect(registered.has(resolved.name)).toBe(true);
+  });
+
+  it("(b) returns a structured {unknown, normalized} error for a name that is not in the registry post-alias", () => {
+    // A name with no alias mapping and not in the registry: normalized == original.
+    const out = resolveToolName("definitely_not_a_real_tool_xyz");
+    expect(out.known).toBe(false);
+    expect(out.aliasUsed).toBe(false);
+    expect(out.error).toEqual({
+      unknown: "definitely_not_a_real_tool_xyz",
+      normalized: "definitely_not_a_real_tool_xyz",
+    });
+
+    // And a name whose alias target itself does not exist — exercise the second
+    // failure mode via a custom registry that omits the canonical target. This
+    // simulates the post-rename drift scenario (alias still on the books but
+    // the tool was deleted), without mutating the real registry.
+    const shrunkRegistry = new Set<string>(); // empty
+    const out2 = resolveToolName("balance", shrunkRegistry);
+    expect(out2.known).toBe(false);
+    expect(out2.aliasUsed).toBe(true);
+    expect(out2.error).toEqual({ unknown: "balance", normalized: "check_balance" });
+  });
+
+  it("(c) boot-time validator catches drift when an alias points outside the registry", () => {
+    // Mocked registry that is missing one canonical target every TOOL_ALIASES
+    // entry maps to. Forces every alias-target → "drift". throwOnDrift: false
+    // gives us the offender list back without aborting the test runner; we
+    // separately verify the throwing path raises a clear error too.
+    const emptyRegistry = new Set<string>();
+    const offenders = validateToolAliases(emptyRegistry, { throwOnDrift: false });
+    expect(offenders.length).toBeGreaterThan(0);
+    // Every reported offender must actually be one of the alias targets.
+    const aliasTargets = new Set<string>(Object.values(TOOL_ALIASES) as string[]);
+    for (const t of offenders) expect(aliasTargets.has(t)).toBe(true);
+
+    expect(() => validateToolAliases(emptyRegistry, { throwOnDrift: true }))
+      .toThrowError(/TOOL_ALIASES drift detected/);
+
+    // And the happy path: the *real* registry must have zero drift today — if
+    // a future PR breaks this, the module-load assertion in executor.js will
+    // crash at boot, but this test also fails first which is a friendlier signal.
+    const realRegistry = new Set([...EVERYONE_TOOLS, ...OWNER_TOOLS].map((t: any) => t.name));
+    expect(validateToolAliases(realRegistry, { throwOnDrift: false })).toEqual([]);
+  });
+});
