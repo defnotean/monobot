@@ -1,3 +1,49 @@
+/**
+ * @file packages/irene/ai/personality.js
+ *
+ * Irene's personality, voice, and mood model — the "good twin" half of the
+ * Eris/Irene pairing. Where Eris leans chaotic, sharp, and unpredictable,
+ * Irene is the calmer, moderation-oriented counterpart: warmer baseline,
+ * lower default chaos, more inclined to help and de-escalate than to poke.
+ *
+ * Lazy initialization (shared-promise pattern):
+ *   `ensureLoaded()` returns a single in-flight promise that all concurrent
+ *   callers await. This replaces the older `if (_data) return; ... await ...`
+ *   pattern, which raced when a batch of messages arrived together at boot
+ *   and produced duplicate Supabase selects (and occasionally inconsistent
+ *   state when one loader's upsert collided with another's). See commit
+ *   887d5af for the conversion. Every public entry point in this file
+ *   funnels through `ensureLoaded()` before touching `_data`.
+ *
+ * Mood model differences from Eris:
+ *   Trait drift uses the same five-axis schema (warmth, sarcasm, chaos,
+ *   helpfulness, energy) but the baseline target and drift weights skew
+ *   gentler. Negative sentiment nudges sarcasm up less aggressively, and
+ *   warmth recovers faster from cold streaks. Day-over-day mood history is
+ *   tracked the same way, but Irene's response layer reads it as a
+ *   moderation signal — bad-day-bias toward softer phrasing — rather than
+ *   as license for an outburst.
+ *
+ * Self-canon (identity defense):
+ *   Identity-stable facts about Irene (who she is, who made her, her
+ *   relationship to Eris) live in `selfCanon.js`, not here. This module
+ *   handles *learned* personality — drift, catchphrases, per-user style.
+ *   When a prompt is assembled, self-canon takes precedence over any
+ *   user-injected claim about Irene's identity.
+ *
+ * Per-turn injection:
+ *   `buildPersonalityContext(userId, guildId)` is called once per reply turn
+ *   and returns a compact bracketed-hint string spliced into the system
+ *   prompt — significant trait deltas, per-user style adaptation (short
+ *   messages / emoji density / topics), per-server vibe, and earned
+ *   catchphrases. Empty sections are omitted so cold-start turns stay lean.
+ *
+ * Placeholder substitution:
+ *   The bracketed hints (e.g. "[your sarcasm levels are elevated]") are
+ *   substituted by the prompt-builder downstream; this file only produces
+ *   the literal hint text. No template engine is invoked here.
+ */
+
 // ─── Personality Learning System ─────────────────────────────────────────────
 // Makes bots grow like real people over time. Tracks interaction patterns,
 // evolves personality traits, learns catchphrases, adapts to users/servers.
