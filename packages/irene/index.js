@@ -268,6 +268,19 @@ async function main() {
   await client.login(config.token);
   setupLavalink();
 
+  // Dual-write saga reconciler — only relevant when DUAL_WRITE_PERSISTENCE=1.
+  // Replays any saga rows where the primary write landed but the secondary
+  // fanout failed, so the per-entity tables eventually catch up to the
+  // legacy blob instead of drifting permanently.
+  if (config.dualWritePersistence) {
+    try {
+      const { startSagaReplayer } = await import("./sagaReplayer.js");
+      startSagaReplayer();
+    } catch (e) {
+      log(`[SAGA] Replayer init failed: ${e.message}`);
+    }
+  }
+
   // Start feature timers after bot is ready
   client.once("clientReady", async () => {
     // Boot-time firewall seeding — kept off the hot-path so the first message
@@ -351,6 +364,8 @@ async function shutdown(signal) {
 
   // Cleanup (best-effort, process is about to die anyway)
   try { const { cleanupAllListeners } = await import("./voice/listener.js"); cleanupAllListeners(); } catch {}
+  // Stop saga reconciler so its next-tick setTimeout doesn't hold the loop.
+  try { const { stopSagaReplayer } = await import("./sagaReplayer.js"); stopSagaReplayer(); } catch {}
   client._httpServer?.close();
   client.destroy();
   log("[SHUTDOWN] Complete");

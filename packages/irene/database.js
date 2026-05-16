@@ -121,6 +121,14 @@ async function _getPerEntity() {
   if (!_perEntityModule) _perEntityModule = await import("./database/perEntity.js");
   return _perEntityModule;
 }
+// Saga replayer — same lazy-import dance: sagaReplayer.js calls getSupabase
+// from this file and imports perEntity lazily too. Only invoked when the
+// dual-write flag is on; a no-op otherwise.
+let _sagaModule = null;
+async function _getSaga() {
+  if (!_sagaModule) _sagaModule = await import("./sagaReplayer.js");
+  return _sagaModule;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // IN-MEMORY CACHE — single source of truth for all reads (synchronous)
@@ -359,18 +367,61 @@ async function _flushSave() {
     return;
   }
 
+  // Saga bookkeeping — only when dual-write is on. Tracks each fanout so a
+  // primary-succeeded-secondary-failed case becomes a replayable row instead
+  // of silent drift. createSaga returns null on its own failure, in which
+  // case markSagaLeg is a no-op and we just proceed without tracking.
+  let sagaId = null;
+  if (config.dualWritePersistence) {
+    try {
+      const saga = await _getSaga();
+      sagaId = await saga.createSaga("fanout-snapshot", "snapshot", saveData);
+    } catch (sErr) {
+      console.error(`[DB] saga create failed (non-fatal): ${sErr.message}`);
+    }
+  }
+
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const { error } = await supabase.from("bot_data").upsert({ id: "irene", data: saveData });
       if (!error) {
         _saveRetryCount = 0;
+        // Primary leg landed — stamp the saga before we touch the secondary.
+        if (sagaId) {
+          try {
+            const saga = await _getSaga();
+            await saga.markSagaLeg(sagaId, "primary", "applied");
+          } catch (sErr) {
+            console.error(`[DB] saga primary-mark failed (non-fatal): ${sErr.message}`);
+          }
+        }
         // Dual-write fanout: when the flag is on, also write each entity to
         // its dedicated per-entity table. Runs AFTER the legacy blob write
         // succeeds so a per-entity bug can never break the existing path.
-        // Errors are swallowed at this layer — perEntity.js logs its own.
+        // Errors are caught and recorded on the saga so the replayer can
+        // retry the secondary leg later without losing the payload.
         if (config.dualWritePersistence) {
+          let secondaryOk = true;
+          let secondaryErrMsg = null;
           try { await _dualWriteFanout(saveData); }
-          catch (dwErr) { console.error(`[DB] Dual-write fanout failed: ${dwErr.message}`); }
+          catch (dwErr) {
+            secondaryOk = false;
+            secondaryErrMsg = dwErr?.message ?? String(dwErr);
+            console.error(`[DB] Dual-write fanout failed: ${secondaryErrMsg}`);
+          }
+          if (sagaId) {
+            try {
+              const saga = await _getSaga();
+              await saga.markSagaLeg(
+                sagaId,
+                "secondary",
+                secondaryOk ? "applied" : "failed",
+                secondaryOk ? undefined : secondaryErrMsg,
+              );
+            } catch (sErr) {
+              console.error(`[DB] saga secondary-mark failed (non-fatal): ${sErr.message}`);
+            }
+          }
         }
         return;
       }
@@ -378,6 +429,17 @@ async function _flushSave() {
     } catch (err) {
       console.error(`[DB] Save attempt ${attempt}/3 failed: ${err.message}`);
       if (attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
+    }
+  }
+  // All three primary attempts failed — record on the saga so the row isn't
+  // left in 'pending' forever (the reconciler ignores 'pending' rows since
+  // primary may still be in-flight from another worker).
+  if (sagaId) {
+    try {
+      const saga = await _getSaga();
+      await saga.markSagaLeg(sagaId, "primary", "failed", "primary upsert failed after 3 attempts");
+    } catch (sErr) {
+      console.error(`[DB] saga primary-failure mark failed (non-fatal): ${sErr.message}`);
     }
   }
   if (_saveRetryCount >= MAX_SAVE_RETRIES) {
