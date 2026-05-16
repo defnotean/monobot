@@ -4,6 +4,8 @@ Decision tree for "I want to do X — what file do I open?"
 
 Pair this with [cheatsheet.md](./cheatsheet.md) (which gives you the actual code patterns) and [debugging-playbook.md](./debugging-playbook.md) (which goes the other way: symptom → file).
 
+*Line numbers are approximate and may have drifted — use the nearest section comment as your real anchor.*
+
 ## AI behavior
 
 ### Add a new AI tool

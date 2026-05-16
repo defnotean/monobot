@@ -1,5 +1,7 @@
 # Shared Core Extraction Plan
 
+> **Status: planning doc, not actively tracked.** This was drafted as a roadmap for the shared-package extraction. For current status of extraction work, see [docs/drift-inventory.md](../../docs/drift-inventory.md). Treat the items below as candidate work, not committed scope.
+
 *Status: drafted 2026-04-23, not yet executed.*
 *Owner: TBD.*
 *Prerequisite met:* Step 2 tests from the council round (roleCategorizer, poker, stockMarket, lottery) are in place.

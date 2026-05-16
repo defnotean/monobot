@@ -1,5 +1,7 @@
 # Deploy Migration: from two Render repos → one monorepo
 
+> **Heads up:** every `your-org/...` slug below is a placeholder. Replace `<your-org>` with your actual GitHub organization (or username) throughout this doc — the upstream lives at `defnotean/monobot`, but if you're reading this from a fork you'll be pointing at your own repos.
+
 This guide moves the two Render services (`eris-bot` and `irene-bot`) from their individual repos onto the new `your-org/bots-monorepo`, **one bot at a time**, with a fast rollback path.
 
 The migration is non-destructive: the old repos stay on GitHub and the old service settings can be restored in under a minute.

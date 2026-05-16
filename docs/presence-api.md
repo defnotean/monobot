@@ -111,7 +111,7 @@ Fire-and-forget, called from the moderation executor whenever Irene bans/kicks. 
 
 **Irene → Eris (`ask_eris` LLM tool)** — `packages/irene/ai/executors/advancedExecutor.js:430`
 
-Sub-actions `remind | note | fact | mood | status`. **NOT HMAC-signed** — these hit unauthenticated `/api/twin/{remind,note,fact,...}` endpoints. The Eris API URL is also hardcoded here (`https://eris-bot.onrender.com/api/twin`, line 431) instead of reading `config.twinApiUrl`. Both are pre-existing inconsistencies worth flagging.
+Sub-actions `remind | note | fact | mood | status`. **NOT HMAC-signed** — these hit unauthenticated `/api/twin/{remind,note,fact,...}` endpoints. The Eris API URL used to be hardcoded here; that was previously a known inconsistency. See the latest commit log for the fix that moved these URLs to `config.twinApiUrl`.
 
 ## 5. Failure Modes
 
@@ -154,4 +154,4 @@ Sub-actions `remind | note | fact | mood | status`. **NOT HMAC-signed** — thes
 ## Notes
 
 - All paths above are **searched and verified**. Nothing was missing.
-- One inconsistency worth investigating separately: Irene's `ask_eris` (`packages/irene/ai/executors/advancedExecutor.js:430–492`) hits `https://eris-bot.onrender.com/api/twin/...` (hardcoded, not from `config.twinApiUrl`) and does **not** sign requests, while `twinPunish.js` correctly signs and reads from config. The Eris-side `/api/twin/{remind,note,fact,mood,status}` handlers were not located in this pass — they may be unimplemented routes that fall through to a 404, or they live somewhere not yet grepped under `packages/eris/api/`.
+- The previously-flagged hardcoded Eris URL in `ask_eris` (`packages/irene/ai/executors/advancedExecutor.js:430–492`) was a known inconsistency. See the latest commit log for the fix that moved those URLs to `config.twinApiUrl`. `ask_eris` still does **not** sign requests, while `twinPunish.js` correctly signs and reads from config. The Eris-side `/api/twin/{remind,note,fact,mood,status}` handlers were not located in the original pass — they may be unimplemented routes that fall through to a 404, or they live somewhere not yet grepped under `packages/eris/api/`.

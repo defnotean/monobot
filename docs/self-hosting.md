@@ -32,7 +32,8 @@ Runs on anything with **Node.js 20+** — Linux, macOS, Windows. Tested daily on
 [PM2](https://pm2.keymetrics.io/) is the default for self-hosted Node apps and **works the same on Linux, macOS, and Windows**. It restarts on crash, restarts on reboot, and rotates logs. Start here regardless of OS; the platform-specific sections below are for people who want native service integration.
 
 ```bash
-git clone https://github.com/defnotean/monobot
+# Clone your fork (or the upstream repo, github.com/defnotean/monobot)
+git clone https://github.com/<your-fork>/monobot
 cd monobot
 npm install
 

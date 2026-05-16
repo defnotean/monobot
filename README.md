@@ -8,6 +8,8 @@ Monorepo housing the twin-bot system: two Discord bots (Eris + Irene) and a shar
 | [`packages/irene`](./packages/irene) | Irene — the good twin (server moderation, tickets, music, ~200 tools) | Render service: `irene-bot` |
 | [`packages/shared`](./packages/shared) | Shared core utilities: HMAC twin signing, LRU cache, role categorizer, SSRF-safe fetch | Imported by both bots via `@defnotean/shared/<module>` |
 
+*Service names (`eris-bot`, `irene-bot`) are examples — self-hosters and forks pick their own.*
+
 **Each bot runs independently** — deploy just Eris, just Irene, or both. When both run, they coordinate over an HMAC-signed REST surface (the "twin protocol"). Single-bot setups skip that entirely.
 
 ## New here?
