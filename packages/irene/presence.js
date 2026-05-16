@@ -129,7 +129,7 @@ export function startPresenceAPI(client) {
     }
 
     const origin = req.headers.origin;
-    const selfUrl = process.env.RENDER_EXTERNAL_URL;
+    const selfUrl = process.env.EXTERNAL_URL || process.env.RENDER_EXTERNAL_URL;
     if (origin && selfUrl) {
       try {
         const originUrl = new URL(origin);
@@ -170,7 +170,7 @@ export function startPresenceAPI(client) {
     } else if (req.url?.startsWith("/api/")) {
       // Restricted CORS — only allow same-origin and configured dashboard domains
       const apiOrigin = req.headers.origin;
-      const selfUrl = process.env.RENDER_EXTERNAL_URL;
+      const selfUrl = process.env.EXTERNAL_URL || process.env.RENDER_EXTERNAL_URL;
       const allowedOrigins = [selfUrl, process.env.DASHBOARD_URL].filter(Boolean);
       if (apiOrigin && allowedOrigins.some(o => { try { return new URL(apiOrigin).hostname === new URL(o).hostname; } catch { return false; } })) {
         res.setHeader("Access-Control-Allow-Origin", apiOrigin);

@@ -29,6 +29,7 @@ In a hurry to just get a bot running? **[GETTING_STARTED.md](./GETTING_STARTED.m
 | [docs/presence-api.md](./docs/presence-api.md) | The HMAC twin coordination layer + the dashboard REST surface |
 | [docs/drift-inventory.md](./docs/drift-inventory.md) | Eris ↔ Irene divergence at a glance — read before touching shared modules |
 | [docs/dev-guild-workflow.md](./docs/dev-guild-workflow.md) | Setting up a safe dev Discord guild for testing |
+| [docs/self-hosting.md](./docs/self-hosting.md) | Running on your own hardware (laptop / home server / VPS) instead of Render |
 | [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) | Render deployment runbook + known deploy gotchas |
 
 ## Development
@@ -52,5 +53,7 @@ This monorepo was assembled from two previously separate bot repositories — on
 ## Deployment
 
 See [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) for the step-by-step Render setup and known deploy gotchas (workspace dependency hoisting can silently break things — worth reading before touching dep ranges).
+
+Prefer to run on your own hardware? See [docs/self-hosting.md](./docs/self-hosting.md) — covers Linux/Windows/macOS, process managers, networking, and Lavalink setup.
 
 See [docs/drift-inventory.md](./docs/drift-inventory.md) for files that have drifted between the two bots — some intentionally (per-bot personality, schema), some accidentally (slated for extraction into `@defnotean/shared`).

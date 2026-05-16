@@ -15,7 +15,7 @@ function moodLabel(score) {
 
 export async function handleApiRequest(req, res) {
   // CORS — only allow same-origin and configured dashboard domains
-  const allowedOrigins = [process.env.RENDER_EXTERNAL_URL, config.twinApiUrl, process.env.DASHBOARD_URL].filter(Boolean);
+  const allowedOrigins = [process.env.EXTERNAL_URL, process.env.RENDER_EXTERNAL_URL, config.twinApiUrl, process.env.DASHBOARD_URL].filter(Boolean);
   const origin = req.headers.origin;
   if (origin && allowedOrigins.some(o => origin.startsWith(o))) {
     res.setHeader("Access-Control-Allow-Origin", origin);
