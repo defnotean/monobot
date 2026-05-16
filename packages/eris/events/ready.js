@@ -713,14 +713,28 @@ Write ONE reflection — a higher-order observation about yourself. Example: "i'
   } catch (e) { log(`[CURSE] Restore failed: ${e.message}`); }
   }, 5_000); // 5 seconds after startup
 
-  // Selective memory cleanup — fade trivial memories, keep important ones (like a human)
-  setTimeout(async () => {
+  // ─── Episodic memory maintenance ─────────────────────────────────────────
+  // Episodic memory grows unboundedly without active pruning. The cycle runs
+  // once shortly after startup (so a long-running deployment doesn't carry
+  // stale rows from before the restart), then every 6 hours. A small ±5min
+  // jitter staggers the load across processes when multiple bots boot
+  // together. No-ops when Supabase is not configured.
+  async function _runMemoryMaintenanceCycle() {
     try {
-      const { cleanupTrivialMemories } = await import("../ai/semantic.js");
-      await cleanupTrivialMemories();
-      log("[Ready] Cleaned up trivial episodic memories (kept important ones)");
+      const { runMemoryMaintenance } = await import("../ai/semantic.js");
+      const result = await runMemoryMaintenance();
+      log(`[Memory] Maintenance pass — pruned ${result?.pruned ?? 0} stale memories`);
     } catch (e) {
-      log(`[Ready] Memory cleanup skipped: ${e.message}`);
+      log(`[Memory] Maintenance failed: ${e.message}`);
     }
-  }, 10_000);
+  }
+  setTimeout(_runMemoryMaintenanceCycle, 10_000); // initial sweep, 10s after boot
+  const _MEMORY_MAINT_INTERVAL = 6 * 3600_000; // 6 hours
+  const _MEMORY_MAINT_JITTER = 5 * 60_000; // ±5 min
+  setInterval(() => {
+    // Add jitter inline so concurrent boots don't synchronize their delete
+    // queries against the same Supabase project.
+    const jitter = Math.floor((Math.random() - 0.5) * 2 * _MEMORY_MAINT_JITTER);
+    setTimeout(_runMemoryMaintenanceCycle, Math.max(0, jitter));
+  }, _MEMORY_MAINT_INTERVAL);
 }
