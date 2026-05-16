@@ -53,10 +53,20 @@ function parseObjectValues(source: string, objectName: string) {
   return [...source.slice(start, end).matchAll(/:\s*["']([a-z][a-z0-9_]*)["']/g)].map((match) => match[1]);
 }
 
+function stripComments(src: string) {
+  return src.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 function parseSetValues(source: string, setName: string) {
   const match = source.match(new RegExp(`const\\s+${setName}\\s*=\\s*new\\s+Set\\s*\\(\\s*\\[([\\s\\S]*?)\\]\\s*\\)`));
   if (!match) return [];
-  return [...match[1].matchAll(/["']([a-z][a-z0-9_]*)["']/g)].map((item) => item[1]);
+  return [...stripComments(match[1]).matchAll(/["']([a-z][a-z0-9_]*)["']/g)].map((item) => item[1]);
+}
+
+function parseArrayValues(source: string, arrayName: string) {
+  const match = source.match(new RegExp(`(?:const|export\\s+const)\\s+${arrayName}\\s*=\\s*(?:Object\\.freeze\\s*\\(\\s*)?\\[([\\s\\S]*?)\\]`));
+  if (!match) return [];
+  return [...stripComments(match[1]).matchAll(/["']([a-z][a-z0-9_]*)["']/g)].map((item) => item[1]);
 }
 
 function expectRequiredPropertiesAreDocumented(t: Tool) {
@@ -88,10 +98,15 @@ describe("Eris tool contracts", () => {
   it("keeps aliases and cache policy pointed at real tools", async () => {
     const names = new Set(tools.map((t) => t.name));
     const executor = await readFile(join(process.cwd(), "ai", "executor.js"), "utf8");
+    const toolRegistry = await readFile(join(process.cwd(), "ai", "toolRegistry.js"), "utf8");
     const refs = [
       ...parseObjectValues(executor, "TOOL_ALIASES"),
       ...parseSetValues(executor, "CACHEABLE_TOOLS"),
-      ...parseSetValues(executor, "CACHE_INVALIDATING_TOOLS"),
+      // CACHE_INVALIDATING_TOOLS is built from the canonical ECONOMY_MUTATING_TOOLS
+      // list (in toolRegistry.js) plus CACHE_INVALIDATING_EXTRAS (in executor.js).
+      // Both halves contribute string literals that must reference real tools.
+      ...parseArrayValues(executor, "CACHE_INVALIDATING_EXTRAS"),
+      ...parseArrayValues(toolRegistry, "ECONOMY_MUTATING_TOOLS"),
     ];
 
     for (const ref of refs) {

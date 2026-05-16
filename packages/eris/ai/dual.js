@@ -9,6 +9,7 @@
 import { GoogleGenAI } from "@google/genai";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
+import { getEconomyMutatingTools } from "./toolRegistry.js";
 
 // ─── Internal helpers (exported for unit tests) ─────────────────────────────
 
@@ -397,25 +398,9 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
 
       // Deduplicate — if the model calls multiple game/economy tools in one turn,
       // only execute the first one. Prevents "eris slots" from also firing blackjack etc.
-      // Keep this list aligned with GAME_TOOL_NAMES in toolRegistry.js (recent-usage
-      // suppression) and CACHE_INVALIDATING_TOOLS in executor.js (state-mutating tools).
-      // Drift between them produces inconsistent dedup/skip behavior across iterations.
-      const GAME_TOOLS = new Set([
-        "coinflip_bet", "dice_roll_bet", "slots_spin", "blackjack_start", "blackjack_action",
-        "russian_roulette", "rps_play",
-        "trivia_start", "trivia_answer",
-        "word_scramble_start", "word_scramble_guess",
-        "number_guess_start", "number_guess_attempt",
-        "fish", "dig", "hunt", "work", "beg", "search_location",
-        "pet_battle", "pet_train",
-        "daily_reward", "weekly_reward", "monthly_reward",
-        "shop_buy", "shop_browse",
-        "rob_user", "start_duel", "accept_duel",
-        "scratch_card", "open_lootbox", "open_all_lootboxes",
-        "adventure_start", "adventure_choice",
-        "heist_start", "heist_join", "heist_execute",
-        "boss_spawn", "boss_attack",
-      ]);
+      // Canonical list lives in toolRegistry.js (ECONOMY_MUTATING_TOOLS); see the
+      // comment there for why three features share the same source.
+      const GAME_TOOLS = new Set(getEconomyMutatingTools());
       let gameToolSeen = false;
       const skippedGameTools = new Set();
       const skippedDuplicates = new Set(); // exact signature already executed

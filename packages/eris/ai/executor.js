@@ -14,6 +14,7 @@ import { log } from "../utils/logger.js";
 import { EVERYONE_TOOLS, OWNER_TOOLS } from "./tools.js";
 import { LRUCache } from "@defnotean/shared/LRUCache";
 import { checkToolRateLimit } from "../utils/toolRateLimit.js";
+import { getEconomyMutatingTools } from "./toolRegistry.js";
 
 // ─── Existing JS sub-executors ──────────────────────────────────────────────
 import { executeEconomyTool } from "./economyExecutor.js";
@@ -260,21 +261,29 @@ const CACHEABLE_TOOLS = new Set([
   "inventory_check", "loan_status", "pet_status", "multiplier_check",
   "territory_map", "boss_status", "partner_status", "bank_info",
 ]);
-// Write tools that should invalidate the cache
-const CACHE_INVALIDATING_TOOLS = new Set([
-  "shop_buy", "daily_reward", "weekly_reward", "monthly_reward",
-  "coinflip_bet", "dice_roll_bet", "slots_spin", "blackjack_start", "blackjack_action",
-  "russian_roulette", "rps_play",
-  "rob_user", "give_coins", "bank_deposit", "bank_withdraw",
-  "stock_buy", "stock_sell", "loan_request", "loan_repay",
+// Write tools that should invalidate the cache. Built from the canonical
+// ECONOMY_MUTATING_TOOLS list (toolRegistry.js) plus extras specific to
+// cache invalidation: memory writes, bank/loan, marriage, crafting,
+// prestige, curses, and other non-game state mutators. Keep the extras
+// non-overlapping with the canonical list — toolRegistry.js owns games.
+const CACHE_INVALIDATING_EXTRAS = [
+  // memory + notes (read-cached, write-invalidate)
   "remember_fact", "forget_fact", "forget_all", "save_note", "delete_note",
-  "pet_adopt", "pet_feed", "pet_rename", "pet_train", "pet_battle",
+  // banking + stocks + loans
+  "bank_deposit", "bank_withdraw", "stock_buy", "stock_sell",
+  "loan_request", "loan_repay",
+  // transfers + relationship state
+  "give_coins", "trade_offer", "marry", "divorce", "prestige",
+  // pets that mutate inventory/state but aren't gambling/activity
+  "pet_adopt", "pet_feed", "pet_rename",
+  // crafting + items
   "craft_item", "use_item",
-  "trade_offer", "marry", "divorce", "prestige", "adventure_choice",
+  // social mutators
   "submit_confession", "apply_curse", "remove_curse", "roast_challenge",
-  "start_duel", "accept_duel",
-  "fish", "hunt", "dig", "work", "beg", "search_location",
-  "scratch_card", "open_lootbox", "open_all_lootboxes",
+];
+const CACHE_INVALIDATING_TOOLS = new Set([
+  ...getEconomyMutatingTools(),
+  ...CACHE_INVALIDATING_EXTRAS,
 ]);
 
 function getCachedResult(toolName, args, userId) {

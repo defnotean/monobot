@@ -5,6 +5,62 @@
 
 import { log } from "../utils/logger.js";
 
+// ─── Canonical economy-mutating tool list ──────────────────────────────────
+// Single source of truth for "tools that consume/produce coins, items, or
+// other shared economy state per call". Three cross-cutting features need
+// the same set with slightly different framing:
+//
+//   1. dual.js → parallel-call dedup: only execute the first game/economy
+//      tool per turn so "eris slots" doesn't also fire blackjack.
+//   2. toolRegistry.js (this file) → recent-usage suppression: don't auto-
+//      boost a game tool back into Tier 1 just because it was used recently
+//      in this channel — let keyword routing decide each turn.
+//   3. executor.js → cache invalidation: after one of these runs, drop the
+//      user's cached read-tool results so their next "check balance" is fresh.
+//
+// Historically these were three hand-maintained `new Set([...])` literals
+// in three files. They drifted (dual.js had `shop_browse`, registry didn't,
+// executor had bank/memory writes the others didn't). Drift produces
+// inconsistent dedup vs cache-invalidation behavior across iterations.
+//
+// Each consumer now imports `getEconomyMutatingTools()` and may extend it
+// with feature-specific extras (executor.js adds memory writes + bank +
+// marriage + crafting that aren't "games" but still mutate user state).
+export const ECONOMY_MUTATING_TOOLS = Object.freeze([
+  // ── gambling games ─────────────────────────────────────────────────────
+  "coinflip_bet", "dice_roll_bet", "slots_spin",
+  "blackjack_start", "blackjack_action",
+  "russian_roulette", "rps_play",
+  // ── trivia / mini-games ─────────────────────────────────────────────────
+  "trivia_start", "trivia_answer",
+  "word_scramble_start", "word_scramble_guess",
+  "number_guess_start", "number_guess_attempt",
+  // ── grinding activities ─────────────────────────────────────────────────
+  "fish", "hunt", "dig", "work", "beg", "search_location",
+  // ── PvP / pets ─────────────────────────────────────────────────────────
+  "rob_user", "start_duel", "accept_duel",
+  "pet_battle", "pet_train",
+  // ── loot / lottery ─────────────────────────────────────────────────────
+  "scratch_card", "open_lootbox", "open_all_lootboxes",
+  // ── multi-step / event tools ───────────────────────────────────────────
+  "adventure_start", "adventure_choice",
+  "heist_start", "heist_join", "heist_execute",
+  "boss_spawn", "boss_attack",
+  // ── timed rewards ───────────────────────────────────────────────────────
+  "daily_reward", "weekly_reward", "monthly_reward",
+  // ── shop ───────────────────────────────────────────────────────────────
+  "shop_browse", "shop_buy",
+]);
+
+/**
+ * Returns the canonical list of economy-mutating tool names as a fresh
+ * Array. Callers typically wrap it in a `new Set(...)` for O(1) `.has()`.
+ * @returns {string[]}
+ */
+export function getEconomyMutatingTools() {
+  return [...ECONOMY_MUTATING_TOOLS];
+}
+
 class ToolRegistry {
   constructor() {
     this._tools = new Map();           // name -> full tool definition
@@ -52,23 +108,11 @@ class ToolRegistry {
       }
     }
 
-    // Boost recently used tools in this channel (skip game/activity tools to prevent AI from auto-firing them).
-    // Keep aligned with GAME_TOOLS in dual.js (parallel-call dedup) and CACHE_INVALIDATING_TOOLS in executor.js.
-    const GAME_TOOL_NAMES = new Set([
-      "coinflip_bet", "dice_roll_bet", "slots_spin", "blackjack_start", "blackjack_action",
-      "russian_roulette", "rps_play",
-      "trivia_start", "trivia_answer",
-      "word_scramble_start", "word_scramble_guess",
-      "number_guess_start", "number_guess_attempt",
-      "fish", "hunt", "dig", "work", "beg", "search_location",
-      "rob_user", "start_duel", "accept_duel",
-      "pet_battle", "pet_train",
-      "scratch_card", "open_lootbox", "open_all_lootboxes",
-      "adventure_start", "adventure_choice",
-      "daily_reward", "weekly_reward", "monthly_reward",
-      "heist_start", "heist_join", "heist_execute",
-      "boss_spawn", "boss_attack",
-    ]);
+    // Boost recently used tools in this channel — but skip economy-mutating
+    // tools so the AI doesn't auto-fire them every time the channel mentions
+    // games. Canonical list lives at the top of this file; see the comment
+    // there for why dual.js and executor.js share the same source.
+    const GAME_TOOL_NAMES = new Set(ECONOMY_MUTATING_TOOLS);
     if (channelKey) {
       const recent = this._recentUsage.get(channelKey);
       if (recent) {
