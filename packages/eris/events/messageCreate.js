@@ -1,3 +1,151 @@
+/**
+ * @file packages/eris/events/messageCreate.js
+ * @module eris/events/messageCreate
+ *
+ * @summary Eris's main message-event handler — the front door to the entire
+ *   AI conversation pipeline. Every Discord MESSAGE_CREATE gateway event
+ *   lands here, gets gated, contextualized, sent to an LLM provider, post-
+ *   processed, and persisted.
+ *
+ * @description
+ *   AUDIT-FLAGGED GOD-FUNCTION. As of this header (1,400+ lines), the
+ *   default export `messageCreate(message)` is a single async function that
+ *   owns the full request lifecycle end-to-end. Touch it carefully — the
+ *   sections below interact through shared local state (`history`,
+ *   `systemInstruction`, `firewallGate`, `_typingInterval`,
+ *   `_replyDelivered`) and an early `return` in the wrong place silently
+ *   drops responses.
+ *
+ *   Pipeline stages (numbered banner comments inside the file mark each
+ *   boundary — keep them in sync if you edit):
+ *
+ *     1. ENTRY              — partial fetch, self-message guard, dedup.
+ *     2. GATING             — bump-service detection, sleep mode, bot/twin
+ *                             filters, exploit pattern matches, repeat-
+ *                             spam escalation, twin exchange counter,
+ *                             directive silencing, mention/name/awaited-
+ *                             reply detection, channel mute list, rate-
+ *                             limit short-circuit, anti-spam cooldown,
+ *                             message-length guard, speculative firewall.
+ *     3. CONTEXT BUILDING   — relationship/mood/memory fetch, cross-channel
+ *                             snippets, server persona, personality,
+ *                             temporal context, mood modifiers, parallel
+ *                             context fetch (personality/opinion/canon/
+ *                             twin/long-term/preoccupation), slang guard,
+ *                             keyword-triggered tool hints, response-style
+ *                             picker, group-chat awareness, directives,
+ *                             novelty block, history compression, tool
+ *                             profile selection, humanity/twin context.
+ *     4. AI CALL            — `runGeminiChat(...)` via the provider router.
+ *                             Tool-dispatch callback executes structured
+ *                             tool calls inline via `executeTool`.
+ *     5. TOOL DISPATCH      — inline inside the AI callback (no separate
+ *                             stage). Game-tool side effects are detected
+ *                             post-hoc via `gameEmbedSent`.
+ *     6. RESPONSE RENDERING — strip leaked tool syntax, resolve @username
+ *                             mentions, enforce char budget, firewall gate
+ *                             on outbound, `sendHumanReply` with realistic
+ *                             typing, awaited-reply bookkeeping, sleep
+ *                             trigger detection, 1% afterthought.
+ *     7. STATE PERSISTENCE  — push to in-memory `conversations` LRU, update
+ *                             relationship/mood, personality tracking,
+ *                             long-term episode extraction, passive coin
+ *                             earn, inside-joke detection, auto-nap on
+ *                             low energy.
+ *
+ *   HOT PATHS (run every message, must stay fast):
+ *     - dedup, sleep check, bot filter, twin gate, exploit regex scan,
+ *       repeat-spam tracker, mention detection, cooldown, firewall kickoff,
+ *       history compression, tool-profile lookup (cached),
+ *       `runGeminiChat` itself.
+ *
+ *   COLD PATHS (gated, rare, or post-reply):
+ *     - bump-service confirm handler, exploit roast reply, spam timeout,
+ *       afterthought generation, auto-nap, owner-only branches
+ *       (whitelist force-call, length budget exceptions), karaoke trigger.
+ *
+ *   STATE TOUCHED:
+ *     - Database (sqlite via `db`):    saveInteraction, getRelationship,
+ *                                      getMood, getPersonality, getServerPersona,
+ *                                      getDirectives, getGuildSettings,
+ *                                      updateRelationship, shiftMood,
+ *                                      earnMessageCoins, getRecentDreams,
+ *                                      logToolUsage, getUserPreferences,
+ *                                      updateUserPreferences.
+ *     - Supabase (optional):           eris_memories cross-channel select,
+ *                                      firewall logBlockedAttempt.
+ *     - Per-channel mutex:             `channelLocks` Map — `withLock`
+ *                                      serializes concurrent messages per
+ *                                      channel so context build and AI call
+ *                                      never race within one channel.
+ *     - In-memory caches/LRUs:         conversations (per-channel history),
+ *                                      _processed (msg dedup),
+ *                                      _memoryCtxCache (memory ctx TTL),
+ *                                      _lastMessages (repeat detection),
+ *                                      _warnings (spam escalation),
+ *                                      _twinExchanges / _twinLastContent
+ *                                      (twin loop guard),
+ *                                      _awaitingReply (follow-up bypass),
+ *                                      _sleepUntil (sleep/nap state),
+ *                                      _cachedGeminiTools / _twinTools etc.
+ *                                      (sanitized tool profile cache),
+ *                                      _geminiPools (per-key client pool).
+ *     - Globals:                       globalThis._spamTracker,
+ *                                      globalThis._botExchanges,
+ *                                      globalThis._phraseTracker.
+ *
+ *   CROSS-REFERENCES (the heavy lifters this file orchestrates):
+ *     - ai/providers/index.js   — provider routing, runGeminiChat, rate-
+ *                                 limit state, looksLikeTask, quickReply.
+ *     - ai/executor.js          — tool dispatch (executeTool callback
+ *                                 target for every structured tool call).
+ *     - ai/firewall.js          — checkInjection / spotlight /
+ *                                 logBlockedAttempt for the speculative
+ *                                 firewall gate.
+ *     - ai/personality.js       — buildPersonalityContext, trackInteraction,
+ *                                 _getData driving preoccupations.
+ *     - ai/humanity.js          — trackHumanInteraction, buildHumanityContext,
+ *                                 buildTwinContext, detectMoment, periodicUpdate.
+ *     - ai/memory.js            — buildMemoryContext.
+ *     - ai/longmemory.js        — buildLongTermContext, analyzeExchange.
+ *     - ai/responsestyle.js     — pickResponseStyle, shouldLaze,
+ *                                 getImperfectionHint.
+ *     - ai/contextCompressor.js — compressHistory (history budget enforcer).
+ *     - ai/tools.js / ai/toolRegistry.js — tool catalog + novelty block.
+ *     - ai/bumpReminder.js      — detectBumpService, handleBumpConfirm.
+ *     - utils/humanDelay.js     — sendHumanReply (realistic typing + split).
+ *     - utils/cooldown.js       — checkCooldown.
+ *     - events/ready.js         — markActivity.
+ *
+ *   REFACTOR ROADMAP (extraction candidates, ordered by ease):
+ *     1. Gating layer (sections 2.*) → `events/messageCreate/gates.js` —
+ *        pure predicates returning {pass, reason}. Sleep, bots, twin,
+ *        exploits, repeat-spam, directives, mentions, rate-limit,
+ *        cooldown, length. Each is independently testable.
+ *     2. Context assembly (section 3) → `ai/buildSystemPrompt.js` —
+ *        takes (message, db, caches) → systemInstruction string. The
+ *        keyword-triggered tool hints belong in their own table-driven
+ *        helper (`ai/promptHints.js`) rather than as a wall of `if`s.
+ *     3. Reply post-processor (the regex parade in section 6) →
+ *        `ai/replyScrub.js` — single function `scrubLeakedToolSyntax(text)`.
+ *     4. Sleep/nap state (top + section after 7) → `ai/sleepState.js` —
+ *        already half-extracted via the exported `triggerSleep` /
+ *        `isSleeping` / `wakeSleep`. Move the triggers and detection
+ *        regexes too.
+ *     5. Twin handling (twin gate + isTwinMsg branches in context/history)
+ *        → `ai/twinFlow.js` — twin is conceptually a separate conversation
+ *        modality and is currently woven through every stage.
+ *     6. Spam / abuse tracking (`trackMessage`, `addWarning`,
+ *        `_spamTracker`) → `ai/abuseTracker.js`.
+ *
+ *   Once those are out, the remaining `messageCreate` shell should be
+ *   ~150 lines orchestrating named stages — diffable, reviewable, and
+ *   the per-channel lock + dedup stay in this file as the entry-point's
+ *   own responsibility.
+ *
+ *   See `docs/ai-pipeline-eris.md` for the matching stage docs and
+ *   `docs/start-here.md` for the first-time-reader walkthrough.
+ */
 // ─── packages/eris/events/messageCreate.js ──────────────────────────────
 // The whole AI pipeline: gating → context → AI → tool dispatch → render → persist.
 // 1,328 lines; section dividers below match docs/ai-pipeline-eris.md stages.
