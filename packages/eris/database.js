@@ -53,12 +53,13 @@
  *   on any multi-process / multi-replica deployment.
  *
  * REQUIRE_PERSISTENCE env var:
- *   Parsed in config.js as `config.requirePersistence` (default off). The
- *   intent (documented in self-hosting.md / GETTING_STARTED.md) is fail-
- *   fast on missing Supabase so silent in-memory mode never reaches
- *   production. `updateBalance` already refuses to mutate when Supabase
- *   is offline (`economy_unavailable: database offline`) regardless of
- *   the flag — that is the load-bearing guard against silent coin loss.
+ *   Parsed in config.js as `config.requirePersistence` (default off). When
+ *   truthy, `initDatabase()` throws hard if Supabase credentials are missing
+ *   or all init retries fail — production deploys flip this so silent in-
+ *   memory mode never reaches Render (parity with packages/irene/database.js).
+ *   `updateBalance` already refuses to mutate when Supabase is offline
+ *   (`economy_unavailable: database offline`) regardless of the flag — that
+ *   is the load-bearing guard against silent coin loss.
  *
  * In-memory mode caveats:
  *   With Supabase unconfigured (or all init attempts failed), the bot
@@ -145,6 +146,16 @@ let data = {
 // ─── INIT ───
 export async function initDatabase() {
   if (!config.supabaseEnabled) {
+    // REQUIRE_PERSISTENCE=1 → boot must abort instead of silently dropping to
+    // in-memory mode. Production deploys flip this; local/dev leaves it at 0.
+    // Parity with packages/irene/database.js — silent fallback on Render would
+    // burn user state on every deploy.
+    if (config.requirePersistence) {
+      throw new Error(
+        "[DB] REQUIRE_PERSISTENCE=1 but SUPABASE_URL / SUPABASE_KEY are missing or invalid. " +
+        "Refusing to boot in in-memory mode. Set valid Supabase credentials or unset REQUIRE_PERSISTENCE."
+      );
+    }
     log("[DB] Supabase not configured — in-memory only");
     return;
   }
@@ -160,6 +171,15 @@ export async function initDatabase() {
       // Exponential backoff with jitter: ~2s, ~4s, ~8s
       if (attempt < 3) await new Promise(r => setTimeout(r, (2 ** attempt) * 1000 + Math.random() * 500));
     }
+  }
+  // All retries exhausted — honor REQUIRE_PERSISTENCE rather than silently
+  // proceeding with an empty cache.
+  supabase = null;
+  if (config.requirePersistence) {
+    throw new Error(
+      "[DB] REQUIRE_PERSISTENCE=1 and all 3 Supabase init attempts failed. " +
+      "Refusing to boot in in-memory mode."
+    );
   }
   log("[DB] Supabase init failed — falling back to in-memory");
 }
