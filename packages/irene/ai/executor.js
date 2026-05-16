@@ -69,7 +69,7 @@
  * ## Cross-references
  *  - Tool schemas:        `packages/irene/ai/tools.js`
  *  - Tool registry:       `packages/irene/ai/toolRegistry.js`
- *  - Rate limiter:        `packages/irene/utils/toolRateLimit.js`
+ *  - Rate limiter:        `packages/shared/src/utils/toolRateLimit.js`
  *  - Twin client/contract: `packages/irene/ai/executors/advancedExecutor.js`
  *  - Eris counterpart:    `packages/eris/ai/executor.js`
  *  - Reference test:      `packages/irene/tests/ai/executors/listEmojis.test.ts`
@@ -84,7 +84,7 @@ import { ChannelType, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, Butto
 import { setAfkSettings, setCreateVcChannel, getCustomCommand, setCustomCommand, deleteCustomCommand, listCustomCommands, isDmOptout, setDmOptout, setVcTemplate, setVcDefaultLimit, setVcTextChannels, setWelcomeEmbed, getWelcomeEmbed, getGuildSettings, setBirthdayChannel, setBirthdayRole, setBirthdayMessage, getBirthdayConfig, addToWhitelist, removeFromWhitelist, getWhitelist, setGifEmbed, logAudit, saveTempVc } from "../database.js";
 import { buildWelcomeEmbed, parseEmbedColor } from "../events/guildMemberAdd.js";
 import config from "../config.js";
-import { checkToolRateLimit } from "../utils/toolRateLimit.js";
+import { checkToolRateLimit } from "@defnotean/shared/toolRateLimit";
 import { sendModLog } from "../utils/logger.js";
 import { modEmbed } from "../utils/embeds.js";
 import { log } from "../utils/logger.js";

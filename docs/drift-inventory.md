@@ -26,7 +26,7 @@ Quick rule: if you're about to edit a file tagged anything other than `INTENTION
 | `ai/regexWorker.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Drop-in shared candidate. |
 | `ai/temporal.js` | no | no | EXTRACTED | Lives in `packages/shared/src/ai/temporal.js`. Per-bot copies have been removed. |
 | `ai/memoryQuirks.js` | no | no | EXTRACTED | Lives in `packages/shared/src/ai/memoryQuirks.js`. Per-bot copies have been removed. |
-| `ai/selfCanon.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Logger import is now unblocked, but the module still depends on bot-local `ai/personality.js` via `await import("./personality.js")` for `_getData` / `_markOpinionsDirty`. Needs a DI/registration pass (or sharing of `personality.js` first) before it can move. |
+| `ai/selfCanon.js` | yes (shim) | yes (shim) | EXTRACTED | Factory `createSelfCanon({ getData, markOpinionsDirty })` lives in `packages/shared/src/ai/selfCanon.js`. Per-bot `ai/selfCanon.js` is now a thin shim binding the bot's `personality.js` accessors. |
 | `ai/responsestyle.js` | no | no | EXTRACTED | Lives in `packages/shared/src/ai/responsestyle.js`. Per-bot copies have been removed. |
 | `ai/humanity.js` | yes | yes | ACCIDENTAL DRIFT | Eris is canonical (UTC-day streak, time-based grudge decay, dedup-before-push, defensive `_lastDay` persistence). Irene needs port. |
 | `ai/semantic.js` | yes | yes | ACCIDENTAL DRIFT | Eris has FIFO cache cap, length-aware hash, split store/search rate trackers, smart "human-like forgetting" cleanup. Irene's only structural difference is the `eris_*`/`irene_*` table prefix — parametrize for shared. |
@@ -37,7 +37,9 @@ Quick rule: if you're about to edit a file tagged anything other than `INTENTION
 | `ai/contextCompressor.js` | yes | yes | INTENTIONALLY DIFFERENT | Different LLM message formats. Eris compresses Gemini-style entries (`parts: [{ text }]`); Irene compresses Anthropic-style entries (`content: string \| [blocks]`) with `tool_use`/`tool_result` block handling and orphan sanitization. |
 | `ai/dual.js` | yes | yes | INTENTIONALLY DIFFERENT | Eris is a thin generic dual-model wrapper (sanitizeSchema, toGeminiTools, quickReply, looksLikeTask). Irene is a full bot orchestrator with admin-tool denials, hardcoded "irene"/mod-action keywords, music-bot keywords (tts/voice/vc), and an inline tool-call loop. |
 | `ai/karaoke.js` | yes | yes | INTENTIONALLY DIFFERENT | Irene has the real implementation (Lavalink integration, dual message/nickname display modes, queue polling, title cleanup). Eris's copy is vestigial — comment even says "Irene-only feature" and it imports lastfm. Should be removed from Eris. |
-| `ai/bump{Reminder,Celebrations,Correlation,Applause,Analytics,UserPrefs}.js` | yes | yes | ACCIDENTAL DRIFT | ~150KB family; bot-agnostic, prime sharing candidate. |
+| `ai/bumpApplause.js` | yes (shim) | yes (shim) | EXTRACTED | Factory `createBumpApplause({ getGuildSettings, isQuietHoursActive, getSupabase, getUserStreak, getBumpLeaderboard, log })` lives in `packages/shared/src/ai/bumpApplause.js`. Per-bot shim wires the bot's database + analytics. |
+| `ai/bumpUserPrefs.js` | yes (shim) | yes (shim) | EXTRACTED | Factory `createBumpUserPrefs({ getSupabase, log })` lives in `packages/shared/src/ai/bumpUserPrefs.js`. Per-bot shim binds the bot's Supabase client. |
+| `ai/bump{Reminder,Celebrations,Correlation,Analytics}.js` | yes | yes | ACCIDENTAL DRIFT | Remaining bump-family modules; bot-agnostic, prime sharing candidates. |
 | `ai/executor.js` + `ai/executors/*` | yes | yes | INTENTIONALLY DIFFERENT | Dispatch fans out into bot-specific executors (Eris: economy/gambling/games; Irene: moderation/voice/leveling). |
 | `ai/providers/index.js` | yes | yes | ACCIDENTAL DRIFT | Eris is canonical — adds NVIDIA→Gemini fallback router with circuit-open detection. Irene is single-provider. Port Eris's wrapper. |
 | `ai/providers/gemini.js` | yes | yes | INTENTIONALLY DIFFERENT | Re-exports the bot's local `dual.js`. Since `dual.js` itself is bot-specific (see above), the adapter is too — Irene stubs missing exports (`toGeminiTools` passthrough, `isRateLimited` returns false) that Eris's `dual.js` does export. |
@@ -45,9 +47,9 @@ Quick rule: if you're about to edit a file tagged anything other than `INTENTION
 | `utils/twinSign.js` | no | no | EXTRACTED | Lives in `packages/shared/src/twinSign.js`. Per-bot copies have been removed. |
 | `utils/LRUCache.js` | no | no | EXTRACTED | Lives in `packages/shared/src/LRUCache.js`. Per-bot copies have been removed. |
 | `utils/roleCategorizer.js` | no | no | EXTRACTED | Lives in `packages/shared/src/roleCategorizer.js`. Per-bot copies have been removed. |
-| `utils/twinState.js` | yes | yes | IDENTICAL | Byte-equal modulo CRLF. Logger import is now unblocked, but the module still imports bot-local `config.js` for `twinApiSecret` / `twinApiUrl`. Needs a config-injection pass before extraction. |
+| `utils/twinState.js` | yes (shim) | yes (shim) | EXTRACTED | Factory `createTwinState({ getSecret, getUrl, log })` lives in `packages/shared/src/utils/twinState.js`. Per-bot shim wires the bot's `config.twinApiSecret` / `config.twinApiUrl`. |
 | `utils/humanDelay.js` | no | no | EXTRACTED | Lives in `packages/shared/src/utils/humanDelay.js`. Per-bot copies have been removed. |
-| `utils/toolRateLimit.js` | yes | yes | ACCIDENTAL DRIFT | Earlier audit's "logic byte-equal" claim is stale. Irene's `TOOL_LIMITS` now includes `generate_image` and `say_tts` entries (image-gen + TTS are Irene-only features); Eris does not. Reconcile by parametrizing the limit map per bot, then extract. |
+| `utils/toolRateLimit.js` | no | no | EXTRACTED | Lives in `packages/shared/src/utils/toolRateLimit.js`. The `TOOL_LIMITS` map is the superset (includes Irene's `generate_image` + `say_tts`); Eris's tool registry never dispatches those tools, so the extra entries are harmless. Per-bot copies removed. |
 | `utils/cooldown.js` | yes | yes | ACCIDENTAL DRIFT | Same core, but Irene adds `resetCooldown()` (refund on failure) and a deferred `startCooldownCleanup()` (vs Eris's import-time `setInterval`). Irene's API is the better target. |
 | `utils/logger.js` | yes (shim) | yes (shim) | EXTRACTED (split) | Core factory `createLogger({ botPrefix, logFile, redact })` lives in `packages/shared/src/logger.js`. Per-bot `utils/logger.js` is now a thin shim that calls the factory and re-exports `log` + `redact`; Irene's shim also defines the bot-local `sendModLog()` since that depends on Irene's `database.js` + `embeds.js`. |
 | `utils/permissions.js` | yes | yes | INTENTIONALLY DIFFERENT | Different domains. Eris exports owner/trusted-user gating (`isOwner`/`isTrusted`/`canCustomize`/`denyMessage`) for the creator-only command surface. Irene exports Discord moderation gating (`isAdminOrOwner`/`requirePermission`/`canModerate`) with role-hierarchy checks. Belongs per-bot. |
@@ -82,9 +84,14 @@ Lives in `packages/shared/src/` (workspace package `@defnotean/shared`):
 - `ai/memoryQuirks.js` — rare memory-imperfection hints
 - `ai/responsestyle.js` — dynamic response-style picker
 - `ai/keyPool.js` — smart API-key pool with per-key rate-limit tracking; logger is injected via `{ log }` opt
+- `ai/selfCanon.js` — `createSelfCanon({ getData, markOpinionsDirty })` factory; per-bot shim binds the bot's personality store
+- `ai/bumpApplause.js` — `createBumpApplause({ getGuildSettings, isQuietHoursActive, getSupabase, ... })` factory; per-bot shim wires bot deps
+- `ai/bumpUserPrefs.js` — `createBumpUserPrefs({ getSupabase, log })` factory; per-bot shim wires bot deps
 - `utils/humanDelay.js` — human-timed message delivery
+- `utils/twinState.js` — `createTwinState({ getSecret, getUrl, log })` factory; per-bot shim wires twin API config
+- `utils/toolRateLimit.js` — sliding-window per-user caps with the superset of all bots' rate-limited tools
 
-Per-bot copies have been removed — both bots now import from `@defnotean/shared` for these modules.
+Per-bot copies have been removed — both bots now import from `@defnotean/shared` for these modules. Modules whose dependencies vary per bot (logger, personality store, Supabase client, twin config) use a factory + thin per-bot shim instead of a direct re-export.
 
 ## When your change touches drifted code
 
@@ -100,12 +107,8 @@ Per [CONTRIBUTING.md](../CONTRIBUTING.md) "Before you start", talk to the mainta
 EXTRACTION_PLAN.md was **drafted 2026-04-23, not yet executed**. Phase progress:
 - **Phase 0 (reconcile drifts):** not started — `firewall`, `personality`, `longmemory` still differ between bots. (`twinSign` already reconciled — see Phase 2.)
 - **Phase 1 (workspace structure):** done — already a monorepo with `packages/{eris,irene,shared}`.
-- **Phase 2 (move files):** partial — `LRUCache`, `roleCategorizer`, `twinSign`, plus `ai/{temporal,memoryQuirks,responsestyle,keyPool}`, `logger` (factory + per-bot shim), and `utils/humanDelay` already extracted. Files still pending:
-  - `ai/selfCanon.js` — still imports bot-local `ai/personality.js` (`_getData` / `_markOpinionsDirty`).
-  - `ai/bumpApplause.js`, `ai/bumpUserPrefs.js` — still import bot-local `database.js` (and bumpApplause also `bumpReminder.js` + `bumpAnalytics.js`).
-  - `utils/twinState.js` — still imports bot-local `config.js`.
-  - `utils/toolRateLimit.js` — now ACCIDENTAL DRIFT (Irene-only `generate_image` + `say_tts` entries); reconcile first.
-  - ACCIDENTAL DRIFT files (`humanity`, `semantic`, `preoccupations`, `opinions`, `cooldown`, `providers/index`) still need a brief reconcile pass before extraction.
+- **Phase 2 (move files):** partial — `LRUCache`, `roleCategorizer`, `twinSign`, plus `ai/{temporal,memoryQuirks,responsestyle,keyPool,selfCanon,bumpApplause,bumpUserPrefs}`, `logger` (factory + per-bot shim), `utils/humanDelay`, `utils/twinState` (factory + per-bot shim), and `utils/toolRateLimit` already extracted. Files still pending:
+  - ACCIDENTAL DRIFT files (`humanity`, `semantic`, `preoccupations`, `opinions`, `cooldown`, `providers/index`, `bumpReminder`, `bumpCelebrations`, `bumpCorrelation`, `bumpAnalytics`) still need a brief reconcile pass before extraction.
 - **Phase 3 (deploy):** done — Render runs from this monorepo (see [DEPLOY_MIGRATION.md](../DEPLOY_MIGRATION.md)).
 - **Phase 4 (retire old repos):** blocked on Phase 0/2.
 

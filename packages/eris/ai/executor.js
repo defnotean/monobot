@@ -13,7 +13,7 @@ import config from "../config.js";
 import { log } from "../utils/logger.js";
 import { EVERYONE_TOOLS, OWNER_TOOLS } from "./tools.js";
 import { LRUCache } from "@defnotean/shared/LRUCache";
-import { checkToolRateLimit } from "../utils/toolRateLimit.js";
+import { checkToolRateLimit } from "@defnotean/shared/toolRateLimit";
 import { getEconomyMutatingTools } from "./toolRegistry.js";
 
 // ─── Existing JS sub-executors ──────────────────────────────────────────────

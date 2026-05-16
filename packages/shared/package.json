@@ -23,7 +23,12 @@
     "./temporal": "./src/ai/temporal.js",
     "./responsestyle": "./src/ai/responsestyle.js",
     "./humanDelay": "./src/utils/humanDelay.js",
-    "./keyPool": "./src/ai/keyPool.js"
+    "./keyPool": "./src/ai/keyPool.js",
+    "./toolRateLimit": "./src/utils/toolRateLimit.js",
+    "./twinState": "./src/utils/twinState.js",
+    "./selfCanon": "./src/ai/selfCanon.js",
+    "./bumpUserPrefs": "./src/ai/bumpUserPrefs.js",
+    "./bumpApplause": "./src/ai/bumpApplause.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json --noEmit",
