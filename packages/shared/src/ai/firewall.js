@@ -1,3 +1,85 @@
+/**
+ * @file Prompt-injection firewall — consolidated, multi-layered defense for
+ * all user-supplied text that reaches an LLM prompt anywhere in the project.
+ *
+ * Purpose
+ * -------
+ * Detect and short-circuit prompt-injection / jailbreak attempts before they
+ * reach the model. The check returns a verdict object; callers gate the LLM
+ * call on `verdict.safe === true` and surface the supplied reason on false.
+ *
+ * Key exports
+ * -----------
+ *   createFirewall(opts)       Factory — per-bot instance with its own caches,
+ *                              sliding window, and verdict log. Returns
+ *                              { checkInjection, logBlockedAttempt,
+ *                              logRedosEvent, seedPatternsAtBoot,
+ *                              getRedosLog, shutdown, _resetForTests, _AC, ... }.
+ *   normalizeText(text)        L1: strip invisibles, fold homoglyphs, NFKC,
+ *                              undo leetspeak, collapse spaced-out letters.
+ *   recursiveDecode(text)      L1.5: expand base64/ROT13/hex/percent/unicode-
+ *                              escape/reversed variants with cycle detection.
+ *   detectEmojiSmuggling(text) Catches regional-indicator, tag-character,
+ *                              and variation-selector flood smuggling.
+ *   checkPatternsSync(text)    Runs the static DANGEROUS_PATTERNS regex set
+ *                              inline; safe because patterns are audited.
+ *   looksReDoSShaped(text)     Heuristic for catastrophic-backtracking bait
+ *                              (800+ chars, <30 unique chars).
+ *   spotlight(text, label)     Wraps user content in a labeled `<data>` block
+ *                              for prompt-construction; defangs nested markers.
+ *   InMemoryWindowStore        Default per-user sliding-window backend (also
+ *                              re-exports RedisWindowStore for multi-replica).
+ *
+ * Threat model
+ * ------------
+ * Defends against: direct override phrases ("ignore all previous…"), encoded
+ * payloads (base64/ROT13/hex/percent/unicode-escape/reversed), homoglyph and
+ * leetspeak substitution, zero-width and invisible-char obfuscation, emoji
+ * smuggling, split payloads across consecutive messages (per-user window),
+ * ReDoS-shaped filler, and semantically similar paraphrases (L3 via Voyage
+ * embeddings + pgvector when configured).
+ *
+ * Does NOT defend against: indirect injection embedded in fetched URLs or
+ * documents (the caller must spotlight() those separately), social engineering
+ * the human operator, or model-side safety bypasses unrelated to the prompt
+ * pipeline.
+ *
+ * Performance characteristics
+ * ---------------------------
+ * Hot path is sync-first. Sub-10-char messages return immediately. Owner
+ * messages bypass entirely. Identical normalized payloads hit the content-hash
+ * LRU and skip the full stack (raids, copy-paste replays). Otherwise: L1
+ * normalize + Aho-Corasick literal pre-filter is ~sub-ms; the regex set only
+ * runs if AC reports a hit. L3 (Voyage embedding RPC) runs in parallel with
+ * L2 and is awaited last. Typical per-message overhead on a miss: 0.5-3ms;
+ * on an L3 hit: bounded by network. Budget for the whole call should be
+ * treated as <50ms p99 in normal operation.
+ *
+ * Owner bypass — when NOT to bypass
+ * ---------------------------------
+ * `checkInjection` returns `{ safe: true }` only when BOTH `userId` and
+ * `ownerId` are truthy AND strictly equal. Do NOT relax this. Specifically:
+ *   - Never bypass when `ownerId` is undefined (would auto-pass everyone).
+ *   - Never bypass when `userId` is undefined (would auto-pass anonymous
+ *     traffic — e.g. webhook-relayed or system-generated content).
+ *   - Never use the bypass for "trusted" roles or staff; the check is cheap
+ *     and a compromised staff account becomes a confused-deputy vector.
+ *   - Never wrap the bypass condition in a config flag at the call site —
+ *     ownership is the only exception.
+ *
+ * Cross-references
+ * ----------------
+ *   packages/eris/ai/firewall.js                 thin wrapper, per-bot instance
+ *   packages/irene/ai/firewall.js                thin wrapper, per-bot instance
+ *   packages/eris/events/messageCreate.js        gate before invoking the model
+ *   packages/irene/events/messageCreate.js       gate before invoking the model
+ *   packages/eris/ai/executors/webExecutor.js    re-checks fetched web content
+ *   packages/irene/ai/executors/advancedExecutor.js  re-checks tool inputs
+ *   packages/shared/src/ai/firewallPatterns.js   pattern + anchor source data
+ *   packages/shared/src/ai/windowStore.js        sliding-window backends
+ *   packages/shared/tests/firewall.test.ts       contract / regression suite
+ */
+
 // ─── Prompt-injection firewall (consolidated) ──────────────────────────────
 // Single source of truth — used by both Eris and Irene via thin wrappers.
 //

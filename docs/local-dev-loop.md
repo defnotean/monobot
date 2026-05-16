@@ -23,6 +23,28 @@ You should already be set up per [GETTING_STARTED.md](../GETTING_STARTED.md). Th
 - `.env` populated for whichever bot(s) you're working on
 - A [dev guild + dev Discord app + dev Supabase project](./dev-guild-workflow.md) — never against prod
 
+## Applying database migrations locally
+
+The repo ships SQL migrations under `packages/eris/migrations/`. Current set:
+
+- `001_add_economy_version.sql` — adds the `version` column used by the version-CAS path on `irene_economy`.
+- `002_atomic_balance_rpc.sql` — installs the `eris_add_balance` Postgres function. One round-trip, server-side atomic increment with a row lock.
+
+Apply them against your local/dev Postgres or Supabase project (use the connection string of your **dev** project, never prod):
+
+```bash
+# Direct psql against your DATABASE_URL (Supabase: Settings → Database → Connection string)
+psql "$DATABASE_URL" -f packages/eris/migrations/001_add_economy_version.sql
+psql "$DATABASE_URL" -f packages/eris/migrations/002_atomic_balance_rpc.sql
+
+# Or use the bundled migration runner (loads .env, applies any new files)
+npm run migrate --workspace=@defnotean/eris
+```
+
+If you'd rather paste-and-run, open Supabase → SQL Editor → paste the file contents → Run.
+
+**The JS path falls back gracefully if `eris_add_balance` isn't deployed.** On the first balance mutation, `database.js` probes the RPC; if Postgres returns `PGRST202` (function not found), it logs once and switches the process over to the version-CAS path for the rest of its lifetime. Existing self-hosters who haven't applied migration 002 keep working — they just don't get the atomic-update guarantee until they do. Apply 002 and restart to opt in.
+
 ## Terminal 1 — auto-reload bot
 
 ```bash
@@ -58,6 +80,26 @@ npx vitest -t "send_compliment"
 ```
 
 See [testing-guide.md](./testing-guide.md) for the full guide.
+
+### Running a single test in watch mode
+
+When you're iterating on one file or one test name, scope vitest to it so you're not waiting on the whole suite:
+
+```bash
+# Watch one file
+npx vitest packages/eris/tests/ai/getMoodTool.test.ts --watch
+
+# Watch every file matching a path pattern
+npx vitest tests/ai/executors --watch
+
+# Watch by test-name substring (-t)
+npx vitest -t "send_compliment" --watch
+
+# Combine: file pattern + name pattern
+npx vitest tests/ai/getMoodTool.test.ts -t "respects mood floor" --watch
+```
+
+Vitest stays running, re-runs only what changed on save, and you can hit `p` / `t` in its TTY to filter further. See [testing-guide.md](./testing-guide.md) for more vitest tricks.
 
 ## Terminal 3 — ad hoc
 
@@ -99,9 +141,9 @@ await rest.put(
 
 **Don't commit this change.** It's a local-only convenience. Stash it before pushing.
 
-## Testing twin coordination locally
+## Twin protocol local testing
 
-Run both bots locally and point them at each other on localhost:
+Run both bots locally and point them at each other on localhost. The HMAC-signed twin protocol is identical in dev and prod, so anything that works here will work after deploy.
 
 **Eris `.env`:**
 ```
@@ -118,13 +160,61 @@ ERIS_API_URL=http://localhost:3000
 ERIS_BOT_ID=<eris-app-id>
 ```
 
-Two terminals:
+Both bots **must** read the exact same `TWIN_API_SECRET` value — any mismatch and every call returns `bad signature`. Two terminals:
+
 ```bash
 npm run dev:eris
 npm run dev:irene
 ```
 
 Now `ask_irene`, `ask_eris`, `firePunishSignal` all hit localhost. Useful for testing twin features without deploying.
+
+### Verifying HMAC signing with curl
+
+The signed-request protocol is:
+
+```
+X-Twin-Timestamp:  <unix_ms_at_signing_time>
+X-Twin-Signature:  hex(HMAC_SHA256(secret, `${timestamp}.${rawBody}`))
+```
+
+Timestamps must be within ±60s of the receiver's clock; signatures are single-use within the skew window (replay-cached).
+
+Smoke-test the signed path against your locally running bot with a one-liner. Bash + `openssl`:
+
+```bash
+SECRET="local-shared-secret"
+BODY='{"command":"ping"}'
+TS="$(node -e 'process.stdout.write(String(Date.now()))')"
+SIG="$(printf '%s' "${TS}.${BODY}" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $2}')"
+curl -i -X POST http://localhost:3001/api/twin/command \
+  -H "Content-Type: application/json" \
+  -H "X-Twin-Timestamp: $TS" \
+  -H "X-Twin-Signature: $SIG" \
+  --data-raw "$BODY"
+```
+
+PowerShell equivalent:
+
+```powershell
+$Secret = 'local-shared-secret'
+$Body   = '{"command":"ping"}'
+$Ts     = [string][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$Hmac   = [System.Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($Secret))
+$Sig    = -join ($Hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes("$Ts.$Body")) | ForEach-Object { $_.ToString('x2') })
+curl.exe -i -X POST http://localhost:3001/api/twin/command `
+  -H "Content-Type: application/json" `
+  -H "X-Twin-Timestamp: $Ts" `
+  -H "X-Twin-Signature: $Sig" `
+  --data-raw $Body
+```
+
+Quick sanity checks:
+- Flip one character of `$SECRET` → expect HTTP 401 with `bad signature`.
+- Subtract 5 minutes from `$TS` → expect `timestamp outside acceptable skew`.
+- Replay the exact same request twice within 60s → second call returns `replay detected`.
+
+If you've never touched the dev guild side of this yet, [dev-guild-workflow.md](./dev-guild-workflow.md) covers how to scope the bot to a single test guild before you start firing twin commands at it.
 
 ## Testing music locally (Irene)
 
