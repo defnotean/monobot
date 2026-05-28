@@ -99,6 +99,22 @@ const server = http.createServer(async (req, res) => {
     await handleApiRequest(req, res);
     return;
   }
+  // Discord-aware liveness probe — returns 503 when the gateway is not Ready,
+  // so the external healthcheck timer can detect "process alive but Discord
+  // WebSocket wedged" and restart us. Other paths (/twin/health, /) keep
+  // returning 200 so they're not affected.
+  if (req.url === "/healthz") {
+    const ready = client.isReady();
+    res.setHeader("Content-Type", "application/json");
+    res.writeHead(ready ? 200 : 503);
+    res.end(JSON.stringify({
+      ok: ready,
+      discord: ready ? "ready" : "disconnected",
+      ws_status: client.ws?.status ?? null,
+      uptime: process.uptime(),
+    }));
+    return;
+  }
   res.writeHead(200);
   res.end("Eris is awake.");
 });
