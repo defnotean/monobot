@@ -102,12 +102,21 @@ export async function handleApiRequest(req, res) {
     // reuse footgun: if the token leaked anywhere (logs, git, a compromised
     // dep), the first 20 chars would double as a dashboard credential.
     // Removed — callers must use an explicit API key env var.
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.replace("Bearer ", "");
-    const validKeys = [process.env.DASHBOARD_API_KEY, process.env.TWIN_API_SECRET].filter(Boolean);
-    if (!token || !validKeys.includes(token)) {
-      json(res, 401, { error: "unauthorized" });
-      return;
+    //
+    // Localhost bypass: requests from 127.0.0.1 / ::1 skip the token check.
+    // The admin panel is served from the same process at /admin, so any
+    // browser tab on this machine (or an SSH-tunneled session) is trusted.
+    // Anyone with shell access to this user already owns the bots.
+    const remote = req.socket?.remoteAddress || "";
+    const isLocalhost = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+    if (!isLocalhost) {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.replace("Bearer ", "");
+      const validKeys = [process.env.DASHBOARD_API_KEY, process.env.TWIN_API_SECRET].filter(Boolean);
+      if (!token || !validKeys.includes(token)) {
+        json(res, 401, { error: "unauthorized" });
+        return;
+      }
     }
   }
 

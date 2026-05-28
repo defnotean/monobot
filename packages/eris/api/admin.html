@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>monobot admin · Eris × Irene</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<style>
+  * { box-sizing: border-box; }
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c232c; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff; --eris: #f78166;
+    --irene: #a371f7; --ok: #3fb950; --err: #f85149; --warn: #d29922;
+    --mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px; -webkit-font-smoothing: antialiased; }
+  .layout { display: grid; grid-template-columns: 220px 1fr; height: 100vh; }
+  /* Sidebar */
+  aside { background: var(--panel); border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 16px 0; }
+  .brand { padding: 0 20px 16px; border-bottom: 1px solid var(--border);
+    font-weight: 700; font-size: 16px; letter-spacing: 0.3px; }
+  .brand small { color: var(--muted); font-weight: 400; font-size: 12px;
+    display: block; margin-top: 2px; }
+  .nav { padding: 12px 0; }
+  .nav a { display: block; padding: 9px 20px; color: var(--text); text-decoration: none;
+    cursor: pointer; border-left: 2px solid transparent; transition: background 0.1s; }
+  .nav a:hover { background: var(--panel2); }
+  .nav a.active { background: var(--panel2); border-left-color: var(--accent);
+    color: var(--accent); }
+  .nav a .ic { display: inline-block; width: 18px; }
+  .bot-switch { padding: 12px 20px; border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border); margin: 8px 0; }
+  .bot-switch label { display: flex; align-items: center; padding: 6px 0; cursor: pointer; }
+  .bot-switch input { margin-right: 8px; cursor: pointer; }
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; }
+  .badge.ok  { background: rgba(63, 185, 80, 0.2); color: var(--ok); }
+  .badge.err { background: rgba(248, 81, 73, 0.2); color: var(--err); }
+  .badge.warn { background: rgba(210, 153, 34, 0.2); color: var(--warn); }
+  /* Main */
+  main { overflow-y: auto; padding: 24px 32px; }
+  .page-header { display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .page-header h1 { font-size: 20px; margin: 0; }
+  .page-header .meta { font-size: 12px; color: var(--muted); }
+  .grid { display: grid; gap: 16px; }
+  .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 1100px) {
+    .grid.cols-4 { grid-template-columns: 1fr 1fr; }
+    .grid.cols-3 { grid-template-columns: 1fr; }
+  }
+  .card { background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; }
+  .card h3 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--muted); font-weight: 600; }
+  .stat { font-size: 28px; font-weight: 600; line-height: 1.1; }
+  .stat.eris { color: var(--eris); }
+  .stat.irene { color: var(--irene); }
+  .stat-row { display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .stat-row:last-child { border: 0; }
+  .stat-row .k { color: var(--muted); font-size: 12px; }
+  .stat-row .v { font-family: var(--mono); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { font-weight: 600; color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.5px; background: var(--panel2); position: sticky; top: 0; }
+  tr:hover { background: var(--panel2); }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .truncate { max-width: 380px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .btn { background: var(--panel2); border: 1px solid var(--border);
+    color: var(--text); padding: 4px 10px; border-radius: 4px; cursor: pointer;
+    font-size: 12px; font-family: inherit; }
+  .btn:hover { background: var(--border); }
+  .btn.danger { color: var(--err); }
+  .btn.danger:hover { background: rgba(248, 81, 73, 0.15); }
+  .btn.primary { background: var(--accent); color: white; border-color: var(--accent); }
+  .empty { text-align: center; padding: 40px; color: var(--muted); }
+  input.search, input.field, select.field {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 10px; border-radius: 4px; font-family: inherit; font-size: 13px;
+    min-width: 200px; }
+  .toolbar { display: flex; gap: 10px; margin-bottom: 14px; align-items: center; }
+  .toolbar .grow { flex: 1; }
+  .log-pane { background: #000; border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    overflow: auto; height: 70vh; white-space: pre-wrap; word-break: break-all; }
+  .log-pane.eris { border-top: 3px solid var(--eris); }
+  .log-pane.irene { border-top: 3px solid var(--irene); }
+  .err-box { background: rgba(248, 81, 73, 0.1); border: 1px solid var(--err);
+    color: var(--err); padding: 10px 14px; border-radius: 6px; margin-bottom: 12px;
+    font-size: 13px; }
+  .meter { display: inline-block; vertical-align: middle; width: 100px; height: 8px;
+    background: var(--panel2); border-radius: 4px; overflow: hidden; margin-right: 8px; }
+  .meter > div { height: 100%; background: var(--accent); transition: width 0.3s; }
+  .pill { display: inline-block; padding: 1px 6px; font-size: 10px; border-radius: 8px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+  .pill.eris { background: rgba(247, 129, 102, 0.2); color: var(--eris); }
+  .pill.irene { background: rgba(163, 113, 247, 0.2); color: var(--irene); }
+  .small { font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <aside>
+    <div class="brand">monobot admin<small>Eris × Irene</small></div>
+    <div class="bot-switch">
+      <div class="small" style="margin-bottom:6px;">Status</div>
+      <div id="status-eris"  class="stat-row"><span class="k">Eris</span>  <span class="badge err" id="badge-eris">offline</span></div>
+      <div id="status-irene" class="stat-row"><span class="k">Irene</span> <span class="badge err" id="badge-irene">offline</span></div>
+    </div>
+    <nav class="nav">
+      <a data-section="overview"      class="active"><span class="ic">📊</span> Overview</a>
+      <a data-section="memories"      ><span class="ic">🧠</span> Memories</a>
+      <a data-section="personality"   ><span class="ic">🎭</span> Personality</a>
+      <a data-section="relationships" ><span class="ic">💞</span> Relationships</a>
+      <a data-section="episodes"      ><span class="ic">🎬</span> Episodes</a>
+      <a data-section="conversations" ><span class="ic">💬</span> Conversations</a>
+      <a data-section="logs"          ><span class="ic">📜</span> Logs</a>
+    </nav>
+  </aside>
+
+  <main>
+    <div class="page-header">
+      <h1 id="section-title">Overview</h1>
+      <div class="meta">auto-refresh <span id="last-refresh">—</span> · <a href="#" onclick="refresh(); return false;" style="color:var(--accent);">↻ now</a></div>
+    </div>
+    <div id="error-box" class="err-box" style="display:none;"></div>
+    <div id="content"></div>
+  </main>
+</div>
+
+<script>
+const BOTS = ['eris', 'irene'];
+let activeSection = 'overview';
+let refreshTimer = null;
+const cache = { eris: {}, irene: {} };
+
+function $(sel) { return document.querySelector(sel); }
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') e.className = v;
+    else if (k === 'html') e.innerHTML = v;
+    else if (k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null) continue;
+    e.appendChild(typeof kid === 'string' ? document.createTextNode(kid) : kid);
+  }
+  return e;
+}
+
+// /api/* for Eris, /api/irene/* (proxied) for Irene
+function apiPath(bot, path) {
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return bot === 'eris' ? `/api${p}` : `/api/irene${p}`;
+}
+async function api(bot, path, opts = {}) {
+  const r = await fetch(apiPath(bot, path), opts);
+  if (!r.ok) throw new Error(`${bot} ${path}: HTTP ${r.status}`);
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('json') ? r.json() : r.text();
+}
+async function tryApi(bot, path, opts) {
+  try { return await api(bot, path, opts); } catch (e) { return { _error: e.message }; }
+}
+function showError(msg) {
+  const box = $('#error-box');
+  if (!msg) { box.style.display = 'none'; return; }
+  box.textContent = msg; box.style.display = 'block';
+}
+function fmt(n)  { return n == null ? '—' : typeof n === 'number' ? n.toLocaleString() : String(n); }
+function fmtUptime(s) { if (!s) return '—'; const h = Math.floor(s/3600), m = Math.floor((s%3600)/60); return `${h}h ${m}m`; }
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return `${Math.floor(ms/1000)}s ago`;
+  if (ms < 3600_000) return `${Math.floor(ms/60000)}m ago`;
+  if (ms < 86_400_000) return `${Math.floor(ms/3600000)}h ago`;
+  return `${Math.floor(ms/86_400_000)}d ago`;
+}
+
+// Header status badges
+async function refreshStatus() {
+  for (const bot of BOTS) {
+    const port = bot === 'eris' ? 3000 : 3001;
+    const url = bot === 'eris' ? '/healthz' : '/api/irene/../../healthz'; // can't easily proxy /healthz; just hit health
+    try {
+      const r = await fetch(bot === 'eris' ? '/healthz' : '/api/irene/health', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      const ready = r.ok && (j.ok !== false);
+      const badge = $(`#badge-${bot}`);
+      badge.className = `badge ${ready ? 'ok' : 'err'}`;
+      badge.textContent = ready ? 'online' : 'offline';
+    } catch {
+      const badge = $(`#badge-${bot}`);
+      badge.className = 'badge err'; badge.textContent = 'unreachable';
+    }
+  }
+}
+
+// ─── Sections ───────────────────────────────────────────────────────────────
+const sections = {
+
+  async overview() {
+    const [erisStats, ireneStats, erisMood, ireneMood, erisHum, ireneHum] = await Promise.all([
+      tryApi('eris',  '/stats'),
+      tryApi('irene', '/stats'),
+      tryApi('eris',  '/mood'),
+      tryApi('irene', '/mood'),
+      tryApi('eris',  '/relationships').catch(() => ({})),
+      tryApi('irene', '/humanity'),
+    ]);
+
+    function statCard(bot, stats, mood) {
+      const c = bot === 'eris' ? 'eris' : 'irene';
+      return el('div', { class: 'card' },
+        el('h3', {}, bot.toUpperCase()),
+        el('div', { class: `stat ${c}` }, fmt(stats?.memories ?? stats?.memoryCount ?? '—') + ' memories'),
+        el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Uptime'),
+          el('span', {class:'v'}, fmtUptime(stats?.uptime))),
+        el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Heap'),
+          el('span', {class:'v'}, (stats?.memory ?? '—') + ' MB')),
+        el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Guilds'),
+          el('span', {class:'v'}, fmt(stats?.guilds))),
+        el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Users known'),
+          el('span', {class:'v'}, fmt(stats?.users ?? stats?.userCount))),
+        el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Mood'),
+          el('span', {class:'v'}, mood?.label || (mood?.score != null ? mood.score : '—'))),
+        el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Energy'),
+          el('span', {class:'v'}, mood?.energy != null ? `${mood.energy}/100` : '—')),
+      );
+    }
+    return el('div', { class: 'grid cols-2' },
+      statCard('eris',  erisStats,  erisMood),
+      statCard('irene', ireneStats, ireneMood),
+    );
+  },
+
+  async memories() {
+    const [erisMem, ireneMem] = await Promise.all([
+      tryApi('eris',  '/memories?limit=200'),
+      tryApi('irene', '/memories?limit=200'),
+    ]);
+    function table(bot, data) {
+      const rows = Array.isArray(data) ? data : (data?.memories || data?.rows || []);
+      const head = el('thead', {}, el('tr', {},
+        el('th', {}, 'User'), el('th', {}, 'Content'), el('th', {}, 'When'),
+        el('th', {style:'width:60px;'}, 'Actions')));
+      const tbody = el('tbody');
+      if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:4, class:'empty'}, 'no memories')));
+      for (const m of rows.slice(0, 100)) {
+        const id = m.id || m.memory_id || m._id;
+        const user = m.user_id || m.username || m.user || '—';
+        const text = m.content || m.fact || m.text || JSON.stringify(m);
+        tbody.appendChild(el('tr', {},
+          el('td', {class:'mono'}, String(user).slice(0, 20)),
+          el('td', {class:'truncate', title: text}, text),
+          el('td', {class:'mono small'}, timeAgo(m.created_at || m.timestamp || m.updated_at)),
+          el('td', {}, el('button', {
+            class: 'btn danger',
+            onclick: () => deleteMemory(bot, id),
+          }, '✕')),
+        ));
+      }
+      return el('div', { class: 'card' },
+        el('h3', {}, `${bot.toUpperCase()} · ${rows.length} memories`),
+        el('div', { style: 'overflow:auto; max-height:60vh;' }, el('table', {}, head, tbody)),
+      );
+    }
+    return el('div', { class: 'grid cols-2' }, table('eris', erisMem), table('irene', ireneMem));
+  },
+
+  async personality() {
+    const [erisP, ireneP] = await Promise.all([
+      tryApi('eris',  '/mood').catch(() => ({})),
+      tryApi('irene', '/personality').catch(() => ({})),
+    ]);
+    const ireneM = await tryApi('irene', '/mood').catch(() => ({}));
+    function card(bot, p, mood) {
+      const fields = [
+        ['warmth',  p?.warmth  ?? mood?.warmth],
+        ['sarcasm', p?.sarcasm ?? mood?.sarcasm],
+        ['mood',    mood?.label || mood?.score],
+        ['energy',  mood?.energy],
+        ['bad_day', mood?.bad_day != null ? String(mood.bad_day) : null],
+      ];
+      const rows = fields.filter(([_, v]) => v != null && v !== '').map(([k, v]) =>
+        el('div', { class: 'stat-row' }, el('span', {class:'k'}, k), el('span', {class:'v'}, String(v)))
+      );
+      return el('div', { class: 'card' },
+        el('h3', {}, bot.toUpperCase()),
+        rows.length ? rows : el('div', {class:'empty'}, 'no personality data'),
+      );
+    }
+    return el('div', { class: 'grid cols-2' }, card('eris', erisP, erisP), card('irene', ireneP, ireneM));
+  },
+
+  async relationships() {
+    const [eris, irene] = await Promise.all([
+      tryApi('eris',  '/relationships?limit=100').catch(() => []),
+      tryApi('irene', '/humanity').catch(() => []),
+    ]);
+    function table(bot, raw) {
+      const rows = Array.isArray(raw) ? raw : (raw?.relationships || raw?.rows || raw?.users || []);
+      const head = el('thead', {}, el('tr', {},
+        el('th', {}, 'User'), el('th', {}, 'Affinity / Closeness'),
+        el('th', {}, 'Updated')));
+      const tbody = el('tbody');
+      if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:3, class:'empty'}, 'no relationships')));
+      for (const r of rows.slice(0, 100)) {
+        const user = r.username || r.display_name || r.user_id || '—';
+        const score = r.affinity ?? r.closeness ?? r.score ?? '—';
+        const pct = typeof score === 'number' ? Math.max(0, Math.min(100, (score + 100) / 2)) : null;
+        tbody.appendChild(el('tr', {},
+          el('td', {class:'mono'}, String(user)),
+          el('td', {}, [
+            pct != null ? el('span', {class:'meter'}, el('div', {style:`width:${pct}%;`})) : null,
+            el('span', {class:'mono'}, String(score)),
+          ]),
+          el('td', {class:'mono small'}, timeAgo(r.updated_at || r.last_seen)),
+        ));
+      }
+      return el('div', { class: 'card' },
+        el('h3', {}, `${bot.toUpperCase()} · ${rows.length} people`),
+        el('div', { style: 'overflow:auto; max-height:65vh;' }, el('table', {}, head, tbody)),
+      );
+    }
+    return el('div', { class: 'grid cols-2' }, table('eris', eris), table('irene', irene));
+  },
+
+  async episodes() {
+    const ireneEps = await tryApi('irene', '/episodes?limit=50').catch(() => []);
+    const rows = Array.isArray(ireneEps) ? ireneEps : (ireneEps?.episodes || ireneEps?.rows || []);
+    const tbody = el('tbody');
+    if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:3, class:'empty'}, 'no episodic memories')));
+    for (const e of rows.slice(0, 60)) {
+      tbody.appendChild(el('tr', {},
+        el('td', {class:'mono'}, String(e.user_id || e.username || '—').slice(0, 20)),
+        el('td', {class:'truncate'}, e.summary || e.content || JSON.stringify(e)),
+        el('td', {class:'mono small'}, timeAgo(e.created_at || e.timestamp)),
+      ));
+    }
+    return el('div', { class: 'card' },
+      el('h3', {}, `Irene · ${rows.length} episodic memories`),
+      el('div', { class: 'small', style:'margin-bottom:10px;' },
+        'Eris also keeps episodic memories — exposed via /api/memories endpoint above.'),
+      el('div', { style: 'overflow:auto; max-height:70vh;' },
+        el('table', {},
+          el('thead', {}, el('tr', {}, el('th', {}, 'User'), el('th', {}, 'Summary'), el('th', {}, 'When'))),
+          tbody)),
+    );
+  },
+
+  async conversations() {
+    const [eris, irene] = await Promise.all([
+      tryApi('eris',  '/conversations?limit=50').catch(() => []),
+      tryApi('irene', '/conversations?limit=50').catch(() => []),
+    ]);
+    function table(bot, raw) {
+      const rows = Array.isArray(raw) ? raw : (raw?.conversations || raw?.rows || []);
+      const tbody = el('tbody');
+      if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:3, class:'empty'}, 'no conversations')));
+      for (const c of rows.slice(0, 60)) {
+        const id = c.id || c.channel_id || c._id;
+        tbody.appendChild(el('tr', {},
+          el('td', {class:'mono small truncate'}, String(id || '—')),
+          el('td', {class:'mono'}, fmt(c.message_count ?? c.messages ?? '—')),
+          el('td', {}, el('button', {
+            class: 'btn danger',
+            onclick: () => deleteConversation(bot, id),
+          }, '✕ wipe')),
+        ));
+      }
+      return el('div', { class: 'card' },
+        el('h3', {}, `${bot.toUpperCase()} · ${rows.length} conversations`),
+        el('div', { style: 'overflow:auto; max-height:65vh;' }, el('table', {},
+          el('thead', {}, el('tr', {}, el('th', {}, 'Channel'), el('th', {}, 'Msgs'), el('th', {}, 'Actions'))),
+          tbody)),
+      );
+    }
+    return el('div', { class: 'grid cols-2' }, table('eris', eris), table('irene', irene));
+  },
+
+  async logs() {
+    const [eL, iL] = await Promise.all([
+      fetch('/api/logs?bot=eris&lines=200').then(r => r.json()).catch(() => ({tail: ''})),
+      fetch('/api/logs?bot=irene&lines=200').then(r => r.json()).catch(() => ({tail: ''})),
+    ]);
+    function clean(s) {
+      // Strip ANSI color codes
+      return String(s).replace(/\x1b\[[0-9;]*m/g, '');
+    }
+    const erisPane = el('div', { class: 'log-pane eris', id: 'log-eris' }, clean(eL.tail || ''));
+    const irenePane = el('div', { class: 'log-pane irene', id: 'log-irene' }, clean(iL.tail || ''));
+    // Auto-scroll to bottom
+    queueMicrotask(() => { erisPane.scrollTop = erisPane.scrollHeight; irenePane.scrollTop = irenePane.scrollHeight; });
+    return el('div', { class: 'grid cols-2' },
+      el('div', {},
+        el('div', { class: 'small', style: 'margin-bottom:6px;' },
+          el('span', {class:'pill eris'}, 'eris'), ' · ',
+          `${eL.lines || 0} total lines · showing last 200`),
+        erisPane),
+      el('div', {},
+        el('div', { class: 'small', style: 'margin-bottom:6px;' },
+          el('span', {class:'pill irene'}, 'irene'), ' · ',
+          `${iL.lines || 0} total lines · showing last 200`),
+        irenePane),
+    );
+  },
+
+};
+
+// ─── Edit actions ───────────────────────────────────────────────────────────
+async function deleteMemory(bot, id) {
+  if (!id) return alert('no memory id');
+  if (!confirm(`Delete memory ${id} from ${bot}?`)) return;
+  try {
+    await api(bot, `/memory/${id}`, { method: 'DELETE' });
+    refresh();
+  } catch (e) { showError(e.message); }
+}
+async function deleteConversation(bot, id) {
+  if (!id) return alert('no conversation id');
+  if (!confirm(`WIPE entire conversation ${id} on ${bot}? This cannot be undone.`)) return;
+  try {
+    await api(bot, `/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    refresh();
+  } catch (e) { showError(e.message); }
+}
+
+// ─── Wiring ────────────────────────────────────────────────────────────────
+document.querySelectorAll('.nav a').forEach((a) => {
+  a.addEventListener('click', () => {
+    document.querySelectorAll('.nav a').forEach((x) => x.classList.remove('active'));
+    a.classList.add('active');
+    activeSection = a.dataset.section;
+    $('#section-title').textContent = a.textContent.trim();
+    refresh();
+  });
+});
+
+async function refresh() {
+  showError(null);
+  const fn = sections[activeSection];
+  if (!fn) return;
+  try {
+    const node = await fn();
+    const c = $('#content');
+    c.innerHTML = '';
+    c.appendChild(node);
+    $('#last-refresh').textContent = new Date().toLocaleTimeString();
+  } catch (e) { showError(e.message); }
+  refreshStatus();
+}
+
+// Initial load + 10s poll
+refresh();
+refreshTimer = setInterval(refresh, 10_000);
+</script>
+</body>
+</html>

@@ -230,8 +230,15 @@ export function startPresenceAPI(client) {
       // learn either secret one byte at a time from response-time deltas.
       // (Array.includes uses === under the hood, which short-circuits on
       // first mismatched byte.)
+      //
+      // Localhost bypass: same-machine requests skip the token check so the
+      // admin panel served from Eris (or a local browser tab / SSH tunnel)
+      // can hit Irene's API directly. Anyone with shell access to this user
+      // already owns the bots.
       const isTwinPath = path.startsWith("/api/twin/");
-      if (!isTwinPath && path !== "/api/health") {
+      const remoteAddr = req.socket?.remoteAddress || "";
+      const isLocalhost = remoteAddr === "127.0.0.1" || remoteAddr === "::1" || remoteAddr === "::ffff:127.0.0.1";
+      if (!isTwinPath && path !== "/api/health" && !isLocalhost) {
         const authHeader = req.headers.authorization;
         const token = authHeader?.replace("Bearer ", "");
         const validKeys = [process.env.DASHBOARD_API_KEY, process.env.TWIN_API_SECRET].filter(Boolean);
