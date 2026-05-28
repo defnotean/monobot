@@ -322,7 +322,9 @@ export async function runGeminiChat({
   // tooling (memory, gif, relationship adjustments, web search), so we do NOT upgrade to the
   // worker mid-request — doing so caused 60s timeouts on otherwise-trivial twin banter.
   const currentModel = useFastModel ? GEMINI_FAST_MODEL : GEMINI_MODEL;
-  const currentThinkBudget = useFastModel ? 256 : 4096;
+  // Latency tuning: chat lane skips thinking entirely (0); task lane keeps a
+  // small budget (256) for multi-step tool planning. Was 256/4096 — slow.
+  const currentThinkBudget = useFastModel ? 0 : 256;
   const currentTimeoutMs = useFastModel ? 35_000 : 60_000;
   // maxOutputTokens MUST exceed thinkingBudget — thinking tokens count
   // toward this cap, so a 2048 cap with a 4096 thinking budget left zero

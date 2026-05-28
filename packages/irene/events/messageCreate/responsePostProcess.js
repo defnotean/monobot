@@ -46,6 +46,12 @@ export function stripLeakedToolSyntax(reply) {
   // Strip leaked code-style tool calls — print(tool_name()), tool_name(), etc.
   cleanedReply = cleanedReply.replace(/^\s*print\([^)]*\)\s*$/gim, "").trim();
   cleanedReply = cleanedReply.replace(/^\s*[a-z_]+\s*\(.*?\)\s*$/gim, "").trim();
+  // Strip leaked brace-style tool calls — `web_search {query: "..."}` followed
+  // by any leaked inner-reasoning trailing on the same line. Gemini emits this
+  // when it verbalises a tool call instead of (or in addition to) an actual
+  // functionCall part — strip from the tool name through end-of-line so the
+  // parenthetical "(just in case...)" reasoning trailing it doesn't leak.
+  cleanedReply = cleanedReply.replace(/^[a-z][a-z0-9_]*\s*\{[\s\S]*?\}[^\n]*/gm, "").trim();
   // Strip leaked context labels — model sometimes regurgitates [Irene said] [Eris said] etc.
   cleanedReply = cleanedReply.replace(/\[(?:irene|eris|[^\]]{1,30})\s+said\]/gi, "").trim();
   cleanedReply = cleanedReply.replace(/\[SYSTEM:[^\]]*\]/gi, "").trim();
@@ -61,14 +67,21 @@ export function stripLeakedToolSyntax(reply) {
 }
 
 // Resolve @username mentions in AI response to proper Discord <@id> pings.
+// Self-mention guard: if the model wrote "@Irene" while it IS Irene, the
+// converted <@self_id> makes the bot ping itself, which Discord renders as
+// a literal "@Irene" in her own message — clear identity-confusion artifact.
+// Strip the @ for self-references; the name stays as plain text.
 export function resolveAtMentions(cleanedReply, guild, fallbackReply) {
   if (!guild) return cleanedReply;
+  const selfId = guild.client?.user?.id;
   return (cleanedReply || fallbackReply).replace(/@(\w+)/g, (match, name) => {
     const member = guild.members.cache.find(
       m => m.user.username.toLowerCase() === name.toLowerCase()
         || m.displayName.toLowerCase() === name.toLowerCase()
     );
-    return member ? `<@${member.id}>` : match;
+    if (!member) return match;
+    if (member.id === selfId) return name; // self-mention → plain text
+    return `<@${member.id}>`;
   });
 }
 

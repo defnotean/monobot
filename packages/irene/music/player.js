@@ -243,18 +243,20 @@ export async function connectToChannel(queue) {
     handleTrackEnd(queue);
   });
 
-  // Track stuck — wait 10 seconds before skipping (was 5s, too aggressive —
-  // slow networks and large files need more buffer time)
+  // Track stuck — once Lavalink fires "stuck" the source (usually YouTube)
+  // has already stopped delivering audio frames for its own threshold window;
+  // waiting longer here only lengthens the silent gap users hear. 3s gives
+  // any in-flight buffer time to flush without dragging out the pause.
   player.on("stuck", () => {
-    log(`[Music] Track stuck in ${queue.guildId} — waiting 10s before skipping`);
+    log(`[Music] Track stuck in ${queue.guildId} — waiting 3s before skipping`);
     if (queue._stuckTimeout) return; // already waiting
     queue._stuckTimeout = setTimeout(() => {
       queue._stuckTimeout = null;
       if (queues.has(queue.guildId) && queue.playing) {
-        log(`[Music] Track still stuck after 10s — skipping`);
+        log(`[Music] Track still stuck after 3s — skipping`);
         handleTrackEnd(queue);
       }
-    }, 10_000);
+    }, 3_000);
   });
 
   player.on("closed", (data) => {
@@ -264,13 +266,22 @@ export async function connectToChannel(queue) {
       deleteQueue(queue.guildId);
       return;
     }
-    // Everything else (4006 session invalid, 4001, 4003, 4009, 4015) is
-    // recoverable — Discord rotates voice sessions regularly. Attempt to
+    // Everything else (1000 normal close, 4006 session invalid, 4001, 4003,
+    // 4009, 4015) is recoverable — Discord rotates voice sessions regularly,
+    // including via plain 1000 closes on voice-server migrations. Attempt to
     // rejoin and resume from current position.
     if (queue.voiceChannel && queue.songs.length > 0) {
       log(`[Music] Attempting voice reconnect in ${queue.guildId} after close code ${data.code}`);
       const currentPos = queue.player?.position || 0;
       if (queue.songs[0] && currentPos > 0) queue.songs[0].resumePos = currentPos;
+
+      // Critical: free Shoukaku's internal connection slot before rejoining.
+      // The "closed" event signals the voice WebSocket dropped, but Shoukaku
+      // still has the guild in its connections Map — joinVoiceChannel on the
+      // next tick would throw "This guild already have an existing connection".
+      // Tear it down here so the rejoin gets a fresh slot.
+      try { shoukaku?.leaveVoiceChannel(queue.guildId); } catch {}
+
       setTimeout(async () => {
         try {
           if (!queues.has(queue.guildId)) return;
@@ -713,8 +724,9 @@ function pcmToWav(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample 
 }
 
 export async function playTTS(guildId, text, voiceChannel, textChannel) {
-  const client = getTtsClient();
-  if (!client) return;
+  const localTts = !!config.local?.tts;
+  const client = localTts ? null : getTtsClient();
+  if (!localTts && !client) return;
 
   let queue = getQueue(guildId);
   if (!queue) {
@@ -726,66 +738,85 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
     const voice = getTtsVoice(guildId);
     log(`[TTS] Generating: "${text.slice(0, 60)}..." voice=${voice}`);
 
-    // Use exact format from Google's TTS docs
-    const transcript = `Say naturally: ${text.slice(0, 500)}`;
-
-    let response;
-    try {
-      response = await client.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: transcript }] }],
-        config: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: voice },
-            },
-          },
-        },
-      });
-    } catch (ttsErr) {
-      // If TTS model fails, try with simpler prompt format
-      log(`[TTS] First attempt failed: ${ttsErr.message} — retrying with simpler prompt`);
-      response = await client.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: text.slice(0, 500) }] }],
-        config: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: voice },
-            },
-          },
-        },
-      });
-    }
-
-    // Find the audio part — might not be the first part
-    const parts = response.candidates?.[0]?.content?.parts ?? [];
-    const audioPart = parts.find((p) => p.inlineData?.data);
-    if (!audioPart) { log("[TTS] No audio data in response"); return; }
-
-    const mimeType = audioPart.inlineData.mimeType ?? "audio/L16;rate=24000";
-    const rawBuffer = Buffer.from(audioPart.inlineData.data, "base64");
-    log(`[TTS] Got ${rawBuffer.length} bytes, mime=${mimeType}`);
-
-    // Convert to proper format based on what Gemini returns
     let audioBuffer;
-    let contentType;
+    let contentType = "audio/wav";
 
-    if (mimeType.includes("wav") || mimeType.includes("wave") || rawBuffer.toString("utf8", 0, 4) === "RIFF") {
-      audioBuffer = rawBuffer;
-      contentType = "audio/wav";
-    } else if (mimeType.includes("L16") || mimeType.includes("pcm") || mimeType.includes("raw")) {
-      // Raw PCM — wrap in WAV header so Lavalink can decode it
-      const rateMatch = mimeType.match(/rate=(\d+)/);
-      const sampleRate = rateMatch ? parseInt(rateMatch[1]) : 24000;
-      audioBuffer = pcmToWav(rawBuffer, sampleRate);
-      contentType = "audio/wav";
+    if (localTts) {
+      // Local TTS via piper. Reads text on stdin, writes WAV to the temp path.
+      const { spawn } = await import("node:child_process");
+      const { readFileSync, unlinkSync } = await import("node:fs");
+      const piperBin = config.local?.piperBin || `${process.env.HOME}/.local/piper/piper/piper`;
+      const voicePath = config.local?.piperVoice || `${process.env.HOME}/.local/piper/voice.onnx`;
+      const tmpPath = `/tmp/irene-tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`;
+      await new Promise((resolve, reject) => {
+        const proc = spawn(piperBin, ["--model", voicePath, "--output_file", tmpPath]);
+        proc.stderr.on("data", (c) => log(`[TTS] piper: ${c.toString().trim()}`));
+        proc.on("error", reject);
+        proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`piper exit ${code}`)));
+        proc.stdin.write(text.slice(0, 500));
+        proc.stdin.end();
+      });
+      audioBuffer = readFileSync(tmpPath);
+      try { unlinkSync(tmpPath); } catch {}
+      log(`[TTS] piper produced ${audioBuffer.length} bytes`);
     } else {
-      // MP3, OGG, etc — Lavalink handles natively
-      audioBuffer = rawBuffer;
-      contentType = mimeType.startsWith("audio/") ? mimeType : "audio/mpeg";
+      // Use exact format from Google's TTS docs
+      const transcript = `Say naturally: ${text.slice(0, 500)}`;
+
+      let response;
+      try {
+        response = await client.models.generateContent({
+          model: "gemini-2.5-flash-preview-tts",
+          contents: [{ parts: [{ text: transcript }] }],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: voice },
+              },
+            },
+          },
+        });
+      } catch (ttsErr) {
+        // If TTS model fails, try with simpler prompt format
+        log(`[TTS] First attempt failed: ${ttsErr.message} — retrying with simpler prompt`);
+        response = await client.models.generateContent({
+          model: "gemini-2.5-flash-preview-tts",
+          contents: [{ parts: [{ text: text.slice(0, 500) }] }],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: voice },
+              },
+            },
+          },
+        });
+      }
+
+      // Find the audio part — might not be the first part
+      const parts = response.candidates?.[0]?.content?.parts ?? [];
+      const audioPart = parts.find((p) => p.inlineData?.data);
+      if (!audioPart) { log("[TTS] No audio data in response"); return; }
+
+      const mimeType = audioPart.inlineData.mimeType ?? "audio/L16;rate=24000";
+      const rawBuffer = Buffer.from(audioPart.inlineData.data, "base64");
+      log(`[TTS] Got ${rawBuffer.length} bytes, mime=${mimeType}`);
+
+      if (mimeType.includes("wav") || mimeType.includes("wave") || rawBuffer.toString("utf8", 0, 4) === "RIFF") {
+        audioBuffer = rawBuffer;
+        contentType = "audio/wav";
+      } else if (mimeType.includes("L16") || mimeType.includes("pcm") || mimeType.includes("raw")) {
+        // Raw PCM — wrap in WAV header so Lavalink can decode it
+        const rateMatch = mimeType.match(/rate=(\d+)/);
+        const sampleRate = rateMatch ? parseInt(rateMatch[1]) : 24000;
+        audioBuffer = pcmToWav(rawBuffer, sampleRate);
+        contentType = "audio/wav";
+      } else {
+        // MP3, OGG, etc — Lavalink handles natively
+        audioBuffer = rawBuffer;
+        contentType = mimeType.startsWith("audio/") ? mimeType : "audio/mpeg";
+      }
     }
 
     // Store in HTTP cache (addTtsCache handles eviction + TTL)

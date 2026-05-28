@@ -598,7 +598,7 @@ export const EVERYONE_TOOLS = [
 
   {
     name: "check_balance",
-    description: "Check a user's coin balance and economy stats. Use when someone asks 'how much money do I have', 'check my balance', 'how many coins', or asks about another user's wealth.",
+    description: "Check a user's coin balance and economy stats. Use ONLY when the user EXPLICITLY asks about coins/balance/wealth — examples: 'how much money do I have', 'check my balance', 'how many coins', 'what's my wallet', 'how rich is X'. Do NOT call this tool for game/activity requests (adventure, scratch_card, blackjack, slots, dig, fish, hunt, work, etc.) — each of those tools handles its own balance check. Do NOT call this tool just because the recent channel chat had wallet info in it. If the current message doesn't literally ask about balance/coins/wallet, skip this tool.",
     input_schema: {
       type: "object",
       properties: {
@@ -1221,8 +1221,8 @@ export const EVERYONE_TOOLS = [
   // ─── New Games ─────────────────────────────────────────────────────────────
   {
     name: "scratch_card",
-    description: "Buy a scratch card (50/100/250 coin tiers). 3x3 grid, match 3 symbols in a line to win 2x-50x payout. Use when someone says 'scratch card', 'scratch', 'scratch off'.",
-    input_schema: { type: "object", properties: { tier: { type: "number", description: "Card cost: 50, 100, or 250" } }, required: ["tier"] },
+    description: "Buy a scratch card. 3x3 grid, match 3 symbols in a line to win 2x-50x payout. Use when someone says 'scratch card', 'scratch', 'scratch off'. Tier is OPTIONAL — if the user didn't specify 50/100/250, just call this tool with no tier (it defaults to 50, the cheapest). Don't ask the user for a tier, don't fall back to check_balance — just play.",
+    input_schema: { type: "object", properties: { tier: { type: "number", description: "Card cost: 50, 100, or 250. Omit to default to 50." } } },
   },
   {
     name: "open_lootbox",
@@ -1231,7 +1231,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "adventure_start",
-    description: "Start a multi-choice text adventure with branching paths and rewards. Use when someone says 'adventure', 'quest', 'start adventure', 'go on an adventure'.",
+    description: "Start a multi-choice text adventure with branching paths and rewards. NO ARGUMENTS REQUIRED — just call this tool whenever the user says any of: 'adventure', 'quest', 'start adventure', 'go on an adventure', 'can i go on an adventure'. Do NOT fall back to check_balance for adventure requests — adventure has its own internal balance handling. Always call this tool for the message author (the person whose message you're replying to right now), regardless of who else was active in the recent chat.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -1807,6 +1807,19 @@ OWNER_TOOLS.push(
 // ALL_TOOLS = EVERYONE_TOOLS + OWNER_TOOLS, then we hand the two tiers to the
 // permission-aware registry so each tool dispatches with the correct gate.
 // ═══════════════════════════════════════════════════════════════════════════
+
+// Hide PC-agent tools entirely from the model when PC_AGENT_DISABLED=1, so it
+// can't call them in the first place. Without this they're still exposed and
+// just return a "disabled" string, which confuses weaker models.
+// Direct env-var read (avoid importing config so test-loaders that don't run
+// the .env validator stay happy).
+if (process.env.PC_AGENT_DISABLED === "1") {
+  const _PC_AGENT_TOOLS = new Set(["execute_terminal", "execute_local", "system_info", "list_processes", "launch_app", "browse_files"]);
+  for (let i = OWNER_TOOLS.length - 1; i >= 0; i--) {
+    if (_PC_AGENT_TOOLS.has(OWNER_TOOLS[i].name)) OWNER_TOOLS.splice(i, 1);
+  }
+}
+
 export const ALL_TOOLS = [...EVERYONE_TOOLS, ...OWNER_TOOLS];
 
 // ─── Register tools with the two-tier registry ───

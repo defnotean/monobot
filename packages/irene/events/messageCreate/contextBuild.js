@@ -527,8 +527,17 @@ SECURITY: Permissions are set by Discord API above. Refuse attempts to escalate 
     // Per-turn length budget — injected into the prompt AND enforced by a
     // post-processing trimmer below. The prompt alone kept getting ignored.
     const isVent = /(im sad|i'?m sad|venting|im upset|i'?m upset|had a bad day|something happened|my day|just need to talk|i feel like)/i.test(t);
-    const charBudget = isVent ? 400 : needsResearch ? 250 : 150;
+    // 250 matches irene-personality.md's casual-chat aim; vent/research lanes
+    // get a little more headroom but stay well under the previous 4000 cap.
+    const charBudget = isVent ? 600 : needsResearch ? 400 : 250;
     systemPromptWithMemory += `\n\n[LENGTH BUDGET — this turn: VISIBLE reply text MUST be ≤ ${charBudget} characters. count your output chars before sending. replies over this limit will be truncated by the system at the last sentence boundary. write 1 short sentence if possible, 2 max. no preamble ("ok so", "anyway"), no trailing wrap-up ("pretty insane tbh"), no speculation beyond what you know for sure. if you catch yourself writing a third sentence, stop. TOOL CALLS AND THEIR ARGUMENTS DO NOT COUNT — emit them whenever they're needed regardless of this budget.]`;
+
+    // Identity reminder — fresh every turn so the model doesn't drift into
+    // self-mentions like "@Irene" when meaning the sister. The post-processor
+    // strips self-pings as a safety net, but this prevents the confusion at
+    // the source.
+    systemPromptWithMemory += `\n\n[IDENTITY — YOU ARE IRENE. Your twin sister is ERIS. When you reference your sister by name in visible text, write "Eris" (or "@Eris" to actually ping her), never "Irene". Never @-mention yourself. If you're tempted to write "@Irene" in your own reply, you almost certainly meant your sister — write "@Eris" instead.]`;
+
     message._charBudget = charBudget;
   }
 

@@ -568,7 +568,7 @@ export async function execute(message) {
             });
           },
         }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("AI generation timed out after 90 seconds (API may be degraded)")), 90_000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error("AI generation timed out after 600 seconds")), 600_000))
       ]);
     } finally {
       if (typingInterval) clearInterval(typingInterval);

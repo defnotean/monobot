@@ -71,11 +71,19 @@ export async function postProcessResponse({
     if (reply) {
       // Collapse double+ newlines to single (prevents big gaps in Discord)
       reply = reply.replace(/\n{2,}/g, "\n");
-      // Resolve @username mentions in AI response to proper Discord <@id> pings
+      // Resolve @username mentions in AI response to proper Discord <@id> pings.
+      // Guard against self-pings: if the model wrote "@Eris" while it IS Eris,
+      // converting to <@self_id> makes the bot ping itself (Discord renders it
+      // as a literal "@Eris" inside the bot's own message, which is a clear
+      // identity-confusion bug). Strip the @ for self-references — keeping the
+      // name as plain text preserves intent without the broken ping.
       if (message.guild) {
+        const selfId = message.client.user.id;
         reply = reply.replace(/@(\w+)/g, (match, name) => {
           const member = message.guild.members.cache.find(m => m.user.username.toLowerCase() === name.toLowerCase() || m.displayName.toLowerCase() === name.toLowerCase());
-          return member ? `<@${member.id}>` : match;
+          if (!member) return match;
+          if (member.id === selfId) return name; // self-mention → plain text
+          return `<@${member.id}>`;
         });
       }
       // Enforce per-turn character budget. Prompt directive alone keeps

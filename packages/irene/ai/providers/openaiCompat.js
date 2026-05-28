@@ -441,7 +441,7 @@ export async function runOpenAICompatChat(arg1, ...rest) {
   let finalText = "";
   const calledSignatures = new Set();
   const webSearchResults = new Map();
-  const maxIterations = Math.max(1, OC.maxIterations || 10);
+  const maxIterations = Math.max(1, OC.maxIterations || 40);
   const shouldPersistHistory = Array.isArray(history) && typeof arg1 === "object" && arg1;
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
@@ -506,6 +506,16 @@ export async function runOpenAICompatChat(arg1, ...rest) {
       }
 
       if (!msg.tool_calls?.length) {
+        // Personality wrap-up: when a separate chat model is configured AND tools
+        // ran this turn, re-call the chat model on the same conversation (no tools)
+        // so the user-facing reply uses the personality model, not the tool model.
+        if (toolsUsed.length > 0 && OC.chatModel && OC.chatModel !== model) {
+          try {
+            const wrap = await postChat(buildBody({ model: OC.chatModel, messages, tools: [] }), config.timeouts?.workerSlow ?? 60_000);
+            const wrapText = wrap.choices?.[0]?.message?.content?.trim();
+            if (wrapText) finalText = wrapText;
+          } catch {}
+        }
         if (!finalText) finalText = fallbackForFinishReason(finishReason, toolsUsed.length > 0);
         if (finishReason && !["stop", "tool_calls", "function_call"].includes(finishReason)) {
           log(`[${OC.providerName || "OpenAICompat"}] finish_reason=${finishReason}`);
@@ -590,7 +600,19 @@ export async function runOpenAICompatChat(arg1, ...rest) {
     if (shouldPersistHistory) appendAnthropicToolHistory(history, msg, slots);
 
     if (allDuplicates) {
-      finalText = msg.content || (toolsUsed.length ? "i already checked that, but got stuck finishing the answer. try again in a sec" : "");
+      if (msg.content) {
+        finalText = msg.content;
+      } else if (toolsUsed.length) {
+        // Force a final wrap-up reply — same conversation, no tools available
+        // so the model must respond with text. Uses chatModel for personality.
+        try {
+          const wrap = await postChat(buildBody({ model: OC.chatModel || model, messages, tools: [] }), config.timeouts?.workerSlow ?? 60_000);
+          finalText = wrap.choices?.[0]?.message?.content?.trim()
+            || "i already checked that, but got stuck finishing the answer. try again in a sec";
+        } catch {
+          finalText = "i already checked that, but got stuck finishing the answer. try again in a sec";
+        }
+      }
       break;
     }
   }

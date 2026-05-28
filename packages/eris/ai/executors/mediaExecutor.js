@@ -107,9 +107,26 @@ export async function execute(toolName, input, message, _context) {
         const base64 = buffer.toString("base64");
         const mimeType = imgRes.headers.get("content-type") || "image/png";
 
+        const prompt = input.prompt || input.question || "Describe this image in detail.";
+
+        // Local-Ollama vision path. Activated by config.local.ollamaVisionUrl.
+        if (config.local?.ollamaVisionUrl) {
+          const res = await fetch(`${config.local.ollamaVisionUrl}/api/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: config.local.ollamaVisionModel || "llava:7b",
+              messages: [{ role: "user", content: prompt, images: [base64] }],
+              stream: false,
+            }),
+          });
+          if (!res.ok) return `image analysis failed: ${res.status}`;
+          const data = await res.json();
+          return truncate(data?.message?.content || "could not analyze image");
+        }
+
         const { GoogleGenAI } = await import("@google/genai");
         const genai = new GoogleGenAI({ apiKey: config.geminiKeys[0] });
-        const prompt = input.prompt || input.question || "Describe this image in detail.";
         const result = await genai.models.generateContent({
           model: config.geminiFastModel,
           contents: [{

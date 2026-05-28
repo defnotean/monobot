@@ -316,6 +316,7 @@ const config = {
     baseUrl: env("OPENAI_COMPAT_BASE_URL", openaiCompatDefaults.baseUrl),
     model: env("OPENAI_COMPAT_MODEL", openaiCompatDefaults.model),
     fastModel: env("OPENAI_COMPAT_FAST_MODEL", openaiCompatDefaults.fastModel),
+    chatModel: env("OPENAI_COMPAT_CHAT_MODEL", env("OPENAI_COMPAT_MODEL", openaiCompatDefaults.model)),
     maxTokens: parseInt(env("OPENAI_COMPAT_MAX_TOKENS", "4096")),
     temperature: parseFloat(env("OPENAI_COMPAT_TEMPERATURE", "0.4")),
     topP: parseFloat(env("OPENAI_COMPAT_TOP_P", "0.95")),
@@ -478,5 +479,19 @@ if (!["gemini", "google", "nvidia", "kimi"].includes(config.aiProvider) && !OPEN
 if (!config.supabaseEnabled) {
   console.warn("[WARN] SUPABASE_URL / SUPABASE_KEY missing or invalid — running without persistence. Most Irene features will not work.");
 }
+
+// Local-stack toggles for the 100%-local self-host path. All optional —
+// existing cloud paths are unaffected when these are unset.
+config.local = {
+  stt: env("LOCAL_STT") === "1",
+  tts: env("LOCAL_TTS") === "1",
+  whisperBin: env("WHISPER_BIN", `${process.env.HOME || ""}/.local/whisper-cli`),
+  piperBin: env("PIPER_BIN", `${process.env.HOME || ""}/.local/piper/piper/piper`),
+  piperVoice: env("PIPER_VOICE", `${process.env.HOME || ""}/.local/piper/voice.onnx`),
+  ollamaEmbedUrl: env("OLLAMA_EMBED_URL"),
+  ollamaEmbedModel: env("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+  ollamaVisionUrl: env("OLLAMA_VISION_URL"),
+  ollamaVisionModel: env("OLLAMA_VISION_MODEL", "llava:7b"),
+};
 
 export default config;

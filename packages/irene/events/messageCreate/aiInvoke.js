@@ -32,7 +32,7 @@ export function hasWorkPool() { return !!_geminiPools.work; }
 
 // Trim core personality to make room for runtime context.
 export function applyPromptBudget(systemPromptWithMemory) {
-  const PROMPT_BUDGET = 12000;
+  const PROMPT_BUDGET = 100000; // ~25k tokens — local model, no cost ceiling
   if (systemPromptWithMemory.length > PROMPT_BUDGET) {
     const runtimeStart = systemPromptWithMemory.indexOf("\n\n[Currently speaking:");
     if (runtimeStart > 0) {

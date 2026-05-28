@@ -38,6 +38,13 @@ export function scrubLeakedToolSyntax(reply) {
   // Strip leaked code-style tool calls — print(tool_name()), tool_name(), etc.
   reply = reply.replace(/^\s*print\([^)]*\)\s*$/gim, "").trim();
   reply = reply.replace(/^\s*[a-z_]+\s*\(.*?\)\s*$/gim, "").trim();
+  // Strip leaked brace-style tool calls — `web_search {query: "..."}` followed
+  // by any leaked inner-reasoning trailing on the same line. Gemini emits this
+  // when it verbalises a tool call instead of (or in addition to) an actual
+  // functionCall part — we strip from the tool name through end-of-line so
+  // the parenthetical "(just in case...)" reasoning that often trails it
+  // doesn't reach the user either.
+  reply = reply.replace(/^[a-z][a-z0-9_]*\s*\{[\s\S]*?\}[^\n]*/gm, "").trim();
   // Strip leaked context labels — "[Eris said]", "[username said]", "[SYSTEM: ...]"
   reply = reply.replace(/\[(?:eris|irene|[^\]]{1,30})\s+said\]/gi, "").trim();
   reply = reply.replace(/\[SYSTEM:[^\]]*\]/gi, "").trim();

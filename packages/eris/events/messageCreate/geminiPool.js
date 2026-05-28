@@ -14,7 +14,10 @@ export function activeProviderNeedsGeminiClient() {
 }
 
 export function activeProviderLabel() {
-  return config.openaiCompat?.providerName || config.aiProvider || "AI";
+  const active = (config.aiProvider || "").toLowerCase();
+  if (active === "gemini" || active === "google") return "Gemini";
+  if (active === "nvidia" || active === "kimi") return "NVIDIA";
+  return config.openaiCompat?.providerName || active || "AI";
 }
 
 export const _geminiPools = activeProviderNeedsGeminiClient()

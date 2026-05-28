@@ -255,7 +255,9 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
   const calledSignatures = new Set();
 
   const currentModel = useFastModel ? config.geminiFastModel : config.geminiModel;
-  const currentThinkBudget = useFastModel ? 256 : 4096;
+  // Latency tuning: chat lane skips thinking entirely (0); task lane keeps a
+  // small budget (256) for multi-step tool planning. Was 256/4096 — slow.
+  const currentThinkBudget = useFastModel ? 0 : 256;
   // maxOutputTokens MUST exceed thinkingBudget — thinking tokens count
   // toward this cap, so a 2048 cap with a 4096 thinking budget left zero
   // tokens for visible text and silently truncated mid-word. Mirrors the

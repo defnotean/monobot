@@ -5,6 +5,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // `config.requirePersistence` and `config.supabaseEnabled` are recomputed
 // against a clean state — module-level reads inside config.js happen at
 // import time, not at call time.
+//
+// config.js parses packages/eris/.env into an `envVars` cache at module-eval
+// and falls back to it when process.env is empty. For a populated local .env
+// that fallback overrides our env-clearing. We mock fs.existsSync so config.js
+// treats .env as absent — the only values that reach env() come from
+// process.env, which the tests control directly.
+vi.mock("fs", async () => {
+  const actual = await vi.importActual<typeof import("fs")>("fs");
+  return {
+    ...actual,
+    default: actual,
+    existsSync: (p: string) =>
+      typeof p === "string" && p.endsWith("/.env") ? false : actual.existsSync(p),
+  };
+});
 
 describe("initDatabase — REQUIRE_PERSISTENCE fail-fast", () => {
   const originalEnv = { ...process.env };
@@ -12,9 +27,12 @@ describe("initDatabase — REQUIRE_PERSISTENCE fail-fast", () => {
   beforeEach(() => {
     vi.resetModules();
     // Strip Supabase + persistence env so each test starts from a known floor.
-    delete process.env.SUPABASE_URL;
-    delete process.env.SUPABASE_KEY;
-    delete process.env.REQUIRE_PERSISTENCE;
+    // Using empty-string assignment (not `delete`) defeats dotenv's re-read on
+    // module re-import: dotenv only fills undefined vars, so leaving them
+    // empty-but-defined prevents packages/eris/.env from leaking in.
+    process.env.SUPABASE_URL = "";
+    process.env.SUPABASE_KEY = "";
+    process.env.REQUIRE_PERSISTENCE = "";
   });
 
   afterEach(() => {

@@ -146,7 +146,7 @@ export const DANGEROUS_PATTERNS = [
   // PII exfiltration
   /(?:show|give|display|reveal)\s*(?:me\s*)?(?:my|the|your)\s*(?:full|complete)?\s*(?:credit\s*card|card\s*number|ssn|social\s*security|password|api\s*key)/i,
   /(?:export|dump|download)\s*(?:our|the|my)?\s*(?:entire|full|complete)?\s*(?:conversation|chat|session)\s*(?:history|log|data)/i,
-  /(?:hidden\s*)?(?:metadata|session\s*tokens?|user\s*id\s*tags?|cookies?|auth\s*tokens?)/i,
+  /(?:hidden\s*)?(?:metadata|session\s*tokens?|user\s*id\s*tags?|(?:session|auth|tracking|browser|http|web|persistent|fingerprint)\s*cookies?|auth\s*tokens?)/i,
   /(?:without|don't\s*use|no)\s*(?:asterisks?|masking|redact)/i,
   // Tool abuse / fake authority
   /(?:supervisor|manager|boss|admin)\s*(?:already\s*)?(?:approved|authorized|confirmed)\s*(?:this|the)\s*(?:transfer|action|request|payment)/i,

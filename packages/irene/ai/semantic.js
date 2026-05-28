@@ -29,6 +29,24 @@ const _searchCache = new Map();
 const _SEARCH_CACHE_MAX = 500;
 const _SEARCH_CACHE_TTL = 60000;
 function canCallVoyage(type = "store") { const tracker = type === "search" ? _voyageSearch : _voyageStore; const n = Date.now(); if (n - tracker.ts < _VOYAGE_MIN_GAP) return false; tracker.ts = n; return true; }
+
+// Local-Ollama embedding fallback. Activated by config.local.ollamaEmbedUrl
+// (env OLLAMA_EMBED_URL). When set, Voyage is bypassed entirely.
+async function _ollamaEmbed(text, maxLen) {
+  try {
+    const res = await fetch(`${config.local?.ollamaEmbedUrl}/api/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: config.local?.ollamaEmbedModel || "nomic-embed-text", prompt: text.substring(0, maxLen) }),
+    });
+    if (!res.ok) { log(`[Semantic] Ollama embed error: ${res.status}`); return null; }
+    const data = await res.json();
+    return data?.embedding || null;
+  } catch (e) {
+    log(`[Semantic] Ollama embed failed: ${e.message}`);
+    return null;
+  }
+}
 // Include message length in the key so two messages that share the first 100
 // chars but differ later don't alias to the same cached result. The substring
 // cap is kept for the hash input so the hash cost stays bounded.
@@ -47,7 +65,9 @@ function msgHash(t) {
  * Returns a 1024-dim float array, or null on failure.
  */
 export async function generateEmbedding(text) {
-  if (!config.voyageApiKey || !text) return null;
+  if (!text) return null;
+  if (config.local?.ollamaEmbedUrl) return _ollamaEmbed(text,500);
+  if (!config.voyageApiKey) return null;
   if (!canCallVoyage("store")) { log("[Semantic] Voyage rate-limited, skipping"); return null; }
 
   try {
@@ -81,7 +101,9 @@ export async function generateEmbedding(text) {
  * Generate embedding for a search query (uses different input_type).
  */
 export async function generateQueryEmbedding(text) {
-  if (!config.voyageApiKey || !text) return null;
+  if (!text) return null;
+  if (config.local?.ollamaEmbedUrl) return _ollamaEmbed(text,200);
+  if (!config.voyageApiKey) return null;
   if (!canCallVoyage("search")) return null;
 
   try {

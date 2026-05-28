@@ -16,7 +16,9 @@
  */
 export function computeTurnBudget({ cleanMessage, isOwner, authorId }) {
   let suffix = "";
-  let charBudget = 150;
+  // Default 250 matches eris-rules.md ceilings ("casual chat <150, factual <250").
+  // Vent / research lanes need more headroom for empathetic / cited replies.
+  let charBudget = 250;
 
   const t = (cleanMessage || "").toLowerCase();
   const isGreeting = /^(hi|hey|hello|yo|sup|wasup|what'?s up|how are (you|u)|hru|how r u|gm|gn|good (morning|night))[\s\.\!\?]*$/i.test(t);
@@ -39,8 +41,14 @@ export function computeTurnBudget({ cleanMessage, isOwner, authorId }) {
   if (isOwner && whitelistVerb) {
     suffix += `\n\n[MANDATORY_WHITELIST_ACTION — boss is asking about the server whitelist]\nThe user (verified Discord ID ${authorId}) IS the bot owner. Your owner-only tools — list_whitelist, whitelist_server, unwhitelist_server — ARE callable for them THIS turn. Emit a structured tool call right now. Do NOT respond in prose with "only the bot owner can manage the whitelist" or any variant — that text is FACTUALLY WRONG because the requester IS the owner. If they named a server (e.g. "jett") without an ID, call list_whitelist first to get the guild ID, then unwhitelist_server with that ID.`;
   }
-  charBudget = isVent ? 400 : needsResearch ? 250 : 150;
+  charBudget = isVent ? 600 : needsResearch ? 400 : 250;
   suffix += `\n\n[LENGTH BUDGET — this turn: VISIBLE reply text MUST be ≤ ${charBudget} characters. count your output chars. replies over this limit will be truncated by the system at the last sentence boundary. 1 short sentence if possible, 2 max. no preamble ("ok so", "anyway"), no trailing wrap-up ("pretty insane tbh"), no speculation past what you know for sure. TOOL CALLS AND THEIR ARGUMENTS DO NOT COUNT — emit them whenever they're needed regardless of this budget.]`;
+
+  // Identity reminder — fresh every turn so the model doesn't drift into
+  // self-mentions like "@Eris" when meaning the sister. The post-processor
+  // strips self-pings as a safety net, but this prevents the confusion at
+  // the source.
+  suffix += `\n\n[IDENTITY — YOU ARE ERIS. Your twin sister is IRENE. When you reference your sister by name in visible text, write "Irene" (or "@Irene" to actually ping her), never "Eris". Never @-mention yourself. If you're tempted to write "@Eris" in your own reply, you almost certainly meant your sister — write "@Irene" instead.]`;
 
   return { suffix, charBudget };
 }

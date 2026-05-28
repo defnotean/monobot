@@ -267,9 +267,9 @@ function startCapturingUser(state, userId, receiver) {
     const opusBuffer = Buffer.concat(audioChunks);
     log(`[VoiceListen] Captured ${opusBuffer.length} bytes (${duration}ms) from user ${userId}`);
 
-    // Process with Gemini
+    // Process with Gemini (or local whisper if LOCAL_STT=1 — frames passed for prism decode)
     try {
-      await processAudio(state, userId, opusBuffer);
+      await processAudio(state, userId, opusBuffer, audioChunks);
     } catch (err) {
       log(`[VoiceListen] Error processing audio from ${userId}: ${err.message}`);
     }
@@ -289,11 +289,68 @@ function startCapturingUser(state, userId, receiver) {
   }, MAX_AUDIO_DURATION_MS + 1000);
 }
 
-// ─── Gemini Multimodal Processing ───────────────────────────────────────────
+// ─── Audio Processing (Gemini multimodal, or local whisper.cpp via WHISPER_BIN) ─
 
-async function processAudio(state, userId, opusBuffer) {
-  const client = getSttClient();
-  if (!client) {
+// Decode raw Opus packets (Discord voice) → 16kHz mono PCM WAV via prism-media.
+// Needed for local whisper because whisper expects a proper WAV/MP3/etc file.
+async function _opusFramesToWav16kMono(opusFrames) {
+  const prism = (await import("prism-media")).default;
+  const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+  return await new Promise((resolve, reject) => {
+    const pcmChunks = [];
+    decoder.on("data", (c) => pcmChunks.push(c));
+    decoder.on("end", () => {
+      const pcm = Buffer.concat(pcmChunks); // 48kHz stereo s16le
+      const stereoSamples = pcm.length / 4;
+      const monoSamples = Math.floor(stereoSamples / 3); // decimate 48 → 16
+      const out = Buffer.alloc(monoSamples * 2);
+      for (let i = 0, j = 0; j < monoSamples; i += 12, j++) {
+        const l = pcm.readInt16LE(i);
+        const r = pcm.readInt16LE(i + 2);
+        out.writeInt16LE(Math.round((l + r) / 2), j * 2);
+      }
+      const dataSize = out.length;
+      const hdr = Buffer.alloc(44);
+      hdr.write("RIFF", 0); hdr.writeUInt32LE(36 + dataSize, 4); hdr.write("WAVE", 8);
+      hdr.write("fmt ", 12); hdr.writeUInt32LE(16, 16); hdr.writeUInt16LE(1, 20);
+      hdr.writeUInt16LE(1, 22); hdr.writeUInt32LE(16000, 24);
+      hdr.writeUInt32LE(32000, 28); hdr.writeUInt16LE(2, 32); hdr.writeUInt16LE(16, 34);
+      hdr.write("data", 36); hdr.writeUInt32LE(dataSize, 40);
+      resolve(Buffer.concat([hdr, out]));
+    });
+    decoder.on("error", reject);
+    for (const frame of opusFrames) decoder.write(frame);
+    decoder.end();
+  });
+}
+
+async function _whisperTranscribe(opusFrames) {
+  const wav = await _opusFramesToWav16kMono(opusFrames);
+  const { writeFileSync, unlinkSync } = await import("node:fs");
+  const { spawn } = await import("node:child_process");
+  const tmpPath = `/tmp/irene-stt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`;
+  writeFileSync(tmpPath, wav);
+  return await new Promise((resolve) => {
+    const proc = spawn(config.local?.whisperBin || `${process.env.HOME}/.local/whisper-cli`, [tmpPath]);
+    const chunks = [];
+    proc.stdout.on("data", (c) => chunks.push(c));
+    proc.stderr.on("data", (c) => log(`[VoiceListen] whisper-cli: ${c.toString().trim()}`));
+    proc.on("close", () => {
+      try { unlinkSync(tmpPath); } catch {}
+      resolve(Buffer.concat(chunks).toString("utf8").trim());
+    });
+    proc.on("error", (e) => {
+      log(`[VoiceListen] whisper-cli spawn failed: ${e.message}`);
+      try { unlinkSync(tmpPath); } catch {}
+      resolve("");
+    });
+  });
+}
+
+async function processAudio(state, userId, opusBuffer, opusFrames) {
+  const localStt = !!config.local?.stt;
+  const client = localStt ? null : getSttClient();
+  if (!localStt && !client) {
     log("[VoiceListen] No Gemini client available for STT");
     return;
   }
@@ -301,28 +358,33 @@ async function processAudio(state, userId, opusBuffer) {
   const wakeWord = state.wakeWord;
 
   try {
-    // Step 1: Send audio to Gemini for transcription + wake word check
-    // Gemini accepts raw audio and can transcribe + respond in one call
-    const transcribeResponse = await client.models.generateContent({
-      model: config.geminiFastModel || "gemini-2.5-flash-preview-04-17",
-      contents: [
-        {
-          parts: [
-            {
-              inlineData: {
-                mimeType: "audio/ogg",
-                data: opusBuffer.toString("base64"),
+    let transcript = "";
+    if (localStt) {
+      transcript = await _whisperTranscribe(opusFrames);
+    } else {
+      // Step 1: Send audio to Gemini for transcription + wake word check
+      // Gemini accepts raw audio and can transcribe + respond in one call
+      const transcribeResponse = await client.models.generateContent({
+        model: config.geminiFastModel || "gemini-2.5-flash-preview-04-17",
+        contents: [
+          {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: "audio/ogg",
+                  data: opusBuffer.toString("base64"),
+                },
               },
-            },
-            {
-              text: `Transcribe this audio exactly as spoken. Return ONLY the transcription, nothing else. If the audio is unclear or empty, respond with "[inaudible]".`,
-            },
-          ],
-        },
-      ],
-    });
+              {
+                text: `Transcribe this audio exactly as spoken. Return ONLY the transcription, nothing else. If the audio is unclear or empty, respond with "[inaudible]".`,
+              },
+            ],
+          },
+        ],
+      });
 
-    const transcript = transcribeResponse.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+      transcript = transcribeResponse.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+    }
 
     if (!transcript || transcript === "[inaudible]" || transcript.length < 2) {
       return; // Nothing useful captured

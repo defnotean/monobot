@@ -391,7 +391,7 @@ HOW TO INTERACT:
   // added after). If total exceeds budget, trim core to make room for
   // runtime, since runtime context (memory, opinions, mood) is what makes
   // her feel alive per-conversation.
-  const PROMPT_BUDGET = 12000; // ~3000 tokens
+  const PROMPT_BUDGET = 100000; // ~25k tokens — local model, no cost ceiling
   if (systemInstruction.length > PROMPT_BUDGET) {
     // coreEnd = where base personality ends (first runtime section starts with "\n\n[")
     const runtimeStart = systemInstruction.indexOf("\n\n[Currently speaking:");
