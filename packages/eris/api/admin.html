@@ -16,7 +16,6 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     font-size: 14px; -webkit-font-smoothing: antialiased; }
   .layout { display: grid; grid-template-columns: 220px 1fr; height: 100vh; }
-  /* Sidebar */
   aside { background: var(--panel); border-right: 1px solid var(--border);
     overflow-y: auto; padding: 16px 0; }
   .brand { padding: 0 20px 16px; border-bottom: 1px solid var(--border);
@@ -39,7 +38,6 @@
   .badge.ok  { background: rgba(63, 185, 80, 0.2); color: var(--ok); }
   .badge.err { background: rgba(248, 81, 73, 0.2); color: var(--err); }
   .badge.warn { background: rgba(210, 153, 34, 0.2); color: var(--warn); }
-  /* Main */
   main { overflow-y: auto; padding: 24px 32px; }
   .page-header { display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
@@ -61,7 +59,7 @@
   .stat.eris { color: var(--eris); }
   .stat.irene { color: var(--irene); }
   .stat-row { display: flex; justify-content: space-between; align-items: center;
-    padding: 8px 0; border-bottom: 1px solid var(--border); }
+    padding: 8px 0; border-bottom: 1px solid var(--border); gap: 12px; }
   .stat-row:last-child { border: 0; }
   .stat-row .k { color: var(--muted); font-size: 12px; }
   .stat-row .v { font-family: var(--mono); }
@@ -80,12 +78,15 @@
   .btn.danger { color: var(--err); }
   .btn.danger:hover { background: rgba(248, 81, 73, 0.15); }
   .btn.primary { background: var(--accent); color: white; border-color: var(--accent); }
+  .btn.primary:hover { background: #4a91e2; }
+  .btn.success { background: var(--ok); color: white; border-color: var(--ok); }
   .empty { text-align: center; padding: 40px; color: var(--muted); }
-  input.search, input.field, select.field {
+  input.field, select.field, input[type="number"], input[type="text"], input[type="password"] {
     background: var(--bg); border: 1px solid var(--border); color: var(--text);
     padding: 6px 10px; border-radius: 4px; font-family: inherit; font-size: 13px;
-    min-width: 200px; }
-  .toolbar { display: flex; gap: 10px; margin-bottom: 14px; align-items: center; }
+    min-width: 80px; }
+  input.search { min-width: 240px; }
+  .toolbar { display: flex; gap: 10px; margin-bottom: 14px; align-items: center; flex-wrap: wrap; }
   .toolbar .grow { flex: 1; }
   .log-pane { background: #000; border: 1px solid var(--border); border-radius: 6px;
     padding: 12px; font-family: var(--mono); font-size: 12px; line-height: 1.5;
@@ -95,6 +96,9 @@
   .err-box { background: rgba(248, 81, 73, 0.1); border: 1px solid var(--err);
     color: var(--err); padding: 10px 14px; border-radius: 6px; margin-bottom: 12px;
     font-size: 13px; }
+  .ok-box { background: rgba(63, 185, 80, 0.1); border: 1px solid var(--ok);
+    color: var(--ok); padding: 8px 14px; border-radius: 6px; margin-bottom: 12px;
+    font-size: 13px; }
   .meter { display: inline-block; vertical-align: middle; width: 100px; height: 8px;
     background: var(--panel2); border-radius: 4px; overflow: hidden; margin-right: 8px; }
   .meter > div { height: 100%; background: var(--accent); transition: width 0.3s; }
@@ -103,23 +107,52 @@
   .pill.eris { background: rgba(247, 129, 102, 0.2); color: var(--eris); }
   .pill.irene { background: rgba(163, 113, 247, 0.2); color: var(--irene); }
   .small { font-size: 11px; color: var(--muted); }
+  /* Login modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+    display: none; align-items: center; justify-content: center; z-index: 1000; }
+  .modal-bg.visible { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 28px 32px; max-width: 420px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+  .modal h2 { margin: 0 0 8px; font-size: 18px; }
+  .modal p { color: var(--muted); margin: 0 0 16px; font-size: 13px; line-height: 1.5; }
+  .modal input { width: 100%; margin-bottom: 12px; padding: 10px; font-size: 14px; }
+  .inline-edit { display: flex; gap: 6px; align-items: center; }
+  .inline-edit input { width: 80px; padding: 3px 6px; font-size: 12px; }
+  details { background: var(--panel2); border-radius: 4px; padding: 4px 8px; margin-top: 6px; }
+  summary { cursor: pointer; font-size: 12px; color: var(--muted); }
 </style>
 </head>
 <body>
+
+<!-- Auth login modal — only shown when local bypass fails and no key in localStorage -->
+<div id="login-modal" class="modal-bg">
+  <div class="modal">
+    <h2>🔒 Auth required</h2>
+    <p>This admin panel is being accessed remotely. Paste your <span class="mono">DASHBOARD_API_KEY</span> or <span class="mono">TWIN_API_SECRET</span> below. It'll be saved in this browser's localStorage.</p>
+    <input id="login-token" type="password" placeholder="Paste token..." autocomplete="off" />
+    <div id="login-error" class="err-box" style="display:none; margin: 0 0 12px;"></div>
+    <button class="btn primary" style="width:100%; padding: 10px;" onclick="submitLogin()">Sign in</button>
+    <div class="small" style="margin-top: 10px; text-align: center;">
+      Tip: local access from this machine doesn't need a token (localhost bypass).
+    </div>
+  </div>
+</div>
 
 <div class="layout">
   <aside>
     <div class="brand">monobot admin<small>Eris × Irene</small></div>
     <div class="bot-switch">
       <div class="small" style="margin-bottom:6px;">Status</div>
-      <div id="status-eris"  class="stat-row"><span class="k">Eris</span>  <span class="badge err" id="badge-eris">offline</span></div>
-      <div id="status-irene" class="stat-row"><span class="k">Irene</span> <span class="badge err" id="badge-irene">offline</span></div>
+      <div class="stat-row"><span class="k">Eris</span>  <span class="badge err" id="badge-eris">offline</span></div>
+      <div class="stat-row"><span class="k">Irene</span> <span class="badge err" id="badge-irene">offline</span></div>
+      <button class="btn" style="width:100%; margin-top:8px;" onclick="logout()">Reset auth</button>
     </div>
     <nav class="nav">
       <a data-section="overview"      class="active"><span class="ic">📊</span> Overview</a>
       <a data-section="memories"      ><span class="ic">🧠</span> Memories</a>
       <a data-section="personality"   ><span class="ic">🎭</span> Personality</a>
       <a data-section="relationships" ><span class="ic">💞</span> Relationships</a>
+      <a data-section="economy"       ><span class="ic">💰</span> Economy</a>
       <a data-section="episodes"      ><span class="ic">🎬</span> Episodes</a>
       <a data-section="conversations" ><span class="ic">💬</span> Conversations</a>
       <a data-section="logs"          ><span class="ic">📜</span> Logs</a>
@@ -132,6 +165,7 @@
       <div class="meta">auto-refresh <span id="last-refresh">—</span> · <a href="#" onclick="refresh(); return false;" style="color:var(--accent);">↻ now</a></div>
     </div>
     <div id="error-box" class="err-box" style="display:none;"></div>
+    <div id="ok-box" class="ok-box" style="display:none;"></div>
     <div id="content"></div>
   </main>
 </div>
@@ -140,7 +174,7 @@
 const BOTS = ['eris', 'irene'];
 let activeSection = 'overview';
 let refreshTimer = null;
-const cache = { eris: {}, irene: {} };
+const TOKEN_KEY = 'monobot_admin_token';
 
 function $(sel) { return document.querySelector(sel); }
 function el(tag, attrs = {}, ...kids) {
@@ -158,13 +192,23 @@ function el(tag, attrs = {}, ...kids) {
   return e;
 }
 
-// /api/* for Eris, /api/irene/* (proxied) for Irene
+// ─── Fetch wrapper that adds Bearer token from localStorage ───────────────
+function authHeaders() {
+  const t = localStorage.getItem(TOKEN_KEY);
+  return t ? { 'Authorization': `Bearer ${t}` } : {};
+}
+async function authFetch(url, opts = {}) {
+  const headers = { ...(opts.headers || {}), ...authHeaders() };
+  return fetch(url, { ...opts, headers });
+}
+
 function apiPath(bot, path) {
   const p = path.startsWith('/') ? path : `/${path}`;
   return bot === 'eris' ? `/api${p}` : `/api/irene${p}`;
 }
 async function api(bot, path, opts = {}) {
-  const r = await fetch(apiPath(bot, path), opts);
+  const r = await authFetch(apiPath(bot, path), opts);
+  if (r.status === 401) { showLogin('Token rejected — try a different one.'); throw new Error('unauthorized'); }
   if (!r.ok) throw new Error(`${bot} ${path}: HTTP ${r.status}`);
   const ct = r.headers.get('content-type') || '';
   return ct.includes('json') ? r.json() : r.text();
@@ -172,10 +216,16 @@ async function api(bot, path, opts = {}) {
 async function tryApi(bot, path, opts) {
   try { return await api(bot, path, opts); } catch (e) { return { _error: e.message }; }
 }
+
 function showError(msg) {
   const box = $('#error-box');
   if (!msg) { box.style.display = 'none'; return; }
   box.textContent = msg; box.style.display = 'block';
+}
+function showOk(msg, hideAfter = 3000) {
+  const box = $('#ok-box');
+  box.textContent = msg; box.style.display = 'block';
+  setTimeout(() => box.style.display = 'none', hideAfter);
 }
 function fmt(n)  { return n == null ? '—' : typeof n === 'number' ? n.toLocaleString() : String(n); }
 function fmtUptime(s) { if (!s) return '—'; const h = Math.floor(s/3600), m = Math.floor((s%3600)/60); return `${h}h ${m}m`; }
@@ -183,19 +233,44 @@ function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':
 function timeAgo(iso) {
   if (!iso) return '—';
   const ms = Date.now() - new Date(iso).getTime();
+  if (isNaN(ms)) return String(iso).slice(0, 16);
   if (ms < 60_000) return `${Math.floor(ms/1000)}s ago`;
   if (ms < 3600_000) return `${Math.floor(ms/60000)}m ago`;
   if (ms < 86_400_000) return `${Math.floor(ms/3600000)}h ago`;
   return `${Math.floor(ms/86_400_000)}d ago`;
 }
 
-// Header status badges
+// ─── Auth login flow ───────────────────────────────────────────────────────
+function showLogin(errMsg) {
+  $('#login-modal').classList.add('visible');
+  $('#login-token').focus();
+  const e = $('#login-error');
+  if (errMsg) { e.textContent = errMsg; e.style.display = 'block'; }
+  else e.style.display = 'none';
+}
+function hideLogin() { $('#login-modal').classList.remove('visible'); }
+function submitLogin() {
+  const tok = $('#login-token').value.trim();
+  if (!tok) return;
+  localStorage.setItem(TOKEN_KEY, tok);
+  hideLogin();
+  refresh();
+}
+function logout() {
+  localStorage.removeItem(TOKEN_KEY);
+  location.reload();
+}
+// Submit on Enter in login field
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && $('#login-modal').classList.contains('visible')) submitLogin();
+});
+
+// Status badges
 async function refreshStatus() {
   for (const bot of BOTS) {
-    const port = bot === 'eris' ? 3000 : 3001;
-    const url = bot === 'eris' ? '/healthz' : '/api/irene/../../healthz'; // can't easily proxy /healthz; just hit health
+    const url = bot === 'eris' ? '/healthz' : '/api/irene/health';
     try {
-      const r = await fetch(bot === 'eris' ? '/healthz' : '/api/irene/health', { cache: 'no-store' });
+      const r = await authFetch(url, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       const ready = r.ok && (j.ok !== false);
       const badge = $(`#badge-${bot}`);
@@ -212,15 +287,10 @@ async function refreshStatus() {
 const sections = {
 
   async overview() {
-    const [erisStats, ireneStats, erisMood, ireneMood, erisHum, ireneHum] = await Promise.all([
-      tryApi('eris',  '/stats'),
-      tryApi('irene', '/stats'),
-      tryApi('eris',  '/mood'),
-      tryApi('irene', '/mood'),
-      tryApi('eris',  '/relationships').catch(() => ({})),
-      tryApi('irene', '/humanity'),
+    const [erisStats, ireneStats, erisMood, ireneMood] = await Promise.all([
+      tryApi('eris',  '/stats'),  tryApi('irene', '/stats'),
+      tryApi('eris',  '/mood'),   tryApi('irene', '/mood'),
     ]);
-
     function statCard(bot, stats, mood) {
       const c = bot === 'eris' ? 'eris' : 'irene';
       return el('div', { class: 'card' },
@@ -281,28 +351,36 @@ const sections = {
   },
 
   async personality() {
-    const [erisP, ireneP] = await Promise.all([
+    const [erisM, ireneP, ireneM] = await Promise.all([
       tryApi('eris',  '/mood').catch(() => ({})),
       tryApi('irene', '/personality').catch(() => ({})),
+      tryApi('irene', '/mood').catch(() => ({})),
     ]);
-    const ireneM = await tryApi('irene', '/mood').catch(() => ({}));
-    function card(bot, p, mood) {
-      const fields = [
-        ['warmth',  p?.warmth  ?? mood?.warmth],
-        ['sarcasm', p?.sarcasm ?? mood?.sarcasm],
-        ['mood',    mood?.label || mood?.score],
-        ['energy',  mood?.energy],
-        ['bad_day', mood?.bad_day != null ? String(mood.bad_day) : null],
-      ];
-      const rows = fields.filter(([_, v]) => v != null && v !== '').map(([k, v]) =>
-        el('div', { class: 'stat-row' }, el('span', {class:'k'}, k), el('span', {class:'v'}, String(v)))
-      );
+    function moodEditor(bot, mood) {
+      const score  = mood?.score ?? mood?.mood_score ?? 0;
+      const energy = mood?.energy ?? 50;
       return el('div', { class: 'card' },
-        el('h3', {}, bot.toUpperCase()),
-        rows.length ? rows : el('div', {class:'empty'}, 'no personality data'),
+        el('h3', {}, `${bot.toUpperCase()} mood + energy`),
+        el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Current label'),
+          el('span', {class:'v'}, mood?.label || '—')),
+        el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Bad day'),
+          el('span', {class:'v'}, String(mood?.bad_day ?? '—'))),
+        el('div', { style: 'margin-top: 14px;' },
+          el('div', {class:'small', style:'margin-bottom:4px;'}, `mood_score (-100 to +100, current: ${score})`),
+          el('input', { type: 'range', min: '-100', max: '100', value: String(score),
+            id: `mood-score-${bot}`, style: 'width: 100%;' }),
+          el('div', {class:'small', style:'margin: 12px 0 4px;'}, `energy (0 to 100, current: ${energy})`),
+          el('input', { type: 'range', min: '0', max: '100', value: String(energy),
+            id: `mood-energy-${bot}`, style: 'width: 100%;' }),
+          el('button', { class: 'btn primary', style: 'margin-top: 10px;',
+            onclick: () => saveMood(bot) }, 'Apply'),
+        ),
       );
     }
-    return el('div', { class: 'grid cols-2' }, card('eris', erisP, erisP), card('irene', ireneP, ireneM));
+    return el('div', { class: 'grid cols-2' },
+      moodEditor('eris',  erisM),
+      moodEditor('irene', ireneM),
+    );
   },
 
   async relationships() {
@@ -313,13 +391,15 @@ const sections = {
     function table(bot, raw) {
       const rows = Array.isArray(raw) ? raw : (raw?.relationships || raw?.rows || raw?.users || []);
       const head = el('thead', {}, el('tr', {},
-        el('th', {}, 'User'), el('th', {}, 'Affinity / Closeness'),
+        el('th', {}, 'User'), el('th', {}, 'Affinity'),
+        el('th', {style:'width:180px;'}, 'Adjust'),
         el('th', {}, 'Updated')));
       const tbody = el('tbody');
-      if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:3, class:'empty'}, 'no relationships')));
+      if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:4, class:'empty'}, 'no relationships')));
       for (const r of rows.slice(0, 100)) {
-        const user = r.username || r.display_name || r.user_id || '—';
-        const score = r.affinity ?? r.closeness ?? r.score ?? '—';
+        const uid = r.user_id || r.id || '—';
+        const user = r.username || r.display_name || uid;
+        const score = r.affinity_score ?? r.affinity ?? r.closeness ?? r.score ?? 0;
         const pct = typeof score === 'number' ? Math.max(0, Math.min(100, (score + 100) / 2)) : null;
         tbody.appendChild(el('tr', {},
           el('td', {class:'mono'}, String(user)),
@@ -327,6 +407,10 @@ const sections = {
             pct != null ? el('span', {class:'meter'}, el('div', {style:`width:${pct}%;`})) : null,
             el('span', {class:'mono'}, String(score)),
           ]),
+          el('td', {}, el('div', { class: 'inline-edit' },
+            el('input', { type: 'number', placeholder: '±delta', id: `aff-d-${bot}-${uid}`, style: 'width: 80px;' }),
+            el('button', { class: 'btn', onclick: () => adjustAffinity(bot, uid, score) }, 'apply'),
+          )),
           el('td', {class:'mono small'}, timeAgo(r.updated_at || r.last_seen)),
         ));
       }
@@ -336,6 +420,69 @@ const sections = {
       );
     }
     return el('div', { class: 'grid cols-2' }, table('eris', eris), table('irene', irene));
+  },
+
+  async economy() {
+    const [top, recentTx] = await Promise.all([
+      tryApi('eris', '/economy/top?limit=30'),
+      tryApi('eris', '/transactions?limit=50'),
+    ]);
+    const topRows = top?.rows || [];
+    const txRows = recentTx?.rows || [];
+
+    // Top balances table with inline coin-adjust
+    const topHead = el('thead', {}, el('tr', {},
+      el('th', {}, 'User'), el('th', {}, 'Balance'), el('th', {}, 'Earned'),
+      el('th', {}, 'Lost'), el('th', {}, 'Streak'), el('th', {}, 'Prestige'),
+      el('th', {style:'width:200px;'}, 'Adjust coins')));
+    const topBody = el('tbody');
+    if (!topRows.length) topBody.appendChild(el('tr', {}, el('td', {colspan:7, class:'empty'}, top?._error ? `error: ${top._error}` : 'no economy rows')));
+    for (const r of topRows) {
+      topBody.appendChild(el('tr', {},
+        el('td', {class:'mono'}, String(r.user_id).slice(0, 20)),
+        el('td', {class:'mono', style:'color:var(--ok); font-weight:600;'}, fmt(r.balance)),
+        el('td', {class:'mono small'}, fmt(r.total_earned)),
+        el('td', {class:'mono small'}, fmt(r.total_lost)),
+        el('td', {class:'mono small'}, `🔥 ${r.daily_streak || 0}`),
+        el('td', {class:'mono small'}, String(r.prestige_level || 0)),
+        el('td', {}, el('div', { class: 'inline-edit' },
+          el('input', { type: 'number', placeholder: '±delta', id: `bal-d-${r.user_id}`, style: 'width: 90px;' }),
+          el('button', { class: 'btn', onclick: () => adjustBalance(r.user_id) }, 'apply'),
+        )),
+      ));
+    }
+
+    // Recent transactions table
+    const txHead = el('thead', {}, el('tr', {},
+      el('th', {}, 'When'), el('th', {}, 'User'), el('th', {}, 'Reason'),
+      el('th', {}, 'Delta'), el('th', {}, 'Detail')));
+    const txBody = el('tbody');
+    if (!txRows.length) txBody.appendChild(el('tr', {}, el('td', {colspan:5, class:'empty'}, recentTx?._error ? `error: ${recentTx._error}` : 'no transactions')));
+    for (const t of txRows) {
+      const delta = t.amount ?? t.delta ?? 0;
+      const isPos = delta > 0;
+      txBody.appendChild(el('tr', {},
+        el('td', {class:'mono small'}, timeAgo(t.created_at || t.timestamp)),
+        el('td', {class:'mono small'}, String(t.user_id || '—').slice(0, 20)),
+        el('td', {class:'mono small'}, String(t.reason || t.type || '—').slice(0, 24)),
+        el('td', {class:'mono', style: `color: ${isPos ? 'var(--ok)' : 'var(--err)'}; font-weight: 600;`},
+          `${isPos ? '+' : ''}${fmt(delta)}`),
+        el('td', {class:'small truncate'}, String(t.detail || t.note || '')),
+      ));
+    }
+
+    return el('div', { class: 'grid' },
+      el('div', { class: 'card' },
+        el('h3', {}, `Eris · Top ${topRows.length} balances`),
+        el('div', { class: 'small', style: 'margin-bottom:10px;' },
+          'Click apply with a positive/negative number to adjust a user\'s coins. Audit logged.'),
+        el('div', { style: 'overflow:auto; max-height:50vh;' }, el('table', {}, topHead, topBody)),
+      ),
+      el('div', { class: 'card' },
+        el('h3', {}, `Recent transactions (${txRows.length})`),
+        el('div', { style: 'overflow:auto; max-height:40vh;' }, el('table', {}, txHead, txBody)),
+      ),
+    );
   },
 
   async episodes() {
@@ -353,7 +500,7 @@ const sections = {
     return el('div', { class: 'card' },
       el('h3', {}, `Irene · ${rows.length} episodic memories`),
       el('div', { class: 'small', style:'margin-bottom:10px;' },
-        'Eris also keeps episodic memories — exposed via /api/memories endpoint above.'),
+        'Eris also keeps episodic memories — see them via the Memories tab above.'),
       el('div', { style: 'overflow:auto; max-height:70vh;' },
         el('table', {},
           el('thead', {}, el('tr', {}, el('th', {}, 'User'), el('th', {}, 'Summary'), el('th', {}, 'When'))),
@@ -393,16 +540,12 @@ const sections = {
 
   async logs() {
     const [eL, iL] = await Promise.all([
-      fetch('/api/logs?bot=eris&lines=200').then(r => r.json()).catch(() => ({tail: ''})),
-      fetch('/api/logs?bot=irene&lines=200').then(r => r.json()).catch(() => ({tail: ''})),
+      authFetch('/api/logs?bot=eris&lines=200').then(r => r.json()).catch(() => ({tail: ''})),
+      authFetch('/api/logs?bot=irene&lines=200').then(r => r.json()).catch(() => ({tail: ''})),
     ]);
-    function clean(s) {
-      // Strip ANSI color codes
-      return String(s).replace(/\x1b\[[0-9;]*m/g, '');
-    }
-    const erisPane = el('div', { class: 'log-pane eris', id: 'log-eris' }, clean(eL.tail || ''));
-    const irenePane = el('div', { class: 'log-pane irene', id: 'log-irene' }, clean(iL.tail || ''));
-    // Auto-scroll to bottom
+    const clean = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, '');
+    const erisPane = el('div', { class: 'log-pane eris' }, clean(eL.tail || ''));
+    const irenePane = el('div', { class: 'log-pane irene' }, clean(iL.tail || ''));
     queueMicrotask(() => { erisPane.scrollTop = erisPane.scrollHeight; irenePane.scrollTop = irenePane.scrollHeight; });
     return el('div', { class: 'grid cols-2' },
       el('div', {},
@@ -424,16 +567,43 @@ const sections = {
 async function deleteMemory(bot, id) {
   if (!id) return alert('no memory id');
   if (!confirm(`Delete memory ${id} from ${bot}?`)) return;
-  try {
-    await api(bot, `/memory/${id}`, { method: 'DELETE' });
-    refresh();
-  } catch (e) { showError(e.message); }
+  try { await api(bot, `/memory/${id}`, { method: 'DELETE' }); showOk(`Deleted memory ${id}`); refresh(); }
+  catch (e) { showError(e.message); }
 }
 async function deleteConversation(bot, id) {
   if (!id) return alert('no conversation id');
   if (!confirm(`WIPE entire conversation ${id} on ${bot}? This cannot be undone.`)) return;
+  try { await api(bot, `/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }); showOk('Wiped'); refresh(); }
+  catch (e) { showError(e.message); }
+}
+async function saveMood(bot) {
+  const score  = parseInt($(`#mood-score-${bot}`).value, 10);
+  const energy = parseInt($(`#mood-energy-${bot}`).value, 10);
   try {
-    await api(bot, `/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await api(bot, '/mood', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mood_score: score, energy }) });
+    showOk(`${bot} mood updated: score=${score}, energy=${energy}`);
+  } catch (e) { showError(e.message); }
+}
+async function adjustAffinity(bot, uid, current) {
+  const delta = parseInt($(`#aff-d-${bot}-${uid}`).value, 10);
+  if (isNaN(delta) || delta === 0) return alert('enter a non-zero delta');
+  const newScore = current + delta;
+  try {
+    await api(bot, '/relationships', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: uid, affinity_score: newScore }) });
+    showOk(`${bot}: ${uid} affinity ${current} → ${newScore}`);
+    refresh();
+  } catch (e) { showError(e.message); }
+}
+async function adjustBalance(uid) {
+  const delta = parseInt($(`#bal-d-${uid}`).value, 10);
+  if (isNaN(delta) || delta === 0) return alert('enter a non-zero delta');
+  const reason = prompt('Reason for adjustment (audit log):', 'admin_adjust') || 'admin_adjust';
+  try {
+    const r = await api('eris', '/economy/adjust', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: uid, delta, reason }) });
+    showOk(`Eris: ${uid} ${delta >= 0 ? '+' : ''}${delta} → balance ${r.new_balance}`);
     refresh();
   } catch (e) { showError(e.message); }
 }
@@ -459,13 +629,28 @@ async function refresh() {
     c.innerHTML = '';
     c.appendChild(node);
     $('#last-refresh').textContent = new Date().toLocaleTimeString();
-  } catch (e) { showError(e.message); }
+  } catch (e) {
+    if (e.message !== 'unauthorized') showError(e.message);
+  }
   refreshStatus();
 }
 
-// Initial load + 10s poll
-refresh();
-refreshTimer = setInterval(refresh, 10_000);
+// Auth bootstrap: try a token-free probe first (localhost bypass). If 401,
+// either auto-use saved token from localStorage, or show login modal.
+async function bootstrap() {
+  try {
+    const r = await authFetch('/api/health', { cache: 'no-store' });
+    if (r.status === 401) {
+      if (localStorage.getItem(TOKEN_KEY)) showLogin('Saved token is stale. Try again.');
+      else showLogin();
+      return;
+    }
+    if (!r.ok) throw new Error(`probe failed: HTTP ${r.status}`);
+    refresh();
+    refreshTimer = setInterval(refresh, 10_000);
+  } catch (e) { showError(e.message); }
+}
+bootstrap();
 </script>
 </body>
 </html>

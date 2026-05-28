@@ -603,6 +603,89 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
+    // ─── Economy / inventory / transactions ────────────────────────────────
+    // All economy data lives in Supabase tables (eris_economy, eris_inventory,
+    // eris_transactions, eris_bank). The admin panel reads via these endpoints;
+    // mutations go through /api/economy/adjust so they leave an audit trail.
+    const sb = db.getSupabase();
+
+    if (path === "/api/economy/top" && req.method === "GET") {
+      if (!sb) { json(res, 503, { error: "supabase_not_configured" }); return; }
+      const limit = Math.min(100, parseInt(url.searchParams.get("limit") || "25", 10));
+      const { data, error } = await sb
+        .from("eris_economy")
+        .select("user_id, balance, daily_streak, total_earned, total_lost, total_gambled, prestige_level, updated_at")
+        .order("balance", { ascending: false })
+        .limit(limit);
+      if (error) { json(res, 500, { error: error.message }); return; }
+      json(res, 200, { rows: data || [], limit });
+      return;
+    }
+
+    if (path?.startsWith("/api/economy/user/") && req.method === "GET") {
+      if (!sb) { json(res, 503, { error: "supabase_not_configured" }); return; }
+      const uid = decodeURIComponent(path.replace("/api/economy/user/", ""));
+      const [econ, bank, inv] = await Promise.all([
+        sb.from("eris_economy").select("*").eq("user_id", uid).maybeSingle(),
+        sb.from("eris_bank").select("*").eq("user_id", uid).maybeSingle(),
+        sb.from("eris_inventory").select("*").eq("user_id", uid).order("acquired_at", { ascending: false }),
+      ]);
+      json(res, 200, {
+        user_id: uid,
+        economy: econ.data || null,
+        bank: bank.data || null,
+        inventory: inv.data || [],
+      });
+      return;
+    }
+
+    if (path === "/api/economy/adjust" && req.method === "POST") {
+      if (!sb) { json(res, 503, { error: "supabase_not_configured" }); return; }
+      if (!body?.user_id || typeof body?.delta !== "number") {
+        json(res, 400, { error: "user_id and delta (number) required" }); return;
+      }
+      const reason = String(body.reason || "admin_adjust").slice(0, 64);
+      // Best-effort: try the project's updateBalance helper first; fall back to
+      // raw upsert so the admin panel still works if the helper signature drifts.
+      try {
+        if (typeof db.updateBalance === "function") {
+          await db.updateBalance(body.user_id, body.delta, reason, `admin via /api`);
+        } else {
+          const { data: existing } = await sb.from("eris_economy").select("balance").eq("user_id", body.user_id).maybeSingle();
+          const newBal = (existing?.balance ?? 0) + body.delta;
+          await sb.from("eris_economy").upsert({ user_id: body.user_id, balance: newBal, updated_at: new Date().toISOString() });
+        }
+      } catch (e) { json(res, 500, { error: e.message }); return; }
+      const { data: row } = await sb.from("eris_economy").select("user_id, balance").eq("user_id", body.user_id).maybeSingle();
+      log(`[API] economy adjust: ${body.user_id} ${body.delta >= 0 ? "+" : ""}${body.delta} (${reason})`);
+      json(res, 200, { ok: true, user_id: body.user_id, new_balance: row?.balance ?? null });
+      return;
+    }
+
+    if (path === "/api/transactions" && req.method === "GET") {
+      if (!sb) { json(res, 503, { error: "supabase_not_configured" }); return; }
+      const limit = Math.min(500, parseInt(url.searchParams.get("limit") || "100", 10));
+      let q = sb.from("eris_transactions").select("*").order("created_at", { ascending: false }).limit(limit);
+      const uid = url.searchParams.get("user_id");
+      if (uid) q = q.eq("user_id", uid);
+      const { data, error } = await q;
+      if (error) { json(res, 500, { error: error.message }); return; }
+      json(res, 200, { rows: data || [], limit });
+      return;
+    }
+
+    if (path === "/api/inventory" && req.method === "GET") {
+      if (!sb) { json(res, 503, { error: "supabase_not_configured" }); return; }
+      const limit = Math.min(500, parseInt(url.searchParams.get("limit") || "200", 10));
+      let q = sb.from("eris_inventory").select("*").order("acquired_at", { ascending: false }).limit(limit);
+      const uid = url.searchParams.get("user_id");
+      if (uid) q = q.eq("user_id", uid);
+      const { data, error } = await q;
+      if (error) { json(res, 500, { error: error.message }); return; }
+      json(res, 200, { rows: data || [], limit });
+      return;
+    }
+
     json(res, 404, { error: "not found" });
   } catch (e) {
     log(`[API] ${req.url}: ${e.message}`);

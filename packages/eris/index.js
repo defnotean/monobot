@@ -205,11 +205,36 @@ async function main() {
   await loadCommands();
   await loadEvents();
 
-  // Auto-register slash commands to Discord if the command set changed since last boot
+  // Start the HTTP server BEFORE attempting Discord login. If Cloudflare/Discord
+  // is unreachable at boot (we've seen this routinely), client.login() throws
+  // and the whole process used to exit before /admin or /healthz could come up.
+  // With the listen() in front, the admin panel + healthz are always reachable
+  // — /healthz just reports ws_status=disconnected until the gateway connects.
+  server.listen(config.port, () => {
+    log(`[SYS] Server on port ${config.port} (keepalive + dashboard API)`);
+  });
+
+  // Auto-register slash commands to Discord if the command set changed since last boot.
+  // This already swallows errors, so a transient outage doesn't kill startup.
   try { await maybeAutoDeploy(client.commands); }
   catch (e) { log(`[AUTODEPLOY] Skipped: ${e.message}`); }
 
-  await client.login(config.token);
+  // Discord login with retry — exponential-ish backoff, never gives up. systemd
+  // would restart the process otherwise, but the retry loop is faster and lets
+  // the admin panel stay up across the gap.
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      await client.login(config.token);
+      break;
+    } catch (e) {
+      attempt++;
+      const wait = Math.min(60_000, 5_000 * attempt);
+      log(`[SYS] Discord login attempt ${attempt} failed: ${e.message} — retrying in ${wait / 1000}s (HTTP server stays up)`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 
   // Boot-time firewall seeding — kept off the hot-path so the first message
   // from a user doesn't pay the 10-15s pgvector reseed cost.
@@ -218,10 +243,6 @@ async function main() {
     const supabase = getSupabase?.();
     if (supabase) await seedPatternsAtBoot(supabase);
   }).catch(e => log(`[FIREWALL] seed failed: ${e?.message ?? e}`));
-
-  server.listen(config.port, () => {
-    log(`[SYS] Server on port ${config.port} (keepalive + dashboard API)`);
-  });
 }
 
 // ─── Graceful Shutdown ───
