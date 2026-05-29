@@ -65,6 +65,25 @@ if ! command -v systemctl >/dev/null; then
   echo -e "${RED}❌ systemctl missing — this launcher needs systemd${RST}"; exit 1
 fi
 
+# Ensure node/npm are on PATH. This script is often invoked from a NON-interactive
+# shell (e.g. `ssh -t host launch.sh` or launch.bat over SSH) that never sources
+# ~/.bashrc, so nvm's node/npm aren't on PATH and `setsid npm` dies with
+# "setsid: failed to execute npm: No such file or directory".
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if ! command -v npm >/dev/null 2>&1 && [ -s "$NVM_DIR/nvm.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  # nvm.sh didn't put npm on PATH — fall back to the newest installed node bin dir.
+  _node_bin="$(ls -d "$NVM_DIR"/versions/node/*/bin 2>/dev/null | sort -V | tail -1)"
+  [ -n "$_node_bin" ] && export PATH="$_node_bin:$PATH"
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  echo -e "${RED}❌ npm not found on PATH (looked in nvm at $NVM_DIR). Install Node or fix PATH.${RST}"; exit 1
+fi
+echo -e "${GRN}✔ node $(node -v) / npm $(npm -v) — $(command -v npm)${RST}"
+
 # Stop systemd (so we don't double-run)
 echo -e "${YEL}⏸️  Stopping systemd services...${RST}"
 systemctl --user stop monobot-eris.service monobot-irene.service 2>&1 | sed 's/^/  /' || true
