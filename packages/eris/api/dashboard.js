@@ -233,7 +233,7 @@ export async function handleApiRequest(req, res) {
     if ((path.startsWith("/api/memory/") || path.startsWith("/api/memories/")) && req.method === "DELETE") {
       const factId = path.split("/").pop();
       const userId = url.searchParams.get("user_id") || config.ownerId;
-      const ok = await db.deleteFact(userId, parseInt(factId));
+      const ok = await db.deleteFact(userId, parseInt(factId ?? ""));
       json(res, 200, { success: ok });
       return;
     }
@@ -632,7 +632,9 @@ export async function handleApiRequest(req, res) {
         .order("balance", { ascending: false })
         .limit(limit);
       if (error) { json(res, 500, { error: error.message }); return; }
-      const rows = data || [];
+      // Loose row type: we enrich each row with a resolved `username` below,
+      // which the typed economy-select shape doesn't include.
+      const rows = /** @type {Array<Record<string, any>>} */ (data || []);
       // Resolve display names from eris_memories (the same per-user lookup
       // /api/relationships uses). Deliberately NOT a .in() batch: the local
       // PostgREST proxy doesn't reliably forward supabase-js's quoted in.(...)

@@ -161,8 +161,10 @@ export const TOOL_ALIASES = {
  * → not aliased → fell through 12 sub-executors → generic error) gave the
  * model no usable hint on how to self-correct.
  *
- * @param {string} toolName            — the name the model emitted
- * @param {Set<string>} [registry]     — defaults to EVERYONE+OWNER tool names; override for tests
+ * @param {string} toolName            - the name the model emitted
+ * @param {Set<string>} [registry]     - defaults to EVERYONE+OWNER tool names; override for tests
+ * @returns {{ name: string, originalName: string, aliasUsed: boolean, known: true }
+ *   | { name: string, originalName: string, aliasUsed: boolean, known: false, error: { unknown: string, normalized: string } }}
  */
 export function resolveToolName(toolName, registry = _toolRegistryNames) {
   const original = toolName;
@@ -200,7 +202,7 @@ export function resolveToolName(toolName, registry = _toolRegistryNames) {
  *
  * @param {Set<string>|string[]} [registry]
  * @param {object} [opts]
- * @param {boolean} [opts.throwOnDrift=true]  — set false for "soft" mode (log + return)
+ * @param {boolean} [opts.throwOnDrift=true]  - set false for "soft" mode (log + return)
  * @returns {string[]} the list of alias targets that are NOT in the registry
  */
 export function validateToolAliases(registry = _toolRegistryNames, opts = {}) {
@@ -352,7 +354,7 @@ export async function executeTool(toolName, input, message) {
   if (userId) {
     const rateCheck = checkToolRateLimit(userId, toolName);
     if (!rateCheck.allowed) {
-      const secs = Math.ceil(rateCheck.retryAfterMs / 1000);
+      const secs = Math.ceil((rateCheck.retryAfterMs ?? 0) / 1000);
       return `chill — you're using ${toolName} too fast. try again in ${secs}s`;
     }
   }

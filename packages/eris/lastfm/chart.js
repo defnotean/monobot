@@ -34,10 +34,12 @@ export async function generateChart(items, cols = 3, showLabels = false) {
     const x = col * (CELL + GAP);
     const y = row * (CELL + GAP);
 
+    /** @type {import("canvas").Image | import("canvas").Canvas} */
     let img = placeholder;
-    if (items[i].image) {
+    const imageSrc = items[i].image;
+    if (imageSrc) {
       try {
-        img = await loadImage(items[i].image);
+        img = await loadImage(imageSrc);
       } catch {
         // keep placeholder
       }

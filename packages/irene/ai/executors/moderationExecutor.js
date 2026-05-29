@@ -101,6 +101,36 @@ async function _banMember(member, options, label) {
   }
 }
 
+// Mirror of _banMember for kicks. The caller already enforces the moderator's
+// permission and the role hierarchy; this only wraps the Discord API call so a
+// failure (bot lacking Kick Members, target left mid-action, rate limit) is
+// logged and surfaced as a clear error string instead of throwing uncaught out
+// of the tool loop. No new precheck — behavior on success is unchanged.
+async function _kickMember(member, reason, label) {
+  try {
+    await member.kick(reason);
+    return { ok: true };
+  } catch (error) {
+    const msg = error?.message || String(error);
+    log(`[Moderation] ${label} failed for ${member?.id || "unknown"}: ${msg}`);
+    return { ok: false, message: `Failed to kick ${_memberLabel(member)}: ${msg}` };
+  }
+}
+
+// Mirror of _banMember for timeouts (and timeout removal when ms === null).
+// Caller enforces perms + hierarchy; this only catches transient API failures
+// so the tool loop can report them rather than crash.
+async function _timeoutMember(member, ms, reason, label) {
+  try {
+    await member.timeout(ms, reason);
+    return { ok: true };
+  } catch (error) {
+    const msg = error?.message || String(error);
+    log(`[Moderation] ${label} failed for ${member?.id || "unknown"}: ${msg}`);
+    return { ok: false, message: `Failed to timeout ${_memberLabel(member)}: ${msg}` };
+  }
+}
+
 // Resolve the durable-audit `source` from the executor ctx. Slash commands and
 // scheduled/presence-triggered calls don't set aiInitiated, so they're treated
 // as the slash-equivalent path ('slash'). The AI tool loop sets aiInitiated;
@@ -290,7 +320,8 @@ export async function commitPendingAction(pending, { guild, member, clickedBy, d
     if (!target) return { ok: false, message: `Couldn't find user "${pending.input.username}" anymore` };
     const hierErr = checkHierarchy(member, target, guild);
     if (hierErr) return { ok: false, message: hierErr };
-    await target.kick(_attributedReason(clickedBy, reason));
+    const kickResult = await _kickMember(target, _attributedReason(clickedBy, reason), "confirmed kick");
+    if (!kickResult.ok) return kickResult;
     deps.firePunishSignal?.({ guildId: guild.id, userId: target.id, action: "kick", reason }).catch(() => {});
     // Mirror the inline kick_user mod-log so a button-confirmed kick is logged
     // identically (kick uses a bare embed payload, no undo row — same as inline).
@@ -450,7 +481,8 @@ export async function execute(toolName, input, message, ctx) {
       });
       if (kickDefer) return kickDefer;
       const reason = input.reason || "No reason";
-      await member.kick(_attributedReason(message.author, reason));
+      const kickResult = await _kickMember(member, _attributedReason(message.author, reason), "inline kick");
+      if (!kickResult.ok) return kickResult.message;
       firePunishSignal({ guildId: guild.id, userId: member.id, action: "kick", reason }).catch(() => {});
       await sendModLog(guild, logEvent({
         kind: "kick",
@@ -606,7 +638,8 @@ export async function execute(toolName, input, message, ctx) {
       if (timeoutHierErr) return timeoutHierErr;
       const ms = DURATION_MS[input.duration];
       if (!ms) return `Invalid duration: ${input.duration}`;
-      await member.timeout(ms, _attributedReason(message.author, input.reason || "No reason"));
+      const timeoutResult = await _timeoutMember(member, ms, _attributedReason(message.author, input.reason || "No reason"), "inline timeout");
+      if (!timeoutResult.ok) return timeoutResult.message;
       await sendModLog(guild, {
         embed: logEvent({
           kind: "timeout",

@@ -112,7 +112,7 @@ async function ensureLoaded() {
     const { data: row, error } = await supabase.from("eris_personality_learning").select("*").eq("id", botId).single();
     if (error && error.code === "PGRST116") {
       // Table might not exist or no row — try inserting
-      await supabase.from("eris_personality_learning").upsert({ id: botId, ...DEFAULTS }).catch(() => {});
+      await Promise.resolve(supabase.from("eris_personality_learning").upsert({ id: botId, ...DEFAULTS })).catch(() => {});
       _data = { ...DEFAULTS };
     } else {
       _data = row || { ...DEFAULTS };

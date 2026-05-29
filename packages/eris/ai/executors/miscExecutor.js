@@ -390,7 +390,7 @@ export async function execute(toolName, input, message, _context) {
       // gambler" to axis="gambled" naturally.
       const axis = (input.axis || "balance").toLowerCase();
       const result = await db.getLeaderboardByAxis(axis, limit);
-      if (result.error) return result.error;
+      if (result.error != null) return result.error;
       if (!result.rows.length) return `nobody has activity on the **${axis}** axis yet`;
       const { EmbedBuilder } = await import("discord.js");
       const lines = result.rows.map((r, i) => {
@@ -453,7 +453,7 @@ export async function execute(toolName, input, message, _context) {
         // Persist curses to Supabase so they survive restarts
         try {
           const sb = db.getSupabase();
-          if (sb) await sb.from("bot_data").upsert({ id: "eris_active_curses", data: Object.fromEntries(globalThis._activeCurses) }).catch(() => {});
+          if (sb) await Promise.resolve(sb.from("bot_data").upsert({ id: "eris_active_curses", data: Object.fromEntries(globalThis._activeCurses) })).catch(() => {});
         } catch {}
         // Auto-remove after 10 minutes
         setTimeout(async () => {
@@ -466,7 +466,7 @@ export async function execute(toolName, input, message, _context) {
               globalThis._activeCurses.delete(`${guild.id}:${target.id}`);
               // Update persistence
               const sb = db.getSupabase();
-              if (sb) await sb.from("bot_data").upsert({ id: "eris_active_curses", data: Object.fromEntries(globalThis._activeCurses) }).catch(() => {});
+              if (sb) await Promise.resolve(sb.from("bot_data").upsert({ id: "eris_active_curses", data: Object.fromEntries(globalThis._activeCurses) })).catch(() => {});
             }
           } catch {}
         }, 600_000);
@@ -492,7 +492,7 @@ export async function execute(toolName, input, message, _context) {
         await target.setNickname(curse.oldNickname).catch(() => {});
         globalThis._activeCurses.delete(`${guild.id}:${target.id}`);
         // Update persistence
-        try { const sb = db.getSupabase(); if (sb) await sb.from("bot_data").upsert({ id: "eris_active_curses", data: Object.fromEntries(globalThis._activeCurses) }).catch(() => {}); } catch {}
+        try { const sb = db.getSupabase(); if (sb) await Promise.resolve(sb.from("bot_data").upsert({ id: "eris_active_curses", data: Object.fromEntries(globalThis._activeCurses) })).catch(() => {}); } catch {}
         return `fine, uncursed ${target.displayName}. you're no fun`;
       } catch {
         return `couldn't remove the curse \u2014 permissions issue maybe`;

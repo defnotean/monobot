@@ -103,7 +103,7 @@ export function generateChallenge() {
   const diffIdx = Math.floor(Math.random() * template.target.length);
   return {
     type: template.type,
-    description: template.desc.replace("{target}", template.target[diffIdx]),
+    description: template.desc.replace("{target}", String(template.target[diffIdx])),
     target: template.target[diffIdx],
     reward: template.reward[diffIdx],
   };

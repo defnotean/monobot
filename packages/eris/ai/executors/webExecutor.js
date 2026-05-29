@@ -108,7 +108,7 @@ export async function execute(toolName, input, message, _context) {
           timeoutMs: 10_000,
         });
         const cheerio = await import("cheerio");
-        const $ = cheerio.load(res.text);
+        const $ = cheerio.load(res.text || "");
         $("script, style, nav, footer, header, aside, iframe").remove();
         const text = $("article").text().trim()
           || $("main").text().trim()

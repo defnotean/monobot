@@ -50,7 +50,7 @@ export async function execute(toolName, input, message, _context) {
         );
         if (res.status < 200 || res.status >= 300) return `gif api error: ${res.status}`;
         let json;
-        try { json = JSON.parse(res.text); }
+        try { json = JSON.parse(res.text || ""); }
         catch { return "gif api error: invalid response"; }
         const results = json?.data?.data;
         if (!results?.length) return `no gif found for "${query}"`;
@@ -101,10 +101,10 @@ export async function execute(toolName, input, message, _context) {
       // Source 1: Wikipedia — search for the best page, then grab its lead image.
       try {
         const sr = await safeFetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${q}&srlimit=1&format=json&origin=*`, fetchOpts);
-        const title = JSON.parse(sr.text)?.query?.search?.[0]?.title;
+        const title = JSON.parse(sr.text || "")?.query?.search?.[0]?.title;
         if (title) {
           const pr = await safeFetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=pageimages&piprop=original%7Cthumbnail&pithumbsize=800&format=json&origin=*`, fetchOpts);
-          const pages = JSON.parse(pr.text)?.query?.pages || {};
+          const pages = JSON.parse(pr.text || "")?.query?.pages || {};
           const page = Object.values(pages)[0];
           const candidate = page?.original?.source || page?.thumbnail?.source || null;
           // Discord embeds can't render SVG — skip those so we fall through.
@@ -116,7 +116,7 @@ export async function execute(toolName, input, message, _context) {
       if (!imageUrl) {
         try {
           const or = await safeFetch(`https://api.openverse.org/v1/images/?q=${q}&page_size=5&mature=false`, fetchOpts);
-          const item = (JSON.parse(or.text)?.results || []).find((r) => r.url && !/\.svg(\?|$)/i.test(r.url));
+          const item = (JSON.parse(or.text || "")?.results || []).find((r) => r.url && !/\.svg(\?|$)/i.test(r.url));
           if (item) { imageUrl = item.url || item.thumbnail; source = "openverse"; }
         } catch {}
       }
@@ -200,6 +200,7 @@ export async function execute(toolName, input, message, _context) {
       try {
         const imgRes = await safeFetch(url, { binary: true, maxBytes: IMAGE_MAX_BYTES, timeoutMs: 10_000 });
         if (imgRes.status < 200 || imgRes.status >= 300) return `couldn't fetch the image: ${imgRes.status}`;
+        if (!imgRes.bytes) return "couldn't fetch the image: empty response";
         const inB64 = imgRes.bytes.toString("base64");
         const inMime = imgRes.headers.get("content-type") || "image/png";
 
@@ -226,7 +227,7 @@ export async function execute(toolName, input, message, _context) {
         if (!outImg) return `couldn't edit the image${lastErr ? ` (${lastErr.message})` : ""} — the image model may not be available on this key (set GEMINI_IMAGE_MODEL)`;
         const { AttachmentBuilder } = await import("discord.js");
         const ext = (outImg.mimeType || "image/png").split("/")[1] || "png";
-        const attachmentOut = new AttachmentBuilder(Buffer.from(outImg.data, "base64"), { name: `edited.${ext}` });
+        const attachmentOut = new AttachmentBuilder(Buffer.from(String(outImg.data ?? ""), "base64"), { name: `edited.${ext}` });
         const caption = (input.caption || "").trim();
         await message.channel.send({ ...(caption ? { content: caption } : {}), files: [attachmentOut], allowedMentions: { parse: ["users"] } });
         return `edited the image (${instruction}) and posted the result — the user can see it`;
@@ -253,6 +254,7 @@ export async function execute(toolName, input, message, _context) {
           return `image fetch failed: ${imgRes.status}`;
         }
         const buffer = imgRes.bytes;
+        if (!buffer) return "image fetch failed: empty response";
         const base64 = buffer.toString("base64");
         const mimeType = imgRes.headers.get("content-type") || "image/png";
 
@@ -303,7 +305,7 @@ export async function execute(toolName, input, message, _context) {
         });
         if (res.status < 200 || res.status >= 300) return `template list error: ${res.status}`;
         let templates;
-        try { templates = JSON.parse(res.text); }
+        try { templates = JSON.parse(res.text || ""); }
         catch { return "template list error: invalid response"; }
         const matches = templates.filter(t =>
           t.name.toLowerCase().includes(query) ||
@@ -359,7 +361,7 @@ export async function execute(toolName, input, message, _context) {
             const ct = imgRes.headers.get("content-type") || "";
             if (!ct.startsWith("image/")) throw new Error("Memegen returned non-image (maybe a bad template)");
             const buffer = imgRes.bytes;
-            if (buffer.length < 1000) throw new Error("Memegen returned tiny placeholder image");
+            if (!buffer || buffer.length < 1000) throw new Error("Memegen returned tiny placeholder image");
 
             const { AttachmentBuilder } = await import("discord.js");
             const attachment = new AttachmentBuilder(buffer, { name: "meme.png" });
@@ -393,14 +395,14 @@ export async function execute(toolName, input, message, _context) {
         // Method 1: Imgur search (reliable, no auth needed for search)
         try {
           const imgurRes = await safeFetch(`https://imgur.com/search?q=${encodeURIComponent(query)}`, scrapeOpts);
-          const imgurMatches = imgurRes.text.match(/https:\/\/i\.imgur\.com\/[a-zA-Z0-9]+\.(jpg|png|gif|webp)/g) || [];
+          const imgurMatches = (imgurRes.text || "").match(/https:\/\/i\.imgur\.com\/[a-zA-Z0-9]+\.(jpg|png|gif|webp)/g) || [];
           images.push(...imgurMatches.slice(0, 3));
         } catch {}
 
         // Method 2: Know Your Meme (for meme templates specifically)
         try {
           const kymRes = await safeFetch(`https://knowyourmeme.com/search?q=${encodeURIComponent(query)}`, scrapeOpts);
-          const kymMatches = kymRes.text.match(/https?:\/\/[^"'\s]+\.(?:jpg|jpeg|png|webp)[^"'\s]*/gi) || [];
+          const kymMatches = (kymRes.text || "").match(/https?:\/\/[^"'\s]+\.(?:jpg|jpeg|png|webp)[^"'\s]*/gi) || [];
           const kymFiltered = kymMatches.filter(u => u.includes("kym-cdn") || u.includes("knowyourmeme")).slice(0, 3);
           images.push(...kymFiltered);
         } catch {}
@@ -410,13 +412,13 @@ export async function execute(toolName, input, message, _context) {
           const flipRes = await safeFetch(`https://imgflip.com/memesearch?q=${encodeURIComponent(query)}`, scrapeOpts);
           const flipHtml = flipRes.text;
           // Extract template page links and visit them for direct image
-          const templateLinks = flipHtml.match(/\/memetemplate\/\d+\/[^"'\s]+/g) || [];
+          const templateLinks = (flipHtml || "").match(/\/memetemplate\/\d+\/[^"'\s]+/g) || [];
           for (const link of templateLinks.slice(0, 2)) {
             try {
               const tplRes = await safeFetch(`https://imgflip.com${link}`, scrapeOpts);
               const tplHtml = tplRes.text;
               // Match both https:// and protocol-relative //i.imgflip.com URLs
-              const directUrls = tplHtml.match(/(?:https?:)?\/\/i\.imgflip\.com\/[^"'\s]+\.(?:jpg|png|webp)/gi) || [];
+              const directUrls = (tplHtml || "").match(/(?:https?:)?\/\/i\.imgflip\.com\/[^"'\s]+\.(?:jpg|png|webp)/gi) || [];
               for (const u of directUrls.slice(0, 2)) {
                 images.push(u.startsWith("//") ? `https:${u}` : u);
               }
@@ -424,7 +426,7 @@ export async function execute(toolName, input, message, _context) {
             } catch {}
           }
           // Also grab any direct i.imgflip.com URLs from search results page
-          const flipDirect = flipHtml.match(/(?:https?:)?\/\/i\.imgflip\.com\/[^"'\s]+\.(?:jpg|png)/gi) || [];
+          const flipDirect = (flipHtml || "").match(/(?:https?:)?\/\/i\.imgflip\.com\/[^"'\s]+\.(?:jpg|png)/gi) || [];
           for (const u of flipDirect.slice(0, 3)) {
             images.push(u.startsWith("//") ? `https:${u}` : u);
           }
@@ -436,7 +438,7 @@ export async function execute(toolName, input, message, _context) {
             `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`,
             { maxBytes: HTML_MAX_BYTES, timeoutMs: 5_000 }
           );
-          const ddg = JSON.parse(ddgRes.text);
+          const ddg = JSON.parse(ddgRes.text || "");
           if (ddg.Image) images.push(ddg.Image.startsWith("http") ? ddg.Image : `https://duckduckgo.com${ddg.Image}`);
         } catch {}
 

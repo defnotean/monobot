@@ -89,6 +89,12 @@ class ToolRegistry {
 
   // ─── Selection ───
 
+  /**
+   * @param {string} text
+   * @param {{ isOwner?: boolean, isTwin?: boolean, channelKey?: string|null,
+   *           everyoneTools?: Array<{ name: string }>,
+   *           ownerTools?: Array<{ name: string }> }} [opts]
+   */
   selectByMessage(text, { isOwner = false, isTwin = false, channelKey = null, everyoneTools = [], ownerTools = [] } = {}) {
     const lower = (text || "").toLowerCase();
 

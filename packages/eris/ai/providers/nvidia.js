@@ -164,13 +164,13 @@ export function _providerHealth() {
 
 /**
  * Run a chat with tool calling. Same signature as runGeminiChat for drop-in.
- * @param {*} _client — unused (kept for interface compat)
+ * @param {*} _client - unused (kept for interface compat)
  * @param {string} systemInstruction
- * @param {Array} tools — Anthropic-format tool definitions
- * @param {Array} history — [{role, parts: [{text}]}] Gemini-style history
+ * @param {Array} tools - Anthropic-format tool definitions
+ * @param {Array} history - [{role, parts: [{text}]}] Gemini-style history
  * @param {string} userMessage
- * @param {Function} executor — async (toolName, toolArgs) => result
- * @param {object} options — { useFastModel?: boolean }
+ * @param {Function} executor - async (toolName, toolArgs) => result
+ * @param {object} options - { useFastModel?: boolean }
  */
 export async function runNvidiaChat(_client, systemInstruction, tools, history, userMessage, executor, options = {}) {
   const model = options.useFastModel ? NV.fastModel : NV.model;
@@ -277,6 +277,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
       });
       if (!res.ok) {
         const errText = await res.text().catch(() => "");
+        /** @type {Error & { status?: number }} */
         const httpErr = new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
         httpErr.status = res.status;
         throw httpErr;

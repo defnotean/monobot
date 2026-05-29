@@ -563,7 +563,7 @@ async function defaultSummarizer(fragments) {
     // quickReply takes (client, sysInstr, userText, context). The Gemini path
     // ignores `client` because it constructs its own; other providers also
     // accept null. We pass null and let the provider build its own client.
-    const text = await quickReply(null, sys, numbered, null);
+    const text = await quickReply(null, sys, numbered, undefined);
     return (typeof text === "string" && text.trim()) ? text.trim() : null;
   } catch {
     return null;

@@ -230,7 +230,7 @@ function utcDay(unixSec) {
 function daysBetween(older, newer) {
   const a = new Date(older + "T00:00:00Z");
   const b = new Date(newer + "T00:00:00Z");
-  return Math.round((b - a) / 86400000);
+  return Math.round((b.getTime() - a.getTime()) / 86400000);
 }
 
 // ─── Bulk index fetches ───────────────────────────────────────────────────────

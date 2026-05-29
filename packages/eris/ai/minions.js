@@ -18,6 +18,10 @@ export function getMinionData(userId) {
   return _userMinions.get(userId);
 }
 
+/**
+ * @returns {{ success: true, minion: { type: string, name: string, hiredAt: number, totalEarned: number } }
+ *   | { success: false, error: string }}
+ */
 export function hireMinion(userId, type, name) {
   const data = getMinionData(userId);
   if (!MINION_TYPES[type]) return { success: false, error: `unknown minion type: ${type}` };

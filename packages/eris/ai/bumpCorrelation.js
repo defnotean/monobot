@@ -42,6 +42,8 @@ function bumpsTableFor(botName) {
  * Called from guildMemberAdd. Records whether this join is attributable to
  * a recent bump. Non-blocking, never throws, returns { attributed, minutesSinceBump }
  * for testability.
+ *
+ * @param {{ guildId?: string, userId?: string, joinedAtMs?: number, botName?: string }} [join]
  */
 export async function recordJoinForCorrelation({ guildId, userId, joinedAtMs = Date.now(), botName = "eris" } = {}) {
   if (!guildId || !userId) return { attributed: false };

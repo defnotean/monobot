@@ -1,5 +1,7 @@
 // ─── Message Management Executor ────────────────────────────────────────────
 
+import { ComponentType } from "discord.js";
+
 const HANDLED = new Set([
   "edit_message", "delete_message", "read_messages", "search_messages",
   "pin_message", "unpin_message", "list_pins",
@@ -87,9 +89,9 @@ export async function execute(toolName, input, message, ctx) {
           if (m.components?.length) {
             const compSummary = m.components.map(row => {
               return row.components.map(c => {
-                if (c.type === 2) { // Button
+                if (c.type === ComponentType.Button) {
                   return `btn:"${c.label}"`;
-                } else if (c.type === 3) { // StringSelect
+                } else if (c.type === ComponentType.StringSelect) {
                   const opts = c.options?.map(o => o.label).join(", ") || "";
                   const mode = c.customId?.includes("exclusive") ? "exclusive" : "multi";
                   return `dropdown(${mode}):[${opts}]`;

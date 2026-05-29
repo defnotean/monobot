@@ -10,6 +10,16 @@ import { log } from "../utils/logger.js";
 // ─── In-Memory State (persisted periodically via personality save) ────────────
 
 const _relationships = new Map(); // userId → RelationshipData
+/**
+ * @type {{
+ *   currentEnergy: number,
+ *   lastExcitedAbout: string | null,
+ *   lastEmbarrassed: string | null,
+ *   isBadDay: boolean,
+ *   carriedMood: string | null,
+ *   recentThoughts: string[],
+ * }}
+ */
 const _innerState = {
   currentEnergy: 50 + Math.floor(Math.random() * 30), // 50-80 on startup
   lastExcitedAbout: null,

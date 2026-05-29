@@ -123,7 +123,7 @@ export function quickSentiment(text) {
   for (let i = 0; i < words.length - 1; i++) {
     const bigram = `${words[i]} ${words[i + 1]}`;
     if (BIGRAM_OVERRIDES.has(bigram)) {
-      bigramScore += BIGRAM_OVERRIDES.get(bigram);
+      bigramScore += BIGRAM_OVERRIDES.get(bigram) ?? 0;
       bigramSkip.add(i);
       bigramSkip.add(i + 1);
     }
@@ -131,7 +131,7 @@ export function quickSentiment(text) {
     if (i < words.length - 2) {
       const trigram = `${words[i]} ${words[i + 1]} ${words[i + 2]}`;
       if (BIGRAM_OVERRIDES.has(trigram)) {
-        bigramScore += BIGRAM_OVERRIDES.get(trigram);
+        bigramScore += BIGRAM_OVERRIDES.get(trigram) ?? 0;
         bigramSkip.add(i);
         bigramSkip.add(i + 1);
         bigramSkip.add(i + 2);

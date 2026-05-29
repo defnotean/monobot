@@ -30,8 +30,14 @@ async function withGameLock(key, fn) {
 }
 
 /**
- * Parse a bet amount from AI tool input. Returns { amount, error }.
- * If error is set, the caller should return it as the tool result.
+ * Parse a bet amount from AI tool input. If `error` is set, the caller should
+ * return it as the tool result; otherwise `amount` is a validated whole number.
+ * Typed as a discriminated union so a truthy-`error` early return narrows
+ * `amount` to a defined number at the call sites.
+ *
+ * @param {unknown} raw
+ * @param {number} [minBet]
+ * @returns {{ error: string, amount?: never } | { error?: never, amount: number }}
  */
 function parseBet(raw, minBet = 1) {
   // Reject non-number types up front — Number() coerces booleans, arrays,
@@ -60,7 +66,7 @@ export async function execute(toolName, input, message, _context) {
 
     case "coinflip_bet": {
       const parsed = parseBet(input.amount);
-      if (parsed.error) return parsed.error;
+      if (parsed.error != null) return parsed.error;
       const amount = parsed.amount;
       const choice = (input.choice || "").toLowerCase().trim();
       if (!["heads", "tails"].includes(choice)) return "pick heads or tails";
@@ -103,7 +109,7 @@ export async function execute(toolName, input, message, _context) {
 
     case "dice_roll_bet": {
       const parsed = parseBet(input.amount);
-      if (parsed.error) return parsed.error;
+      if (parsed.error != null) return parsed.error;
       const amount = parsed.amount;
       const guess = Math.floor(input.guess || 0);
       // If no guess provided, show interactive buttons (no debit — bet hasn't
@@ -148,7 +154,7 @@ export async function execute(toolName, input, message, _context) {
 
     case "slots_spin": {
       const parsed = parseBet(input.amount);
-      if (parsed.error) return parsed.error;
+      if (parsed.error != null) return parsed.error;
       const amount = parsed.amount;
       // Atomic stake debit — closes the check-then-update race.
       const debit = await db.tryDeductBalance(message.author.id, amount, "gamble_slots_stake", "slots:spin");
@@ -194,7 +200,7 @@ export async function execute(toolName, input, message, _context) {
 
     case "blackjack_start": {
       const parsed = parseBet(input.amount);
-      if (parsed.error) return parsed.error;
+      if (parsed.error != null) return parsed.error;
       const amount = parsed.amount;
       const existing = db.getActiveGame(message.channel.id, message.author.id, "blackjack");
       if (existing) return "you already have an active blackjack game \u2014 say 'hit' or 'stand'";
@@ -335,7 +341,7 @@ export async function execute(toolName, input, message, _context) {
 
     case "russian_roulette": {
       const parsed = parseBet(input.stake);
-      if (parsed.error) return parsed.error;
+      if (parsed.error != null) return parsed.error;
       const stake = parsed.amount;
       // Atomic stake debit \u2014 closes the check-then-update race. Stake is
       // pre-deducted; on survival we refund the stake AND add the winnings.
@@ -381,7 +387,7 @@ export async function execute(toolName, input, message, _context) {
       const stakeRaw = input.stake ?? input.amount;
       if (stakeRaw != null && Number(stakeRaw) > 0) {
         const parsed = parseBet(stakeRaw);
-        if (parsed.error) return parsed.error;
+        if (parsed.error != null) return parsed.error;
         stake = parsed.amount;
       }
       // If no choice provided, show interactive buttons (no debit — the button

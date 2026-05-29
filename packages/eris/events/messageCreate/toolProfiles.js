@@ -26,7 +26,7 @@ import { registry } from "../../ai/toolRegistry.js";
  * @param {boolean} opts.isTwinMsg
  * @param {boolean} opts.isOwner
  * @param {string}  opts.cleanMessage
- * @param {string}  [opts.channelKey]
+ * @param {string|null} [opts.channelKey]
  * @returns {{ tier1Schemas: object|undefined, tier2CatalogText: string }}
  *   tier1Schemas — provider-formatted function declarations (or undefined when
  *   there are no Tier-1 tools); tier2CatalogText — the catalog block to append

@@ -41,7 +41,7 @@ async function generateAutonomousText({ prompt, systemInstruction, maxOutputToke
     null,
     `${systemInstruction}\n\nReturn only the requested inner text. Do not explain the format.`,
     prompt,
-    null,
+    undefined, // no extra context (optional param; undefined ≡ omitted)
   );
   return text?.trim() || null;
 }
@@ -223,7 +223,9 @@ Generate ONE short dream-like thought (under 200 chars). Lowercase, no periods. 
   // ═══════════════════════════════════════════════════════════════════════════
 
   let _cumulativeImportance = 0; // Tracks accumulated importance for reflection trigger
+  /** @type {{ short: string[], medium: string[], long: string[] }} */
   const _goals = { short: [], medium: [], long: [] }; // Aspirations
+  /** @type {Array<{ text: string, at: number }>} */
   const _reflections = []; // Higher-order thoughts about her own thoughts
 
   // Load persisted goals/reflections on startup
@@ -360,7 +362,7 @@ Write ONE reflection — a higher-order observation about yourself. Example: "i'
       // Every ~2 hours (8 ticks), promote short-term goals to medium-term
       if (Math.random() < 0.125 && _goals.short.length > 2) {
         const promoted = _goals.short.shift();
-        _goals.medium.push(promoted);
+        if (promoted) _goals.medium.push(promoted);
         if (_goals.medium.length > 3) _goals.medium.shift();
       }
 
@@ -707,13 +709,13 @@ Write ONE reflection — a higher-order observation about yourself. Example: "i'
           globalThis._activeCurses.delete(key);
           // Update persistence
           const sb2 = db.getSupabase();
-          if (sb2) await sb2.from("bot_data").upsert({ id: "eris_active_curses", data: Object.fromEntries(globalThis._activeCurses) }).catch(() => {});
+          if (sb2) await Promise.resolve(sb2.from("bot_data").upsert({ id: "eris_active_curses", data: Object.fromEntries(globalThis._activeCurses) })).catch(() => {});
         } catch (e) { log(`[READY] ${e.message}`); }
       }, remaining);
       restored++;
     }
     // Clean up: write back ONLY still-active curses (purges expired ones from Supabase)
-    await sb.from("bot_data").upsert({ id: "eris_active_curses", data: Object.fromEntries(globalThis._activeCurses) }).catch(() => {});
+    await Promise.resolve(sb.from("bot_data").upsert({ id: "eris_active_curses", data: Object.fromEntries(globalThis._activeCurses) })).catch(() => {});
     if (restored > 0) log(`[CURSE] Restored ${restored} active curses from before restart`);
   } catch (e) { log(`[CURSE] Restore failed: ${e.message}`); }
   }, 5_000); // 5 seconds after startup

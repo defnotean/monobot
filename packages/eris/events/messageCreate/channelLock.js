@@ -7,7 +7,8 @@ const channelLocks = new Map();
 
 export async function withLock(key, fn) {
   const prev = channelLocks.get(key) ?? Promise.resolve();
-  let release;
+  /** @type {(value?: unknown) => void} */
+  let release = () => {};
   const current = new Promise(r => (release = r));
   channelLocks.set(key, current);
   await prev;

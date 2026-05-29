@@ -41,6 +41,7 @@ export function applyMove(state, index) {
 
   const cells = state.cells.slice();
   cells[index] = state.currentPlayer;
+  /** @type {{ cells: any[], currentPlayer: string, winner: string|null, draw: boolean, moves: number, winLine: number[]|null }} */
   const newState = {
     cells,
     currentPlayer: state.currentPlayer === "X" ? "O" : "X",

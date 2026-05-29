@@ -4,6 +4,13 @@
 
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 
+/**
+ * One frame of an animated embed sequence. `delay` overrides the default
+ * per-frame timing; `components` attaches buttons (typically only on the final
+ * result frame).
+ * @typedef {{ embed: EmbedBuilder, delay?: number, components?: any[] }} AnimFrame
+ */
+
 const PURPLE = 0x9333EA;    // Eris's signature
 const GOLD = 0xFFD700;      // Win / jackpot
 const RED = 0xEF4444;       // Loss
@@ -590,6 +597,11 @@ export function achievementsEmbed(allAchievements, unlockedKeys, username) {
 // ─── Animation Helper ──────────────────────────────────────────────────────
 // Supports per-frame delay via frame.delay property, falls back to delayMs
 
+/**
+ * @param {import("discord.js").SendableChannels} channel
+ * @param {AnimFrame[]} frames
+ * @param {number} [delayMs]
+ */
 export async function animateEmbed(channel, frames, delayMs = 800) {
   const msg = await channel.send({ embeds: [frames[0].embed], components: frames[0].components || [] });
   for (let i = 1; i < frames.length; i++) {
@@ -629,6 +641,7 @@ export function diceButtonsEmbed(amount) {
   return { embed, row };
 }
 
+/** @returns {AnimFrame[]} */
 export function diceAnimFrames(roll) {
   const DICE = ["","⚀","⚁","⚂","⚃","⚄","⚅"];
   const rand = () => Math.floor(Math.random() * 6) + 1;
@@ -682,6 +695,7 @@ export function rpsResultEmbed(playerChoice, botChoice, result, amount, newBalan
 
 // ─── Animated Slots Frames ─────────────────────────────────────────────────
 
+/** @returns {AnimFrame[]} */
 export function slotsAnimFrames(finalReels) {
   const SLOT_SYMBOLS = ["🍒","🍋","🍊","🔔","💎","7️⃣","💀"];
   const r = () => SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)];
@@ -880,6 +894,7 @@ export function bossEmbed(bossName, bossEmoji, currentHp, maxHp, attackerName, d
 
 // ─── Duel Animated Countdown ───────────────────────────────────────────────
 
+/** @returns {AnimFrame[]} */
 export function duelCountdownFrames(challenger, target) {
   const vs = `**${challenger}** ⠀vs⠀ **${target}**`;
   return [

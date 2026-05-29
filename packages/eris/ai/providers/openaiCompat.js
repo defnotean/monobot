@@ -118,6 +118,7 @@ async function postChatWithKey(body, timeoutMs, apiKey) {
 
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
+    /** @type {Error & { status?: number }} */
     const error = new Error(`HTTP ${res.status}: ${errText.slice(0, 300)}`);
     error.status = res.status;
     throw error;
@@ -356,6 +357,7 @@ function toMessages(systemInstruction, history, userMessage) {
   return messages;
 }
 
+/** @param {{ model: any, messages: any, tools?: any }} args */
 function buildBody({ model, messages, tools }) {
   const body = {
     model,

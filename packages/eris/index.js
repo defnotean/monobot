@@ -19,7 +19,10 @@ import { sendAlert } from "@defnotean/shared/alert";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── Discord Client ───
-export const client = new Client({
+// The `commands` Collection is attached below — the standard discord.js pattern
+// for a custom command registry. Cast to include it so the `client.commands`
+// accesses across this file (and event handlers) type-check.
+export const client = /** @type {Client & { commands: Collection<string, any> }} */ (new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
@@ -30,7 +33,7 @@ export const client = new Client({
     GatewayIntentBits.GuildMessageReactions,
   ],
   partials: [Partials.Message, Partials.Channel, Partials.User, Partials.Reaction],
-});
+}));
 
 client.commands = new Collection();
 
@@ -173,7 +176,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.url.startsWith("/api/")) {
+  if (req.url?.startsWith("/api/")) {
     const { handleApiRequest } = await import("./api/dashboard.js");
     await handleApiRequest(req, res);
     return;
@@ -232,7 +235,7 @@ async function main() {
   // Handle it locally: log loudly and keep running — Discord/core still works; only
   // the keepalive/dashboard/admin/twin-punish HTTP surface is unavailable until the
   // port frees and the process restarts.
-  server.on("error", (e) => {
+  server.on("error", (/** @type {NodeJS.ErrnoException} */ e) => {
     if (e.code === "EADDRINUSE") {
       log(`[SYS] ⚠ HTTP port ${config.port} already in use — a stale instance may still be bound. Continuing WITHOUT the HTTP server (keepalive/dashboard/admin/twin-punish unavailable). Free the port and restart to restore them.`);
     } else {
@@ -317,7 +320,7 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("unhandledRejection", (err) => log(`[SYS] Unhandled rejection: ${err?.message || err}`));
+process.on("unhandledRejection", (/** @type {any} */ err) => log(`[SYS] Unhandled rejection: ${err?.message || err}`));
 // Fail-fast on uncaughtException: an uncaught throw means we're in undefined
 // state, so continuing to serve risks corrupting data. Log, best-effort
 // synchronous flush of in-memory buffers, then exit non-zero so Render

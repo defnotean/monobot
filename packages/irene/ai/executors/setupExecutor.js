@@ -136,7 +136,7 @@ export async function execute(toolName, input, message, ctx) {
             failed > 0 ? `⚠️ couldn't modify ${failed} channels` : "",
             "unverified users can only see public channels now",
           ].filter(Boolean).join("\n"));
-        } catch {}
+        } catch { /* best-effort confirmation message; lockdown itself already applied */ }
       })().catch(e => log(`[Verification] Lockdown error: ${e.message}`));
 
       const summary = [
@@ -917,7 +917,11 @@ export async function execute(toolName, input, message, ctx) {
           }
         }
         if (targetMsg) await targetMsg.react(input.emoji).catch(() => {});
-      } catch {}
+      } catch (e) {
+        // Reacting to the anchor message is best-effort; the rule is already
+        // saved. Log so a failed auto-react is visible.
+        log(`[ReactionRole] Failed to react to anchor message in ${guild.id}: ${e?.message || e}`);
+      }
       return `Reaction role added + reacted: ${input.emoji} → @${rrRole.name}`;
     }
 
@@ -1266,7 +1270,7 @@ export async function execute(toolName, input, message, ctx) {
       const existing = getStickyMessage(guild.id, ch.id);
       if (!existing) return `No sticky message in #${ch.name}`;
       if (existing.lastMessageId) {
-        try { const old = await ch.messages.fetch(existing.lastMessageId); await old.delete(); } catch {}
+        try { const old = await ch.messages.fetch(existing.lastMessageId); await old.delete(); } catch { /* cleanup: old sticky may already be gone */ }
       }
       removeStickyMessage(guild.id, ch.id);
       return `Removed sticky message from #${ch.name}`;

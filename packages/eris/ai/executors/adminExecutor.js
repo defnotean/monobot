@@ -326,6 +326,10 @@ export async function execute(toolName, input, message, _context) {
         if (!ALLOWED_TABLES.has(String(table))) {
           return `table "${table}" is not in the query whitelist. use list_tables to see options.`;
         }
+        // `any`: this is a fully dynamic admin query (runtime table + filter
+        // columns). Chaining typed PostgREST .eq()/.in() on it makes the filter
+        // builder type recurse past TS's instantiation depth limit (TS2589).
+        /** @type {any} */
         let q = supabase.from(table).select(input.select || "*").limit(limit);
 
         // Safe filtering: only allow whitelisted column names with .eq()

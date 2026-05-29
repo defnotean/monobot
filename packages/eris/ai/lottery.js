@@ -30,7 +30,13 @@ function _freshState() {
 
 // Module-level mutex — draws and purchases mustn't interleave. Implemented
 // as a promise chain so every call queues behind the previous one.
+/** @type {Promise<any>} */
 let _opChain = Promise.resolve();
+/**
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
 function _withLotteryLock(fn) {
   const next = _opChain.catch(() => {}).then(fn);
   _opChain = next;
@@ -111,7 +117,11 @@ export async function getLotteryState() {
 /**
  * Buy N tickets. Atomic — deducts coins inside the user lock AND acquires the
  * lottery-state lock so two rapid buys can't interleave with an active draw.
- * Returns { ok, tickets, cost, pot, newBalance } or { ok: false, reason }.
+ *
+ * @returns {Promise<
+ *   { ok: true, tickets: number, cost: number, pot: number, newBalance: number, userTotal: number }
+ *   | { ok: false, reason: string, balance?: number, required?: number, held?: number, max?: number }
+ * >}
  */
 export async function buyLotteryTicket(userId, count = 1) {
   const rawN = Number(count);
@@ -165,8 +175,20 @@ export async function buyLotteryTicket(userId, count = 1) {
 
 /**
  * Run the draw if the clock is past drawAt. Called by the periodic timer.
- * Returns the winning announcement string, or null if no draw fired.
  * Uses the same module-level mutex as purchases so no ticket can race the draw.
+ *
+ * @returns {Promise<null | {
+ *   drawFired: boolean,
+ *   noBuyers?: boolean,
+ *   pot?: number,
+ *   payoutFailed?: boolean,
+ *   winnerId?: string|null,
+ *   prize?: number,
+ *   winningCount?: number,
+ *   totalTickets?: number,
+ *   potBefore?: number,
+ *   rollover?: number,
+ * }>} the draw outcome, or null when no draw fired this tick
  */
 export async function tickLotteryDraw(client) {
   return _withLotteryLock(async () => {

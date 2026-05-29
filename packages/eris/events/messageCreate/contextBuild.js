@@ -9,6 +9,7 @@ import config from "../../config.js";
 import * as db from "../../database.js";
 import { log } from "../../utils/logger.js";
 import { spotlight } from "../../ai/firewall.js";
+import { channelName } from "../../utils/discord.js";
 import { buildMemoryContext } from "../../ai/memory.js";
 import { buildTemporalContext } from "@defnotean/shared/temporal";
 import { buildPersonalityContext, _getData as getPersonalityData } from "../../ai/personality.js";
@@ -121,7 +122,7 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
   // Tell the AI who is currently speaking — critical for owner recognition
   const isCreatorSpeaking = message.author.id === config.ownerId;
   systemInstruction += `\n\n[Currently speaking: ${spotlight(displayName, "user_displayname")} (User ID: ${message.author.id})${isCreatorSpeaking ? " — THIS IS YOUR CREATOR (boss). recognize him." : ""}]`;
-  if (message.guild) systemInstruction += `\n[Server: ${message.guild.name} | Channel: #${message.channel.name}]`;
+  if (message.guild) systemInstruction += `\n[Server: ${message.guild.name} | Channel: #${channelName(message.channel)}]`;
 
   if (memoryCtx) systemInstruction += `\n\n[SYSTEM: ${memoryCtx}]`;
   if (relationship.interactions_count > 0) {
@@ -238,8 +239,11 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
   // so the AI naturally reaches for them when relevant. Guarded — the
   // `getNoveltyBlock` method lives in in-progress work and may not be
   // deployed yet. Skip silently if the method isn't defined.
-  if (!isTwinMsg && typeof toolRegistry?.getNoveltyBlock === "function") {
-    const noveltyBlock = toolRegistry.getNoveltyBlock({ daysWindow: 14, limit: 5 });
+  // `any` cast: getNoveltyBlock is an optional, not-yet-on-the-class method
+  // probed defensively above; the typeof guard makes the call runtime-safe.
+  const registryMaybeNovelty = /** @type {any} */ (toolRegistry);
+  if (!isTwinMsg && typeof registryMaybeNovelty?.getNoveltyBlock === "function") {
+    const noveltyBlock = registryMaybeNovelty.getNoveltyBlock({ daysWindow: 14, limit: 5 });
     if (noveltyBlock) systemInstruction += `\n\n${noveltyBlock}`;
   }
 

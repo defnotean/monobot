@@ -29,6 +29,9 @@ const DEFAULT_WORD_LIST = [
   "MOUNTAIN", "VALLEY", "RIVER", "DESERT", "VOLCANO",
 ];
 
+/**
+ * @param {{ word?: string, maxWrong?: number, rng?: () => number }} [opts]
+ */
 export function createState({ word, maxWrong = DEFAULT_MAX_WRONG, rng = Math.random } = {}) {
   const chosen = word
     ? String(word).toUpperCase()

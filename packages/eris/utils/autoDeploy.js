@@ -22,7 +22,7 @@ function hashCommands(commandJsons) {
  * Deploy commands if the hash changed since last boot.
  * Call this AFTER loadCommands() but BEFORE client.login().
  *
- * @param {Collection} commands  client.commands collection from index.js
+ * @param {import("discord.js").Collection<string, any>} commands  client.commands collection from index.js
  * @returns {Promise<{deployed: boolean, count: number, reason: string}>}
  */
 export async function maybeAutoDeploy(commands) {

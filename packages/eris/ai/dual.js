@@ -102,10 +102,10 @@ export function toGeminiTools(tools) {
 
 /**
  * Fast model reply for task acknowledgments (no tools, 5s timeout).
- * @param {object} client — GoogleGenAI client instance
- * @param {string} systemInstruction — full personality prompt
- * @param {string} userText — the user's message
- * @param {string} [context] — optional extra context
+ * @param {object} client - GoogleGenAI client instance
+ * @param {string} systemInstruction - full personality prompt
+ * @param {string} userText - the user's message
+ * @param {string | import("discord.js").Message} [context] - optional extra context; a Message is interpolated via its toString() (= message content)
  * @returns {Promise<string|null>} short acknowledgment or null on failure
  */
 export async function quickReply(client, systemInstruction, userText, context) {
@@ -271,12 +271,12 @@ function _resolveWorkPoolSync() {
  * Main AI chat loop with multi-turn tool calling.
  * Converts tools/history to Gemini format, runs up to 5 iterations of
  * generate → extract tool calls → execute → feed results back.
- * @param {object} client — GoogleGenAI client from key pool
- * @param {string} systemInstruction — full personality + context prompt
- * @param {Array} tools — tool definitions (Anthropic or Gemini format)
- * @param {Array} history — conversation history (Anthropic or Gemini format)
- * @param {string} userMessage — the user's current message text
- * @param {(toolName: string, toolArgs: object) => Promise<string>} executor — tool dispatch function
+ * @param {object} client - GoogleGenAI client from key pool
+ * @param {string} systemInstruction - full personality + context prompt
+ * @param {Array} tools - tool definitions (Anthropic or Gemini format)
+ * @param {Array} history - conversation history (Anthropic or Gemini format)
+ * @param {string} userMessage - the user's current message text
+ * @param {(toolName: string, toolArgs: object, abortSignal?: AbortSignal) => Promise<string>} executor - tool dispatch function (abortSignal is optional; executors that honor it can abort in-flight work)
  * @returns {Promise<{text: string, toolsUsed: boolean, history: Array}>}
  */
 export async function runGeminiChat(client, systemInstruction, tools, history, userMessage, executor, options = {}) {

@@ -382,7 +382,11 @@ export async function execute(toolName, input, message, ctx) {
             const u = await message.client.users.fetch(reminder.userId).catch(() => null);
             if (u) await u.send(`⏰ Reminder: ${reminder.message}`).catch(() => {});
           }
-        } catch {}
+        } catch (e) {
+          // Delivery is best-effort, but a silent failure means the user never
+          // got their reminder — log it so the loss is observable.
+          log(`[Reminder] Failed to deliver reminder ${reminder.id} to ${reminder.userId}: ${e?.message || e}`);
+        }
         removeReminder(reminder.id);
       }, delayMs);
       reminderTimers.set(reminder.id, timerId);

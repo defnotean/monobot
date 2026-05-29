@@ -69,7 +69,7 @@ function currentCount(key, today) {
  * never opt in.
  *
  * @param {{ userId?: string, guildId?: string|null }} ids
- * @returns {{ exceeded: boolean, scope: "user"|"guild"|null }}
+ * @returns {{ exceeded: true, scope: "user"|"guild" } | { exceeded: false, scope: null }}
  */
 export function checkBudget({ userId, guildId } = {}) {
   const userCap = readCap("AI_DAILY_USER_CAP");
@@ -119,7 +119,7 @@ function bump(key, today) {
  * the gating gauntlet, so we never spam the channel on every dropped message.
  *
  * @param {"user"|"guild"} scope
- * @param {string} id
+ * @param {string|null|undefined} id
  * @returns {boolean}
  */
 export function shouldNotify(scope, id) {

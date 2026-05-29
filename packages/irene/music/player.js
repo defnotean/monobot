@@ -8,7 +8,7 @@
 // Audio streaming handled by Lavalink server (runs on VPS with UDP support).
 // Bot sends commands over WebSocket/REST — no local voice, yt-dlp, or ffmpeg.
 
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from "discord.js";
 import { onTrackStart, onTrackEnd, hasSession, extractSongInfo, stopKaraoke } from "../ai/karaoke.js";
 import { log } from "../utils/logger.js";
 import { saveQueue as dbSaveQueue, getSavedQueues, clearSavedQueue, clearAllSavedQueues } from "../database.js";
@@ -33,14 +33,21 @@ async function withQueueLock(guildId, fn) {
   }
 }
 
+let _autoSaveInterval = null;
+
 export function initMusic(shoukakuInstance) {
   shoukaku = shoukakuInstance;
   log("[Music] Shoukaku initialized");
 
+  // Idempotent: a Shoukaku reconnect can re-call initMusic. Without this guard
+  // each call would stack another 60s auto-save interval, multiplying the DB
+  // write load. Clear any prior timer first.
+  if (_autoSaveInterval) clearInterval(_autoSaveInterval);
+
   // Auto-save queues every 60s while music is playing — survives ungraceful
   // shutdowns where SIGTERM → SIGKILL happens too fast for the shutdown
   // handler's Supabase flush to complete. Makes redeployments seamless.
-  setInterval(() => {
+  _autoSaveInterval = setInterval(() => {
     let saved = 0;
     for (const [guildId, queue] of queues) {
       if (!queue.playing || !queue.songs.length) continue;
@@ -63,6 +70,9 @@ export function initMusic(shoukakuInstance) {
     }
     if (saved) log(`[Music] Auto-saved ${saved} queue(s)`);
   }, 60_000);
+
+  // Don't let the auto-save timer keep the process alive on shutdown.
+  if (typeof _autoSaveInterval?.unref === "function") _autoSaveInterval.unref();
 }
 
 // Per-guild queues
@@ -94,6 +104,17 @@ export function getQueue(guildId) {
   return queues.get(guildId);
 }
 
+// True only when `queue` is STILL the live queue for its guild. A late Lavalink
+// event (track end/exception/stuck firing after the queue was torn down, or
+// after `stop` + a fresh `play` replaced it for the same guild) otherwise holds
+// a stale `queue` reference. `queues.has(guildId)` alone returns true for the
+// replacement queue, so we also require object identity and the not-destroyed
+// flag — without this a stale event shifts songs off / re-enters playSong on a
+// queue that's already been advanced or replaced, corrupting playback state.
+function isQueueLive(queue) {
+  return !!queue && !queue._destroyed && queues.get(queue.guildId) === queue;
+}
+
 export function createQueue(guildId, voiceChannel, textChannel) {
   const queue = {
     guildId,
@@ -111,6 +132,7 @@ export function createQueue(guildId, voiceChannel, textChannel) {
     _autoLeaveTimer: null,
     _aloneDisconnectTimer: null,  // armed when bot is alone in the VC
     _pausedForEmpty: false,       // true when we auto-paused due to empty VC
+    _destroyed: false,            // set by deleteQueue; gates stale Lavalink events
   };
 
   queues.set(guildId, queue);
@@ -292,7 +314,7 @@ async function sendNowPlayingPanel(queue) {
   // Send to the voice channel's built-in text chat if available,
   // otherwise fall back to the text channel where the command was used
   const vc = queue.voiceChannel;
-  const targetChannel = vc?.type === 2 // GuildVoice — has its own chat since Discord update
+  const targetChannel = vc?.type === ChannelType.GuildVoice // VC has its own chat since Discord update
     ? vc
     : queue.textChannel;
 
@@ -340,7 +362,7 @@ export async function connectToChannel(queue) {
 
   // ── Wire up track-end events for auto-advance ────────────────────────
   player.on("end", (data) => {
-    if (!queues.has(queue.guildId)) return;
+    if (!isQueueLive(queue)) return;
     // If replaced (e.g. skip), don't auto-advance — the skip already handles it
     if (data.reason === "replaced") return;
     log(`[Music] Track ended in ${queue.guildId}: reason=${data.reason}`);
@@ -352,7 +374,7 @@ export async function connectToChannel(queue) {
   // "exception" events. Without this handler the queue gets stuck on
   // the failed track forever (no "end" event is emitted).
   player.on("exception", (data) => {
-    if (!queues.has(queue.guildId)) return;
+    if (!isQueueLive(queue)) return;
     const msg = data?.exception?.message || data?.message || "unknown";
     log(`[Music] Track exception in ${queue.guildId}: ${msg} — advancing queue`);
     handleTrackEnd(queue);
@@ -363,11 +385,12 @@ export async function connectToChannel(queue) {
   // waiting longer here only lengthens the silent gap users hear. 3s gives
   // any in-flight buffer time to flush without dragging out the pause.
   player.on("stuck", () => {
+    if (!isQueueLive(queue)) return;
     log(`[Music] Track stuck in ${queue.guildId} — waiting 3s before skipping`);
     if (queue._stuckTimeout) return; // already waiting
     queue._stuckTimeout = setTimeout(() => {
       queue._stuckTimeout = null;
-      if (queues.has(queue.guildId) && queue.playing) {
+      if (isQueueLive(queue) && queue.playing) {
         log(`[Music] Track still stuck after 3s — skipping`);
         handleTrackEnd(queue);
       }
@@ -401,7 +424,10 @@ export async function connectToChannel(queue) {
 
       setTimeout(async () => {
         try {
-          if (!queues.has(queue.guildId)) return;
+          // Bail if the queue was torn down or replaced while we waited — a
+          // stale reconnect would otherwise re-attach a player and replay songs
+          // onto a guild that already stopped (or restarted) music.
+          if (!isQueueLive(queue)) return;
           await connectToChannel(queue);
           if (queue.songs.length) await playSong(queue);
           log(`[Music] Reconnected successfully in ${queue.guildId}`);
@@ -417,6 +443,11 @@ export async function connectToChannel(queue) {
 }
 
 function handleTrackEnd(queue) {
+  // Defense-in-depth: never mutate a torn-down/replaced queue. Callers already
+  // gate on isQueueLive, but a late event racing deleteQueue could still reach
+  // here — bail before shifting songs or re-entering playSong on a dead queue.
+  if (!isQueueLive(queue)) return;
+
   // Clear any pending stuck-timeout so it doesn't fire later and skip the
   // NEXT track. Without this, if a track briefly got stuck but then ended
   // normally, the 10s delayed timeout would wake up, see queue.playing is
@@ -480,8 +511,11 @@ function handleTrackEnd(queue) {
 
 export async function playSong(queue, _retries = 0) {
   return withQueueLock(queue.guildId, async () => {
-    // Re-check queue existence — it may have been deleted while waiting for lock
-    if (!queues.has(queue.guildId)) return;
+    // Re-check liveness — the queue may have been deleted (or stopped + replaced
+    // by a fresh queue for the same guild) while we waited for the lock. Using
+    // isQueueLive instead of a bare queues.has() also rejects a stale reconnect
+    // that still holds the old queue object.
+    if (!isQueueLive(queue)) return;
     if (!queue.songs.length || !queue.player) return;
 
     const song = queue.songs[0];

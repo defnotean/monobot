@@ -367,11 +367,12 @@ export async function executeSocialTool(toolName, input, message) {
 
       const adventure = ADVENTURES[Math.floor(Math.random() * ADVENTURES.length)];
       const step = adventure.steps[0];
-      const state = { title: adventure.title, steps: adventure.steps, stepIndex: 0, currentChoices: step.choices, choiceHistory: [] };
+      const stepChoices = step.choices || [];
+      const state = { title: adventure.title, steps: adventure.steps, stepIndex: 0, currentChoices: stepChoices, choiceHistory: [] };
       db.saveActiveGame(message.channel.id, userId, "adventure", state);
 
       if (!await db.hasAchievement(userId, "adventurer")) await db.unlockAchievement(userId, "adventurer");
-      return `**${adventure.title}**\n\n${step.text}\n\nchoices: ${step.choices.join(", ")}`;
+      return `**${adventure.title}**\n\n${step.text}\n\nchoices: ${stepChoices.join(", ")}`;
     }
 
     case "adventure_choice": {

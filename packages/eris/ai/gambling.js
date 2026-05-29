@@ -77,8 +77,13 @@ export function getMoodFlavor(moodScore) {
 /**
  * Pick a random gambling quip. Uses the pre-set array for speed.
  * (AI-generated quips caused timeouts by making API calls inside API calls)
+ *
+ * Accepts (and ignores) an optional context object — callers historically
+ * passed `{ won, game, amount }` from when quips were AI-generated; the static
+ * fallback doesn't need it, but the param keeps those call sites type-clean.
+ * @param {{ won?: boolean, game?: string, amount?: number }} [_context]
  */
-export function randomQuip() {
+export function randomQuip(_context) {
   return randomQuipFallback();
 }
 
@@ -333,9 +338,10 @@ async function _saveSlotsConfig() {
     const sb = getSupabase();
     if (!sb) return;
     const { data: row } = await sb.from("bot_data").select("data").eq("id", "eris_slots_config").single();
-    if (row?.data?.symbols?.length >= 5) {
+    const symbols = row?.data?.symbols;
+    if (Array.isArray(symbols) && symbols.length >= 5) {
       SLOT_SYMBOLS.length = 0;
-      SLOT_SYMBOLS.push(...row.data.symbols);
+      SLOT_SYMBOLS.push(...symbols);
     }
   } catch {}
 })();

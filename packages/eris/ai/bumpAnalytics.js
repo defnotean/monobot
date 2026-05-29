@@ -20,6 +20,9 @@ import { log } from "../utils/logger.js";
 
 // ─── recordBump ─────────────────────────────────────────────────────────────
 
+/**
+ * @param {{ guildId: string, userId: string, service?: string, rank?: number|null, atMs?: number }} entry
+ */
 export async function recordBump({ guildId, userId, service = "disboard", rank = null, atMs = Date.now() }) {
   if (!guildId || !userId) return { ok: false };
   try {
@@ -48,6 +51,11 @@ export async function recordBump({ guildId, userId, service = "disboard", rank =
 
 // ─── getBumpLeaderboard ─────────────────────────────────────────────────────
 
+/**
+ * @param {string} guildId
+ * @param {{ periodDays?: number|null, limit?: number, service?: string|null }} [opts]
+ * @returns {Promise<Array<{ user_id: string, count: number }>>}
+ */
 export async function getBumpLeaderboard(guildId, { periodDays = null, limit = 10, service = null } = {}) {
   if (!guildId) return [];
   try {
@@ -101,6 +109,10 @@ export async function getLastBumper(guildId, service = null) {
 // "Streak" = consecutive days with at least one bump from this service in
 // the guild. Caps at 60 to avoid scanning forever.
 
+/**
+ * @param {string} guildId
+ * @param {string|null} [service]
+ */
 export async function getGuildStreak(guildId, service = null) {
   if (!guildId) return 0;
   try {
@@ -168,6 +180,11 @@ export async function getUserStreak(userId, guildId, service = null) {
 // ─── getBumpCount ──────────────────────────────────────────────────────────
 // Simple count for a user in a guild over an optional period.
 
+/**
+ * @param {string} userId
+ * @param {string} guildId
+ * @param {{ periodDays?: number|null, service?: string|null }} [opts]
+ */
 export async function getBumpCount(userId, guildId, { periodDays = null, service = null } = {}) {
   if (!userId || !guildId) return 0;
   try {

@@ -195,7 +195,14 @@ export async function execute(member) {
   const isRaid = trackJoin(member.guild.id);
   if (isRaid) {
     await activateLockdown(member.guild, `raid detected — ${member.guild.memberCount} joins in rapid succession`);
-    try { await member.kick("Auto-mod: raid detected"); } catch {}
+    // Auto-mod destructive call: failure (bot lacks Kick Members, target left,
+    // rate limit) must not throw out of the event handler, but must be visible
+    // in logs rather than silently swallowed — matches the [Raid] log style below.
+    try {
+      await member.kick("Auto-mod: raid detected");
+    } catch (err) {
+      log(`[Raid] Auto-kick failed for ${member?.id ?? "unknown"} on ${member.guild?.id ?? "unknown"}: ${err?.message ?? err}`);
+    }
   }
   // Enhanced raid detection with configurable thresholds
   try {

@@ -78,7 +78,7 @@ try {
   // wraps may not be. Construct a throwaway decoder to prove decoding works.
   const prism = (await import("prism-media")).default;
   const probe = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
-  try { probe.destroy(); } catch {}
+  try { probe.destroy(); } catch { /* cleanup */ }
   _prismOpus = prism.opus;
   _opusDecoderAvailable = true;
 } catch (err) {
@@ -227,8 +227,8 @@ export function stopListening(guildId) {
   for (const [userId, audioState] of state.listening) {
     if (audioState.silenceTimer) clearTimeout(audioState.silenceTimer);
     if (audioState.maxTimer) clearTimeout(audioState.maxTimer);
-    if (audioState.stream) { try { audioState.stream.destroy(); } catch {} }
-    if (audioState.decoder) { try { audioState.decoder.destroy(); } catch {} }
+    if (audioState.stream) { try { audioState.stream.destroy(); } catch { /* cleanup */ } }
+    if (audioState.decoder) { try { audioState.decoder.destroy(); } catch { /* cleanup */ } }
   }
   state.listening.clear();
 
@@ -239,7 +239,7 @@ export function stopListening(guildId) {
   // Destroy the voice connection
   try {
     state.connection.destroy();
-  } catch {}
+  } catch { /* cleanup: connection may already be torn down */ }
 
   listeners.delete(guildId);
   log(`[VoiceListen] Stopped listening in guild ${guildId}`);
@@ -285,7 +285,7 @@ export function setWakeWord(guildId, word) {
  * loaded wake word is picked up.
  */
 export async function loadWakeWord(guildId) {
-  try { await settingsStore.loadGuild(guildId); } catch {}
+  try { await settingsStore.loadGuild(guildId); } catch { /* falls back to in-memory settings */ }
   return getWakeWord(guildId);
 }
 
@@ -383,7 +383,7 @@ function startCapturingUser(state, userId, receiver) {
 
   const onStreamError = (err) => {
     log(`[VoiceListen] Stream error for ${userId}: ${err.message}`);
-    try { decoder.destroy(); } catch {}
+    try { decoder.destroy(); } catch { /* cleanup */ }
     state.listening.delete(userId);
   };
   opusStream.on("error", onStreamError);
@@ -393,7 +393,7 @@ function startCapturingUser(state, userId, receiver) {
   audioState.maxTimer = setTimeout(() => {
     if (state.listening.has(userId)) {
       opusStream.destroy();
-      try { decoder.destroy(); } catch {}
+      try { decoder.destroy(); } catch { /* cleanup */ }
       state.listening.delete(userId);
     }
   }, MAX_AUDIO_DURATION_MS + 1000);
@@ -446,12 +446,12 @@ async function _whisperTranscribe(opusFrames) {
     proc.stdout.on("data", (c) => chunks.push(c));
     proc.stderr.on("data", (c) => log(`[VoiceListen] whisper-cli: ${c.toString().trim()}`));
     proc.on("close", () => {
-      try { unlinkSync(tmpPath); } catch {}
+      try { unlinkSync(tmpPath); } catch { /* temp file cleanup */ }
       resolve(Buffer.concat(chunks).toString("utf8").trim());
     });
     proc.on("error", (e) => {
       log(`[VoiceListen] whisper-cli spawn failed: ${e.message}`);
-      try { unlinkSync(tmpPath); } catch {}
+      try { unlinkSync(tmpPath); } catch { /* temp file cleanup */ }
       resolve("");
     });
   });

@@ -127,11 +127,38 @@ import config from "./config.js";
 import { log } from "./utils/logger.js";
 import { createHmac } from "node:crypto";
 
+/**
+ * Error thrown by the balance helpers when a debit would go negative. Carries
+ * the machine-readable `code` and the user's current `balance` so callers can
+ * surface a precise "you only have N" message without a second DB read.
+ * @typedef {Error & { code?: string, balance?: number }} BalanceError
+ */
+
+/** @type {import("@supabase/supabase-js").SupabaseClient | null} */
 let supabase = null;
 let _saveTimer = null;
 let _dirty = new Set();
 
+/**
+ * In-memory cache shape. Rows are dynamic Supabase shapes (column sets vary by
+ * deployed migration), so collections are typed as loose records rather than
+ * locking in a column list that would drift from the schema.
+ * @typedef {Record<string, any>} Row
+ * @typedef {{
+ *   conversations: Record<string, any>,
+ *   facts: Record<string, Row[]>,
+ *   notes: Row[],
+ *   reminders: Row[],
+ *   snippets: Row[],
+ *   mood: { mood_score: number, energy: number },
+ *   relationships: Record<string, any>,
+ *   analytics: Row[],
+ *   guild_settings: Record<string, any>,
+ * }} CacheData
+ */
+
 // ─── IN-MEMORY DATA ───
+/** @type {CacheData} */
 let data = {
   conversations: {},   // channelId → [{role, parts}]
   facts: {},           // `guildId:userId` → [{fact_text, created_at}]
@@ -332,8 +359,10 @@ async function _flushSave() {
 // after main() resolves on test runners) still drains the queue. SIGTERM/SIGINT
 // already trigger flushAll() from index.js.
 // Guard so the hook is only registered once even if this module gets re-imported.
-if (typeof process !== "undefined" && !process.__erisBeforeExitFlush) {
-  process.__erisBeforeExitFlush = true;
+// Cast to access a custom one-shot guard flag stored on the process object.
+const _proc = /** @type {NodeJS.Process & { __erisBeforeExitFlush?: boolean }} */ (process);
+if (typeof process !== "undefined" && !_proc.__erisBeforeExitFlush) {
+  _proc.__erisBeforeExitFlush = true;
   process.on("beforeExit", () => {
     if (!_dirty.size && !_saveTimer) return;
     // beforeExit runs sync-ish — we can await inside it, Node will keep the
@@ -388,8 +417,10 @@ export function getServerPersona(guildId) {
 export function setServerPersona(guildId, name, personality = null) {
   if (!name && !personality) { _serverPersonas.delete(guildId); }
   else { _serverPersonas.set(guildId, { name: name || "Eris", personality: personality || null }); }
-  // Persist to Supabase
-  if (supabase) supabase.from("bot_data").upsert({ id: "eris_server_personas", data: Object.fromEntries(_serverPersonas) }).catch(e => log(`[DB] ${e.message}`));
+  // Persist to Supabase. Wrap in Promise.resolve: the PostgREST query builder is
+  // a thenable but has no `.catch`, so a bare `.catch` here would throw
+  // "catch is not a function" the moment this fire-and-forget write rejects.
+  if (supabase) Promise.resolve(supabase.from("bot_data").upsert({ id: "eris_server_personas", data: Object.fromEntries(_serverPersonas) })).catch(e => log(`[DB] ${e.message}`));
 }
 
 export function getAllServerPersonas() { return Object.fromEntries(_serverPersonas); }
@@ -397,8 +428,12 @@ export function getAllServerPersonas() { return Object.fromEntries(_serverPerson
 // Load persisted personas on startup
 (async () => {
   if (!supabase) return;
+  // Direct cast: this IIFE runs at module-eval before initDatabase() assigns the
+  // client, so TS's control-flow narrows the module-level `supabase` let to never
+  // here even though the runtime guard above proves it's a live client.
+  const sb = /** @type {import("@supabase/supabase-js").SupabaseClient} */ (supabase);
   try {
-    const { data: row } = await supabase.from("bot_data").select("data").eq("id", "eris_server_personas").single();
+    const { data: row } = await sb.from("bot_data").select("data").eq("id", "eris_server_personas").single();
     if (row?.data) for (const [gid, p] of Object.entries(row.data)) _serverPersonas.set(gid, p);
   } catch (e) { log(`[DB] ${e.message}`); }
 })();
@@ -432,6 +467,7 @@ let _factExpiryColAvailable = true;
 export async function saveFact(userId, factText, sensitivity = "normal", importance = "normal") {
   if (!supabase) return false;
   const baseRow = { user_id: userId, fact_text: factText, sensitivity, importance: importance || "normal" };
+  /** @type {typeof baseRow & { expires_at?: string }} */
   const row = { ...baseRow };
   // Stamp an expiry only for sensitive-tier facts when a TTL is configured AND
   // the column is known to exist. Degrades to the legacy (no-expiry) shape
@@ -517,8 +553,14 @@ export async function getFactsGlobal(userId, limit = 20) {
   return _filterExpiredFacts(rows);
 }
 
+/**
+ * @returns {Promise<{ success: true, deleted: string } | { success: false, error?: string }>}
+ */
 export async function deleteFactByText(userId, searchText) {
-  if (!supabase) return false;
+  // Offline: keep the object shape (rather than a bare false) so callers can
+  // read .success/.error without a type guard; no error message means the
+  // caller falls through to its generic "couldn't find that memory" line.
+  if (!supabase) return { success: false };
   const facts = await getFacts(userId);
   const lower = searchText.toLowerCase();
   const match = facts.find(f => (f.fact_text || "").toLowerCase().includes(lower));
@@ -570,6 +612,7 @@ export async function queueLocalCommand(command, channelId, requestedBy) {
   const secret = config.twinApiSecret || config.pcAgentSecret || null;
   // Legacy row shape (pre-migration-004): no sig/ts columns.
   const baseRow = { command, channel_id: channelId, requested_by: requestedBy, status: "pending" };
+  /** @type {typeof baseRow & { ts?: number, sig?: string }} */
   const row = { ...baseRow };
   if (_localCmdSigColsAvailable) {
     row.ts = ts;
@@ -778,7 +821,14 @@ export async function addPriceWatch(userId, channelId, url, productName, targetP
   const { error } = await supabase.from("eris_price_watches").insert({ user_id: userId, channel_id: channelId, url, product_name: productName, target_price: targetPrice });
   return !error;
 }
-export async function getPriceWatches() {
+/**
+ * Fetch price watches. NOTE: `_userId` is currently ignored — this returns ALL
+ * watches across users (one caller passes a user id expecting per-user scoping;
+ * see openConcerns). Param kept optional so both call shapes type-check without
+ * changing the (pre-existing) all-users behavior.
+ * @param {string} [_userId]
+ */
+export async function getPriceWatches(_userId) {
   if (!supabase) return [];
   const { data: rows } = await supabase.from("eris_price_watches").select("*");
   return rows || [];
@@ -1057,6 +1107,7 @@ async function _updateBalanceUnsafe(userId, delta, type, details) {
         // Empty result set = SQL returned without RETURN NEXT, which means
         // the function refused the update (insufficient balance).
         const current = await getBalance(userId);
+        /** @type {BalanceError} */
         const err = new Error("insufficient_balance");
         err.code = "insufficient_balance";
         err.balance = Number(current?.balance) || 0;
@@ -1091,6 +1142,7 @@ async function _updateBalanceUnsafe(userId, delta, type, details) {
     if (wouldBe < 0) {
       // Respect the "never negative" invariant at the API layer so callers
       // see a real error rather than a silent clamp.
+      /** @type {BalanceError} */
       const err = new Error("insufficient_balance");
       err.code = "insufficient_balance";
       err.balance = currentBalance;
@@ -1237,6 +1289,10 @@ export async function transferBalance(fromId, toId, amount, tax = 0, type = "tra
 
 export async function claimDaily(userId) {
   if (!supabase) return { success: false, offline: true };
+  // Capture the non-null client so it stays narrowed inside the async closure
+  // below (TS can't prove the module-level `supabase` let isn't reassigned across
+  // an await; closeDatabase() does null it at shutdown).
+  const sb = supabase;
   // Durable store gone dark — refuse rather than stamp a cooldown + credit that
   // can't be flushed. Surfaced to callers as the transient claim_failed message.
   if (!isPersistenceHealthy()) return { success: false, error: "claim_failed" };
@@ -1248,7 +1304,7 @@ export async function claimDaily(userId) {
     const lastDaily = current.last_daily ? new Date(current.last_daily) : null;
 
     if (lastDaily) {
-      const hoursSince = (now - lastDaily) / 3_600_000;
+      const hoursSince = (now.getTime() - lastDaily.getTime()) / 3_600_000;
       if (hoursSince < 20) {
         const hoursLeft = Math.ceil(20 - hoursSince);
         return { success: false, hoursLeft };
@@ -1267,7 +1323,7 @@ export async function claimDaily(userId) {
     // to re-claim forever. If the stamp write itself fails, abort WITHOUT
     // crediting. The durable fix is the atomic claim RPC (migration 003).
     try {
-      const { error: stampErr } = await supabase.from("eris_economy")
+      const { error: stampErr } = await sb.from("eris_economy")
         .update({ daily_streak: streak, last_daily: now.toISOString() })
         .eq("user_id", userId);
       if (stampErr) throw new Error(stampErr.message);
@@ -1320,6 +1376,12 @@ export function getLeaderboardAxisInfo(axis) {
   return LEADERBOARD_AXES[axis] || null;
 }
 
+/**
+ * @returns {Promise<
+ *   { error: string, axis?: undefined, label?: undefined, suffix?: undefined, rows?: undefined }
+ *   | { error?: undefined, axis: string, label: string, suffix: string, rows: Array<{ user_id: string, value: number }> }
+ * >}
+ */
 export async function getLeaderboardByAxis(axis, limit = 10) {
   const info = LEADERBOARD_AXES[axis];
   if (!info) return { error: `unknown axis "${axis}". try: ${Object.keys(LEADERBOARD_AXES).join(", ")}` };
@@ -1344,7 +1406,11 @@ export async function getLeaderboardByAxis(axis, limit = 10) {
     .order("user_id", { ascending: true })
     .limit(limit);
   if (error) return { error: error.message };
-  const rows = (data || [])
+  // `data` is typed as a ParserError because the select list is built from a
+  // dynamic column name (`info.column`) the typed client can't parse statically.
+  // The shape is a plain row array at runtime.
+  const dataRows = /** @type {Row[]} */ (/** @type {unknown} */ (data) || []);
+  const rows = dataRows
     .map((r) => ({ user_id: r.user_id, value: r[info.column] ?? 0 }))
     .filter((r) => r.value > 0); // hide users with no activity on this axis
   return { axis, label: info.label, suffix: info.suffix, rows };
@@ -1644,7 +1710,7 @@ export async function removeFromInventory(userId, itemName) {
 export async function hasItem(userId, itemName) {
   if (!supabase) return false;
   const { data } = await supabase.from("eris_inventory").select("id").eq("user_id", userId).eq("item_name", itemName).limit(1);
-  return data?.length > 0;
+  return (data?.length ?? 0) > 0;
 }
 
 // ─── ACHIEVEMENTS ───────────────────────────────────────────────────────────
@@ -1666,7 +1732,7 @@ export async function getUnlockedAchievements(userId) {
 export async function hasAchievement(userId, key) {
   if (!supabase) return false;
   const { data } = await supabase.from("eris_achievements").select("id").eq("user_id", userId).eq("achievement_key", key).limit(1);
-  return data?.length > 0;
+  return (data?.length ?? 0) > 0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1737,6 +1803,7 @@ export async function createDailyChallenge(guildId, type, target, reward, date) 
 
 export async function completeDailyChallenge(challengeId, userId) {
   if (!supabase) return;
+  const sb = supabase; // narrow non-null across the async closure below
   // Wrap the read-modify-write in a per-challenge lock so two concurrent
   // completions on the same challenge can't both read the same completed_by
   // array, both push their id, and the second write clobber the first
@@ -1747,15 +1814,15 @@ export async function completeDailyChallenge(challengeId, userId) {
   return withUserLock(challengeId, async () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const { data } = await supabase.from("eris_daily_challenges").select("completed_by").eq("id", challengeId).single();
+        const { data } = await sb.from("eris_daily_challenges").select("completed_by").eq("id", challengeId).single();
         const completed = data?.completed_by || [];
         if (completed.includes(userId)) return; // already completed — no-op
         const next = [...completed, userId];
-        await supabase.from("eris_daily_challenges").update({ completed_by: next }).eq("id", challengeId);
+        await sb.from("eris_daily_challenges").update({ completed_by: next }).eq("id", challengeId);
         // Defense-in-depth: re-read and confirm our id landed. If a racing
         // writer overwrote us (only possible across instances since the
         // lock above serializes within a process), retry once.
-        const { data: verify } = await supabase.from("eris_daily_challenges").select("completed_by").eq("id", challengeId).single();
+        const { data: verify } = await sb.from("eris_daily_challenges").select("completed_by").eq("id", challengeId).single();
         if ((verify?.completed_by || []).includes(userId)) return;
       } catch (e) { log(`[DB] ${e.message}`); return; }
     }
@@ -1975,15 +2042,16 @@ async function _withHeistLock(heistId, fn) {
 
 export async function joinHeist(heistId, userId) {
   if (!supabase) return;
+  const sb = supabase; // narrow non-null across the async closure below
   return _withHeistLock(heistId, async () => {
     try {
       // Re-read inside the lock so another concurrent join that already
       // committed is visible here.
-      const { data } = await supabase.from("eris_heists").select("participants").eq("id", heistId).single();
+      const { data } = await sb.from("eris_heists").select("participants").eq("id", heistId).single();
       const parts = data?.participants || [];
       if (parts.includes(userId)) return; // already joined — no-op
       parts.push(userId);
-      await supabase.from("eris_heists").update({ participants: parts }).eq("id", heistId);
+      await sb.from("eris_heists").update({ participants: parts }).eq("id", heistId);
     } catch (e) { log(`[DB] joinHeist: ${e.message}`); }
   });
 }
@@ -2050,6 +2118,7 @@ async function _withAuctionLock(auctionId, fn) {
 
 export async function bidOnAuction(auctionId, bidderId, amount) {
   if (!supabase) return false;
+  const sb = supabase; // narrow non-null across the async closure below
   return _withAuctionLock(auctionId, async () => {
     // Up to 2 attempts: if the optimistic-concurrency .eq("current_bid", ...)
     // matches zero rows (some other writer slipped in between read and write,
@@ -2057,7 +2126,7 @@ export async function bidOnAuction(auctionId, bidderId, amount) {
     // and try once more.
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const { data } = await supabase.from("eris_auctions").select("*").eq("id", auctionId).single();
+        const { data } = await sb.from("eris_auctions").select("*").eq("id", auctionId).single();
         if (!data || data.status !== "active" || amount <= data.current_bid) return false;
         const lastSeen = data.current_bid;
         const prevBidderId = data.current_bidder_id || null;
@@ -2072,7 +2141,7 @@ export async function bidOnAuction(auctionId, bidderId, amount) {
         // still what we just read. If a concurrent writer changed it, the
         // .eq() filter matches zero rows and the update is a no-op — refund the
         // escrow and retry the read.
-        const { data: updated } = await supabase
+        const { data: updated } = await sb
           .from("eris_auctions")
           .update({ current_bid: amount, current_bidder_id: bidderId })
           .eq("id", auctionId)
@@ -2382,20 +2451,21 @@ export async function deleteMarriage(userId) {
 
 export async function claimWeekly(userId) {
   if (!supabase) return { success: false, offline: true };
+  const sb = supabase; // narrow non-null across the async closure below
   if (!isPersistenceHealthy()) return { success: false, error: "claim_failed" };
   return withEconLock(userId, async () => {
     const econ = await getBalance(userId);
     const now = new Date();
     const lastWeekly = econ.last_weekly ? new Date(econ.last_weekly) : null;
-    if (lastWeekly && (now - lastWeekly) < 168 * 3_600_000) {
-      const hoursLeft = Math.ceil((168 * 3_600_000 - (now - lastWeekly)) / 3_600_000);
+    if (lastWeekly && (now.getTime() - lastWeekly.getTime()) < 168 * 3_600_000) {
+      const hoursLeft = Math.ceil((168 * 3_600_000 - (now.getTime() - lastWeekly.getTime())) / 3_600_000);
       return { success: false, hoursLeft };
     }
-    const streak = lastWeekly && (now - lastWeekly) < 336 * 3_600_000 ? (econ.weekly_streak || 0) + 1 : 1;
+    const streak = lastWeekly && (now.getTime() - lastWeekly.getTime()) < 336 * 3_600_000 ? (econ.weekly_streak || 0) + 1 : 1;
     const coins = 500 + streak * 100;
     // Fail-closed ordering: stamp the cooldown BEFORE crediting (see claimDaily).
     try {
-      const { error: stampErr } = await supabase.from("eris_economy")
+      const { error: stampErr } = await sb.from("eris_economy")
         .update({ last_weekly: now.toISOString(), weekly_streak: streak })
         .eq("user_id", userId);
       if (stampErr) throw new Error(stampErr.message);
@@ -2414,20 +2484,21 @@ export async function claimWeekly(userId) {
 
 export async function claimMonthly(userId) {
   if (!supabase) return { success: false, offline: true };
+  const sb = supabase; // narrow non-null across the async closure below
   if (!isPersistenceHealthy()) return { success: false, error: "claim_failed" };
   return withEconLock(userId, async () => {
     const econ = await getBalance(userId);
     const now = new Date();
     const lastMonthly = econ.last_monthly ? new Date(econ.last_monthly) : null;
-    if (lastMonthly && (now - lastMonthly) < 720 * 3_600_000) {
-      const hoursLeft = Math.ceil((720 * 3_600_000 - (now - lastMonthly)) / 3_600_000);
+    if (lastMonthly && (now.getTime() - lastMonthly.getTime()) < 720 * 3_600_000) {
+      const hoursLeft = Math.ceil((720 * 3_600_000 - (now.getTime() - lastMonthly.getTime())) / 3_600_000);
       return { success: false, hoursLeft };
     }
-    const streak = lastMonthly && (now - lastMonthly) < 1440 * 3_600_000 ? (econ.monthly_streak || 0) + 1 : 1;
+    const streak = lastMonthly && (now.getTime() - lastMonthly.getTime()) < 1440 * 3_600_000 ? (econ.monthly_streak || 0) + 1 : 1;
     const coins = 5000 + streak * 1000;
     // Fail-closed ordering: stamp the cooldown BEFORE crediting (see claimDaily).
     try {
-      const { error: stampErr } = await supabase.from("eris_economy")
+      const { error: stampErr } = await sb.from("eris_economy")
         .update({ last_monthly: now.toISOString(), monthly_streak: streak })
         .eq("user_id", userId);
       if (stampErr) throw new Error(stampErr.message);
@@ -2515,6 +2586,9 @@ export function incrementCareerCount(userId) {
   return getCareerTier(userId);
 }
 
+/**
+ * @returns {{ onCooldown: true, remainingMs: number, remainingSec: number } | { onCooldown: false }}
+ */
 export function checkCooldown(userId, toolName, cooldownMs) {
   const key = `${userId}:${toolName}`;
   const last = _cooldowns.get(key) || 0;
@@ -2532,6 +2606,8 @@ export function setCooldown(userId, toolName) {
  * the check/set pair to close the race where two parallel calls both read
  * the old timestamp, both see "not on cooldown", and both pass through.
  * Returns the same shape as checkCooldown so it drops in as a replacement.
+ *
+ * @returns {{ onCooldown: true, remainingMs: number, remainingSec: number } | { onCooldown: false }}
  */
 export function tryAcquireCooldown(userId, toolName, cooldownMs) {
   const key = `${userId}:${toolName}`;

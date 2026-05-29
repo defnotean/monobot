@@ -178,7 +178,7 @@ export async function executeEconomyTool(toolName, input, message) {
     case "loan_status": {
       const loan = await db.getActiveLoan(message.author.id);
       if (!loan) return "you don't have any active loans. good for you";
-      const hoursLeft = Math.max(0, (new Date(loan.due_at) - Date.now()) / 3600_000);
+      const hoursLeft = Math.max(0, (new Date(loan.due_at).getTime() - Date.now()) / 3600_000);
       const hoursOverdue = hoursLeft <= 0 ? Math.abs(hoursLeft) : 0;
       const total = calculateLoanTotal(loan.amount, loan.interest_rate, Math.floor(hoursOverdue));
       return `you owe **${total}** coins (${loan.amount} + interest${hoursOverdue > 0 ? " + OVERDUE PENALTY" : ""}). ${hoursLeft > 0 ? `${Math.floor(hoursLeft)}h left` : "OVERDUE — pay up NOW"}`;
@@ -192,7 +192,7 @@ export async function executeEconomyTool(toolName, input, message) {
       return db.withUserLock(message.author.id, async () => {
         const loan = await db.getActiveLoan(message.author.id);
         if (!loan) return "you don't have any active loans";
-        const hoursOverdue = Math.max(0, (Date.now() - new Date(loan.due_at)) / 3600_000);
+        const hoursOverdue = Math.max(0, (Date.now() - new Date(loan.due_at).getTime()) / 3600_000);
         const total = calculateLoanTotal(loan.amount, loan.interest_rate, Math.floor(hoursOverdue));
         const econ = await db.getBalance(message.author.id);
         if (econ.balance < total) return `you owe ${total} coins but only have ${econ.balance}. get gambling`;

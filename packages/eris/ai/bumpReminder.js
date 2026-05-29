@@ -120,6 +120,10 @@ export function extractBumperUserId(message, serviceKey) {
 
 // ─── Entry point: called from messageCreate when a bump confirms ────────────
 
+/**
+ * @param {import("discord.js").Message} message
+ * @param {string|null} [serviceKeyOverride]
+ */
 export async function handleBumpConfirm(message, serviceKeyOverride = null) {
   const guildId = message.guild?.id;
   const channelId = message.channel.id;
@@ -157,7 +161,7 @@ export async function handleBumpConfirm(message, serviceKeyOverride = null) {
         const guild = message.client.guilds.cache.get(guildId);
         const member = guild?.members?.cache?.get(bumperId)
           ?? await guild?.members?.fetch?.(bumperId).catch(() => null);
-        const bumperName = member?.displayName || member?.user?.username || null;
+        const bumperName = member?.displayName || member?.user?.username || undefined;
         await sendBumpApplause({
           bumpMessage: message,
           guildId,
@@ -381,7 +385,9 @@ async function generateAiReminder({ guild, serviceKey, settings, quiet, wasOffli
     const leaderboard = await getBumpLeaderboard(guild.id, { limit: 1, periodDays: 7 });
     if (leaderboard?.[0]) {
       const m = guild.members.cache.get(leaderboard[0].user_id);
-      topBumperName = m?.displayName || leaderboard[0].username || null;
+      // Leaderboard rows are { user_id, count } — no username field — so fall
+      // back to the cached member's display name (or null if uncached).
+      topBumperName = m?.displayName || null;
     }
     const last = await getLastBumper(guild.id, serviceKey);
     if (last?.user_id) {
@@ -440,6 +446,11 @@ async function generateAiReminder({ guild, serviceKey, settings, quiet, wasOffli
       // Prefer a fast model. Reuse the existing key pool if available.
       (async () => ({
         getConvClientForBump: async () => {
+          // Optional probe for a key-pool module that isn't present in this
+          // package (the live pool lives in @defnotean/shared/keyPool, wired via
+          // events/messageCreate/geminiPool.js). The .catch() makes the missing
+          // module a graceful no-op that falls through to the single-key path.
+          // @ts-ignore -- intentional import of a non-existent optional module
           const mod = await import("../ai/keyPool.js").catch(() => null);
           if (mod?.getGeminiClient) return mod.getGeminiClient();
           // Fallback: spin up a client from the first key.
@@ -780,6 +791,7 @@ async function postCountdownEmbed(client, guildId, serviceKey, channelId, schedu
   const prev = _activeCountdowns.get(key);
   if (prev?.interval) clearInterval(prev.interval);
 
+  /** @type {{ messageId: string, channelId: string, interval: NodeJS.Timeout | null }} */
   const state = { messageId: msg.id, channelId, interval: null };
   _activeCountdowns.set(key, state);
 
@@ -792,7 +804,7 @@ async function postCountdownEmbed(client, guildId, serviceKey, channelId, schedu
       const remaining = scheduledAt - now;
       const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = await import("discord.js");
       if (remaining <= 0) {
-        clearInterval(state.interval);
+        if (state.interval) clearInterval(state.interval);
         _activeCountdowns.delete(key);
         const { embed } = buildCountdownEmbed({ svc, scheduledAt, startedAt, durationMs, EmbedBuilder, done: true });
         const bumpNowRow = new ActionRowBuilder().addComponents(

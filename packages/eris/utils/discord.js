@@ -18,6 +18,18 @@ export async function getChannelSafe(client, channelId) {
 }
 
 /**
+ * Safely read a channel's `.name`. DM / group-DM channels in the discord.js
+ * channel union have no `name`, so a bare `channel.name` is both a type error
+ * and `undefined` at runtime. Returns `undefined` for nameless channels.
+ *
+ * @param {import("discord.js").Channel | null | undefined} channel
+ * @returns {string | undefined}
+ */
+export function channelName(channel) {
+  return channel && "name" in channel ? channel.name ?? undefined : undefined;
+}
+
+/**
  * Channels that must never be picked as a fallback target for random events.
  * Matches name substrings (case-insensitive).
  */

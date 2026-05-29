@@ -1699,7 +1699,10 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
           const candidate = page?.original?.source || page?.thumbnail?.source || null;
           if (candidate && !/\.svg(\?|$)/i.test(candidate)) { imageUrl = candidate; source = "wikipedia"; }
         }
-      } catch {}
+      } catch (e) {
+        // Best-effort: fall through to the next image source on any failure.
+        log(`[Executor] Wikipedia image lookup failed for "${query}": ${e?.message || e}`);
+      }
 
       // Source 2: Openverse — free CC image search, no key, broader coverage.
       if (!imageUrl) {
@@ -1707,7 +1710,10 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
           const or = await safeFetch(`https://api.openverse.org/v1/images/?q=${q}&page_size=5&mature=false`, fetchOpts);
           const item = (JSON.parse(or.text)?.results || []).find((r) => r.url && !/\.svg(\?|$)/i.test(r.url));
           if (item) { imageUrl = item.url || item.thumbnail; source = "openverse"; }
-        } catch {}
+        } catch (e) {
+          // Best-effort: no image found is handled below.
+          log(`[Executor] Openverse image lookup failed for "${query}": ${e?.message || e}`);
+        }
       }
 
       if (!imageUrl) return `couldn't find a good photo of "${query}" — tell the user in your own words (maybe describe it instead)`;

@@ -21,11 +21,19 @@
 //  12. Combined export + tool-registry wiring ................. ~line 1771
 // ────────────────────────────────────────────────────────────────────────────
 
+/**
+ * A single AI tool declaration (Anthropic schema format). `input_schema` and
+ * `tags` vary per tool, so they're typed loosely — this is pure declaration
+ * data consumed by the provider formatters and the tool registry.
+ * @typedef {{ name: string, description: string, input_schema?: any, tags?: string[] }} ToolDef
+ */
+
 // ═══════════════════════════════════════════════════════════════════════════
 // EVERYONE TOOLS — MEMORY, DIRECTIVES, SELF-KNOWLEDGE
 // remember_fact / forget_fact / forget_all / recall_memories — per-user facts
 // save_directive / list_directives / remove_directive — server behavior rules
 // ═══════════════════════════════════════════════════════════════════════════
+/** @type {ToolDef[]} */
 export const EVERYONE_TOOLS = [
   {
     name: "remember_fact",
@@ -1364,6 +1372,7 @@ export const EVERYONE_TOOLS = [
 // audit description, live personality update, full game/slot odds rigging,
 // minion management.
 // ═══════════════════════════════════════════════════════════════════════════
+/** @type {ToolDef[]} */
 export const OWNER_TOOLS = [
   {
     name: "execute_terminal",

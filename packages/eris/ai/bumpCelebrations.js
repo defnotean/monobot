@@ -346,7 +346,7 @@ function _isoWeekKey(d = new Date()) {
   const dayNum = (t.getUTCDay() + 6) % 7;
   t.setUTCDate(t.getUTCDate() - dayNum + 3);
   const firstThu = new Date(Date.UTC(t.getUTCFullYear(), 0, 4));
-  const week = 1 + Math.round(((t - firstThu) / 86400000 - 3 + ((firstThu.getUTCDay() + 6) % 7)) / 7);
+  const week = 1 + Math.round(((t.getTime() - firstThu.getTime()) / 86400000 - 3 + ((firstThu.getUTCDay() + 6) % 7)) / 7);
   return `${t.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 

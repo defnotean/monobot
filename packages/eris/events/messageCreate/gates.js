@@ -16,6 +16,7 @@ import { checkCooldown } from "../../utils/cooldown.js";
 import { detectBumpService, handleBumpConfirm } from "../../ai/bumpReminder.js";
 import { isRateLimited } from "../../ai/providers/index.js";
 import { checkInjection } from "../../ai/firewall.js";
+import { channelName } from "../../utils/discord.js";
 import { periodicUpdate } from "../../ai/humanity.js";
 import { LRUCache } from "@defnotean/shared/LRUCache";
 import { isSleeping, wakeSleep } from "./sleepState.js";
@@ -48,6 +49,7 @@ export function forgetAwaitingReply(channelId) {
   _awaitingReply.delete(channelId);
 }
 
+/** @type {{ stop: true }} */
 const STOP = { stop: true };
 
 /**
@@ -78,7 +80,7 @@ export async function runGates(message) {
     if (message.author?.bot && message.guild) {
       const serviceKey = detectBumpService(message);
       if (serviceKey) {
-        log(`[BUMP] ✓ Detected ${serviceKey} bump in ${message.guild.name} #${message.channel.name} from bot ${message.author.username}`);
+        log(`[BUMP] ✓ Detected ${serviceKey} bump in ${message.guild.name} #${channelName(message.channel)} from bot ${message.author.username}`);
         handleBumpConfirm(message, serviceKey).catch(e => log(`[BUMP] confirm handler failed: ${e.message}`));
       } else {
         // Log bot messages from known bump service bot IDs so we can see
@@ -249,7 +251,7 @@ export async function runGates(message) {
     if (directives.length) {
       const channelDirectives = directives.filter(d =>
         d.channel === message.channel.id ||
-        d.channel === message.channel.name
+        d.channel === channelName(message.channel)
       );
       const silenced = channelDirectives.some(d => {
         const t = (d.text || "").toLowerCase();

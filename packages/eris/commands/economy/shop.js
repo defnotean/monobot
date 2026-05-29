@@ -27,6 +27,7 @@ function getItemsForCategory(catKey) {
 const PURPLE = 0x9333EA;
 const PER_PAGE = 10;
 
+/** @param {number|null} [balance] */
 function buildOverviewEmbed(balance = null) {
   const lines = CATEGORIES.map(cat => {
     const items = getItemsForCategory(cat.key);
@@ -45,7 +46,13 @@ function buildOverviewEmbed(balance = null) {
 // Types that can only be bought once
 const UNIQUE_TYPES = new Set(["equipment", "upgrade", "pet_gear", "pet_cosmetic", "cosmetic"]);
 
-// userItems = Set of item names the user owns, hasPet = bool
+/**
+ * @param {string} catKey
+ * @param {number} [page]
+ * @param {number|null} [balance]
+ * @param {Set<any>|null} [userItems] item names the user owns
+ * @param {boolean} [hasPet]
+ */
 function buildCategoryEmbed(catKey, page = 0, balance = null, userItems = null, hasPet = false) {
   const cat = CATEGORIES.find(c => c.key === catKey);
   if (!cat) return null;
@@ -94,6 +101,7 @@ function isItemBuyable(item, userItems, hasPet) {
 
 // ─── Components ─────────────────────────────────────────────────────────────
 
+/** @param {string|null} [selectedKey] */
 function buildCategorySelect(selectedKey = null) {
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
@@ -111,6 +119,13 @@ function buildCategorySelect(selectedKey = null) {
   );
 }
 
+/**
+ * @param {any[]} items
+ * @param {string} catKey
+ * @param {number} page
+ * @param {Set<any>|null} [userItems]
+ * @param {boolean} [hasPet]
+ */
 function buildItemSelect(items, catKey, page, userItems = null, hasPet = false) {
   // Only show items the user can actually buy (not owned unique, not locked)
   const buyable = items.filter(i => isItemBuyable(i, userItems, hasPet));
@@ -141,7 +156,15 @@ function buildPageRow(catKey, page, totalPages) {
   );
 }
 
-// Assemble all components for a category view (max 5 rows)
+/**
+ * Assemble all components for a category view (max 5 rows).
+ * @param {string} catKey
+ * @param {number} page
+ * @param {any[]} items
+ * @param {number} totalPages
+ * @param {Set<any>|null} [userItems] item names the user owns
+ * @param {boolean} [hasPet]
+ */
 function buildCategoryComponents(catKey, page, items, totalPages, userItems = null, hasPet = false) {
   const rows = [buildCategorySelect(catKey)];
   const itemSel = buildItemSelect(items, catKey, page, userItems, hasPet);

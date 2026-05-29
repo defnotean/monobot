@@ -46,7 +46,7 @@ const PAYOUT_MULTIPLIER = {
 
 /**
  * Spin the wheel — uniform random integer in [0, 36].
- * @param {() => number} [rng] — optional injected rng for testing
+ * @param {() => number} [rng] - optional injected rng for testing
  */
 export function spin(rng = Math.random) {
   return Math.floor(rng() * 37);
@@ -68,14 +68,16 @@ export function colorOf(n) {
  * - amount must be a positive finite integer
  * - for straight, number must be 0–36
  * - for non-straight, number is ignored
+ *
+ * @param {{ type?: string, amount?: number, number?: number }} [bet]
  */
 export function validateBet({ type, amount, number } = {}) {
-  if (!BET_TYPES.includes(type)) return { ok: false, reason: "invalid_type" };
-  if (!Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) {
+  if (typeof type !== "string" || !BET_TYPES.includes(type)) return { ok: false, reason: "invalid_type" };
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) {
     return { ok: false, reason: "invalid_amount" };
   }
   if (type === "straight") {
-    if (!Number.isInteger(number) || number < 0 || number > 36) {
+    if (typeof number !== "number" || !Number.isInteger(number) || number < 0 || number > 36) {
       return { ok: false, reason: "invalid_number" };
     }
   }

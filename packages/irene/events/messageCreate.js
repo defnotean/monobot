@@ -15,7 +15,7 @@
 //   - getConversations / preloadConversations (presence.js)
 //   - invalidatePersonalityCache (presence.js — invoked on persona reload)
 
-import { MessageFlags, PermissionFlagsBits } from "discord.js";
+import { MessageFlags, PermissionFlagsBits, ChannelType } from "discord.js";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
 import {
@@ -177,8 +177,7 @@ export async function execute(message) {
   }
 
   // TTS: if message is in a VC text chat with TTS enabled, speak it
-  // Channel type 2 = GuildVoice, 13 = GuildStageVoice
-  if (!message.author.bot && message.guild && (message.channel.type === 2 || message.channel.type === 13)) {
+  if (!message.author.bot && message.guild && (message.channel.type === ChannelType.GuildVoice || message.channel.type === ChannelType.GuildStageVoice)) {
     const ttsChannels = getTtsChannels(message.guild.id);
     if (ttsChannels.includes(message.channel.id) && message.content && !message.content.startsWith("!") && !message.mentions.has(message.client.user)) {
       const { playTTS } = await import("../music/player.js");
