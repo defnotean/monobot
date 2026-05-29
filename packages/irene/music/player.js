@@ -13,6 +13,7 @@ import { onTrackStart, onTrackEnd, hasSession, extractSongInfo, stopKaraoke } fr
 import { log } from "../utils/logger.js";
 import { saveQueue as dbSaveQueue, getSavedQueues, clearSavedQueue, clearAllSavedQueues } from "../database.js";
 import * as settingsStore from "./settingsStore.js";
+import { safeDiscordAction, safeDiscordSync } from "../utils/safeDiscord.js";
 
 // Shoukaku instance — set by initMusic() from index.js
 let shoukaku = null;
@@ -123,14 +124,16 @@ export function deleteQueue(guildId) {
   if (queue._autoLeaveTimer) clearTimeout(queue._autoLeaveTimer);
   if (queue._stuckTimeout) clearTimeout(queue._stuckTimeout);
   if (queue._aloneDisconnectTimer) clearTimeout(queue._aloneDisconnectTimer);
-  try { queue.nowPlayingMsg?.delete().catch(() => {}); } catch {}
+  if (queue.nowPlayingMsg) {
+    void safeDiscordAction(`music.deleteQueue.deletePanel guild=${guildId}`, () => queue.nowPlayingMsg.delete());
+  }
   // Stop lyrics if running — music is gone
   if (hasSession(guildId)) stopKaraoke(guildId, "queue deleted").catch(() => {});
   // Remove all event listeners to prevent memory leak
-  try { queue.player?.removeAllListeners(); } catch {}
-  try { queue.player?.stopTrack(); } catch {}
-  try { queue.player?.connection?.disconnect(); } catch {}
-  try { shoukaku?.leaveVoiceChannel(guildId); } catch {}
+  if (queue.player) safeDiscordSync(`music.deleteQueue.removeListeners guild=${guildId}`, () => queue.player.removeAllListeners());
+  if (queue.player?.stopTrack) void safeDiscordAction(`music.deleteQueue.stopTrack guild=${guildId}`, () => queue.player.stopTrack());
+  if (queue.player?.connection?.disconnect) void safeDiscordAction(`music.deleteQueue.disconnect guild=${guildId}`, () => queue.player.connection.disconnect());
+  if (shoukaku?.leaveVoiceChannel) void safeDiscordAction(`music.deleteQueue.leaveVoice guild=${guildId}`, () => shoukaku.leaveVoiceChannel(guildId));
   // Null the player reference — stops any post-deletion playSong() call from
   // operating on a freshly-stopped-but-still-referenced player. The queue
   // object itself is also orphaned but anyone holding a reference shouldn't
@@ -188,8 +191,8 @@ export function handleVoiceMembershipChange(guildId, opts = {}) {
     // Only pause an actively-playing queue: pausing an idle player and then
     // resuming it on rejoin would un-pause something that was never playing.
     if (queue.playing && queue.player && !queue.player.paused) {
-      try { queue.player.setPaused(true); } catch {}
-      queue._pausedForEmpty = true;
+      const paused = safeDiscordSync(`music.pauseEmptyVc guild=${guildId}`, () => queue.player.setPaused(true));
+      queue._pausedForEmpty = paused;
     }
     if (!queue._aloneDisconnectTimer) {
       queue._aloneDisconnectTimer = setTimeout(() => {
@@ -218,7 +221,7 @@ export function handleVoiceMembershipChange(guildId, opts = {}) {
   if (queue._pausedForEmpty) {
     queue._pausedForEmpty = false;
     if (queue.player && queue.player.paused) {
-      try { queue.player.setPaused(false); resumed = true; } catch {}
+      resumed = safeDiscordSync(`music.resumeOccupiedVc guild=${guildId}`, () => queue.player.setPaused(false));
     }
     log(`[Music] Member rejoined VC for ${guildId} — resumed playback`);
   }
@@ -278,7 +281,9 @@ function buildNowPlayingPanel(queue) {
 
 async function sendNowPlayingPanel(queue) {
   // Delete old panel
-  try { await queue.nowPlayingMsg?.delete().catch(() => {}); } catch {}
+  if (queue.nowPlayingMsg) {
+    await safeDiscordAction(`music.sendNowPlaying.deleteOld guild=${queue.guildId}`, () => queue.nowPlayingMsg.delete());
+  }
   queue.nowPlayingMsg = null;
 
   const panel = buildNowPlayingPanel(queue);
@@ -295,13 +300,14 @@ async function sendNowPlayingPanel(queue) {
 
   try {
     queue.nowPlayingMsg = await targetChannel.send(panel);
-  } catch {
+  } catch (error) {
+    log(`[Music] Failed to send now-playing panel to primary channel in ${queue.guildId}: ${error?.message || error}`);
     // If VC chat fails (permissions), fall back to text channel
     if (targetChannel !== queue.textChannel && queue.textChannel) {
       try {
         queue.nowPlayingMsg = await queue.textChannel.send(panel);
       } catch (err) {
-        log(`[Music] Failed to send now-playing panel: ${err.message}`);
+        log(`[Music] Failed to send now-playing panel fallback in ${queue.guildId}: ${err?.message || err}`);
       }
     }
   }
@@ -328,7 +334,7 @@ export async function connectToChannel(queue) {
   // joinVoiceChannel may return the same Player instance — without this
   // we'd accumulate listeners and fire handleTrackEnd N times per end
   // event, which silently skips N-1 songs ahead of schedule.
-  try { player.removeAllListeners(); } catch {}
+  safeDiscordSync(`music.connect.removeListeners guild=${queue.guildId}`, () => player.removeAllListeners());
 
   queue.player = player;
 
@@ -389,7 +395,9 @@ export async function connectToChannel(queue) {
       // still has the guild in its connections Map — joinVoiceChannel on the
       // next tick would throw "This guild already have an existing connection".
       // Tear it down here so the rejoin gets a fresh slot.
-      try { shoukaku?.leaveVoiceChannel(queue.guildId); } catch {}
+      if (shoukaku?.leaveVoiceChannel) {
+        void safeDiscordAction(`music.reconnect.leaveVoice guild=${queue.guildId}`, () => shoukaku.leaveVoiceChannel(queue.guildId));
+      }
 
       setTimeout(async () => {
         try {
@@ -883,7 +891,7 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
         proc.stdin.end();
       });
       audioBuffer = readFileSync(tmpPath);
-      try { unlinkSync(tmpPath); } catch {}
+      safeDiscordSync(`tts.unlinkTmp path=${tmpPath}`, () => unlinkSync(tmpPath));
       log(`[TTS] piper produced ${audioBuffer.length} bytes`);
     } else {
       // Use exact format from Google's TTS docs

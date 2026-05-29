@@ -87,25 +87,43 @@ async function handleAdd(interaction) {
 
   if (member) {
     if (escalation.ban_at !== null && count >= escalation.ban_at) {
-      try {
-        await interaction.guild.members.ban(user, { reason: `Auto-escalation: ${count} warnings` });
-        escalationNote = `🚫 Auto-banned after reaching **${count}** warnings.`;
-      } catch (err) {
-        escalationNote = `⚠️ Auto-ban failed: ${err.message}`;
+      if (!interaction.guild.members.me.permissions.has(PermissionFlagsBits.BanMembers)) {
+        escalationNote = "Auto-ban skipped: I need **Ban Members**.";
+      } else if (!member.bannable) {
+        escalationNote = `Auto-ban skipped: ${user.tag} is above me in the role hierarchy.`;
+      } else {
+        try {
+          await interaction.guild.members.ban(user, { reason: `Auto-escalation: ${count} warnings` });
+          escalationNote = `🚫 Auto-banned after reaching **${count}** warnings.`;
+        } catch (err) {
+          escalationNote = `⚠️ Auto-ban failed: ${err.message}`;
+        }
       }
     } else if (escalation.kick_at !== null && count >= escalation.kick_at) {
-      try {
-        await member.kick(`Auto-escalation: ${count} warnings`);
-        escalationNote = `👢 Auto-kicked after reaching **${count}** warnings.`;
-      } catch (err) {
-        escalationNote = `⚠️ Auto-kick failed: ${err.message}`;
+      if (!interaction.guild.members.me.permissions.has(PermissionFlagsBits.KickMembers)) {
+        escalationNote = "Auto-kick skipped: I need **Kick Members**.";
+      } else if (!member.kickable) {
+        escalationNote = `Auto-kick skipped: ${user.tag} is above me in the role hierarchy.`;
+      } else {
+        try {
+          await member.kick(`Auto-escalation: ${count} warnings`);
+          escalationNote = `👢 Auto-kicked after reaching **${count}** warnings.`;
+        } catch (err) {
+          escalationNote = `⚠️ Auto-kick failed: ${err.message}`;
+        }
       }
     } else if (escalation.mute_at !== null && count >= escalation.mute_at) {
-      try {
-        await member.timeout(24 * 60 * 60 * 1000, `Auto-escalation: ${count} warnings`);
-        escalationNote = `🔇 Auto-timed out (24h) after reaching **${count}** warnings.`;
-      } catch (err) {
-        escalationNote = `⚠️ Auto-timeout failed: ${err.message}`;
+      if (!interaction.guild.members.me.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+        escalationNote = "Auto-timeout skipped: I need **Moderate Members**.";
+      } else if (!member.moderatable) {
+        escalationNote = `Auto-timeout skipped: ${user.tag} is above me in the role hierarchy.`;
+      } else {
+        try {
+          await member.timeout(24 * 60 * 60 * 1000, `Auto-escalation: ${count} warnings`);
+          escalationNote = `🔇 Auto-timed out (24h) after reaching **${count}** warnings.`;
+        } catch (err) {
+          escalationNote = `⚠️ Auto-timeout failed: ${err.message}`;
+        }
       }
     }
   }

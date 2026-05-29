@@ -91,6 +91,8 @@ import { modEmbed } from "../utils/embeds.js";
 import { log } from "../utils/logger.js";
 import { ADMIN_TOOLS, EVERYONE_TOOLS } from "./tools.js";
 import { tempChannels, tempTextChannels, tempVcSeq, manualRenames } from "../utils/tempvc.js";
+import { recordUnknownTool, _unknownToolCounts } from "./unknownTools.js";
+export { _unknownToolCounts } from "./unknownTools.js";
 
 // ─── Sub-Executor Imports ───────────────────────────────────────────────────
 import { execute as executeChannel } from "./executors/channelExecutor.js";
@@ -528,10 +530,8 @@ if (process.env.IRENE_SKIP_ALIAS_VALIDATION !== "1") {
   validateToolAliases(_toolRegistryNames, { throwOnDrift: true });
 }
 
-// Counter for AI-hallucinated tools. Logged on first occurrence and every 10th
-// thereafter so repeated hallucinations are visible without log spam. Exported
-// for tests so a regression can assert a hallucinated name is tracked.
-export const _unknownToolCounts = new Map();
+// Counter for AI-hallucinated tools. Bounded/pruned in unknownTools.js so a
+// long-running process cannot collect unbounded one-off hallucinated names.
 
 // ─── Tool Result Cache ─────────────────────────────────────────────────────
 const _toolCache = new Map();
@@ -2269,8 +2269,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
       // know so we can either add it or tighten the prompt. Logged on the
       // first hit and every 10th thereafter to stay visible without spam.
       const unknownUserId = message?.author?.id || "unknown";
-      _unknownToolCounts.set(toolName, (_unknownToolCounts.get(toolName) || 0) + 1);
-      const count = _unknownToolCounts.get(toolName);
+      const count = recordUnknownTool(toolName);
       const argPreview = JSON.stringify(input || {}).slice(0, 120);
       if (count === 1 || count % 10 === 0) {
         log(`[EXECUTOR] Unknown tool: ${toolName} (hit #${count}, user ${unknownUserId}, args: ${argPreview})`);

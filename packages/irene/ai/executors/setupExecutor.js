@@ -4,6 +4,7 @@ import { ChannelType, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, Butto
 import { setWelcomeChannel, setLogChannel, setAutorole, setAccessRole, setDmResults, setStatsChannels, addReactionRole, removeReactionRole, setStarboard, setColorRoles, getGuildSettings, getPatchFeeds, setPatchFeeds, getTwitchConfig, setTwitchConfig } from "../../database.js";
 import { KNOWN_FEEDS } from "../../utils/patchbot.js";
 import { log } from "../../utils/logger.js";
+import { isGuildCategory } from "../../utils/channelTypes.js";
 
 const HANDLED = new Set([
   "set_welcome_channel", "set_access_role", "setup_verification",
@@ -75,7 +76,7 @@ export async function execute(toolName, input, message, ctx) {
       // Also auto-detect: any channel with "rule", "verif", "welcome", "entrance" in the name
       const autoDetectKeywords = ["rule", "verif", "welcome", "entrance", "intro"];
       for (const ch of guild.channels.cache.values()) {
-        if (ch.type === 4) continue; // skip categories
+        if (isGuildCategory(ch)) continue;
         const lower = ch.name.toLowerCase();
         if (autoDetectKeywords.some(k => lower.includes(k)) && !publicChannelIds.includes(ch.id)) {
           publicChannelIds.push(ch.id);
@@ -113,7 +114,7 @@ export async function execute(toolName, input, message, ctx) {
 
         // First: lock ALL categories
         for (const ch of guild.channels.cache.values()) {
-          if (ch.type !== 4) continue;
+          if (!isGuildCategory(ch)) continue;
           const children = ch.children?.cache;
           const allPublic = children?.size > 0 && children.every(c => publicChannelIds.includes(c.id));
           await lockChannel(ch, allPublic);
@@ -121,7 +122,7 @@ export async function execute(toolName, input, message, ctx) {
 
         // Second: lock ALL individual channels
         for (const ch of guild.channels.cache.values()) {
-          if (ch.type === 4 || ch.isThread?.()) continue;
+          if (isGuildCategory(ch) || ch.isThread?.()) continue;
           if (!ch.permissionsFor?.(guild.members.me)?.has("ManageChannels")) { failed++; continue; }
           await lockChannel(ch, publicChannelIds.includes(ch.id));
         }

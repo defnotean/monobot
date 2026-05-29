@@ -81,6 +81,26 @@ export function _resetAuditForTest() {
   _auditDegraded = false;
 }
 
+function _memberLabel(member) {
+  return member?.user?.tag || member?.displayName || member?.id || "that user";
+}
+
+function _notBannableMessage(member) {
+  return `I can't ban ${_memberLabel(member)} - they are higher than me or Discord says this target is not bannable`;
+}
+
+async function _banMember(member, options, label) {
+  if (!member?.bannable) return { ok: false, message: _notBannableMessage(member) };
+  try {
+    await member.ban(options);
+    return { ok: true };
+  } catch (error) {
+    const msg = error?.message || String(error);
+    log(`[Moderation] ${label} failed for ${member?.id || "unknown"}: ${msg}`);
+    return { ok: false, message: `Failed to ban ${_memberLabel(member)}: ${msg}` };
+  }
+}
+
 // Resolve the durable-audit `source` from the executor ctx. Slash commands and
 // scheduled/presence-triggered calls don't set aiInitiated, so they're treated
 // as the slash-equivalent path ('slash'). The AI tool loop sets aiInitiated;
@@ -219,8 +239,9 @@ export async function commitPendingAction(pending, { guild, member, clickedBy, d
     if (hierErr) return { ok: false, message: hierErr };
 
     if (pending.action === "tempban") {
+      const banResult = await _banMember(target, { reason: _attributedReason(clickedBy, `[TEMP ${pending.durationStr}] ${reason}`) }, "confirmed tempban");
+      if (!banResult.ok) return banResult;
       deps.addTempBan(guild.id, target.id, target.user.tag, pending.durationMs, reason, clickedBy.id);
-      await target.ban({ reason: _attributedReason(clickedBy, `[TEMP ${pending.durationStr}] ${reason}`) });
       deps.firePunishSignal?.({ guildId: guild.id, userId: target.id, action: "ban", reason }).catch(() => {});
       // Durable audit: actor is the human who CLICKED Confirm; record the
       // original AI instruction stashed at defer time.
@@ -232,7 +253,8 @@ export async function commitPendingAction(pending, { guild, member, clickedBy, d
       return { ok: true, message: `Temp-banned ${target.user.tag} for ${pending.durationStr} — reason: ${reason}.` };
     }
 
-    await target.ban({ deleteMessageDays: pending.input.delete_messages || 0, reason: _attributedReason(clickedBy, reason) });
+    const banResult = await _banMember(target, { deleteMessageDays: pending.input.delete_messages || 0, reason: _attributedReason(clickedBy, reason) }, "confirmed ban");
+    if (!banResult.ok) return banResult;
     deps.firePunishSignal?.({ guildId: guild.id, userId: target.id, action: "ban", reason }).catch(() => {});
     // Mirror the inline ban_user mod-log + undo row so a button-confirmed ban
     // is indistinguishable from any other ban (actor is the human who clicked).
@@ -373,6 +395,8 @@ export async function execute(toolName, input, message, ctx) {
       if (member.id === message.client.user.id) return "I can't ban myself lol";
       const banHierErr = checkHierarchy(message.member, member, guild);
       if (banHierErr) return banHierErr;
+      const bannableErr = !member.bannable ? _notBannableMessage(member) : null;
+      if (bannableErr) return bannableErr;
       // AI-initiated bans defer to a human Confirm click (see store above).
       const banDefer = _maybeDeferToConfirm("ban_user", input, message, ctx, {
         requiredPerm: PermissionFlagsBits.BanMembers,
@@ -381,7 +405,8 @@ export async function execute(toolName, input, message, ctx) {
       });
       if (banDefer) return banDefer;
       const reason = input.reason || "No reason";
-      await member.ban({ deleteMessageDays: input.delete_messages || 0, reason: _attributedReason(message.author, reason) });
+      const banResult = await _banMember(member, { deleteMessageDays: input.delete_messages || 0, reason: _attributedReason(message.author, reason) }, "inline ban");
+      if (!banResult.ok) return banResult.message;
       // Fire cross-bot punish signal — Eris will apply economy consequences
       // (zero the balance) if the guild has opted in via cross_bot_punish.
       firePunishSignal({ guildId: guild.id, userId: member.id, action: "ban", reason }).catch(() => {});
@@ -540,7 +565,9 @@ export async function execute(toolName, input, message, ctx) {
             },
           }));
           escalationNote = ` — auto-timed out 24h (would-be ${crossedTier} requires mod action)`;
-        } catch {}
+        } catch (error) {
+          log(`[Moderation] warn auto-timeout cap failed for ${member.id}: ${error?.message || error}`);
+        }
       } else if (crossedTier === "mute") {
         try {
           await member.timeout(10 * 60 * 1000, _attributedReason(message.author, `Auto-escalation: ${count} warnings`)); // 10 min timeout
@@ -558,7 +585,9 @@ export async function execute(toolName, input, message, ctx) {
             },
           }));
           escalationNote = ` — auto-timed out (${count} warnings)`;
-        } catch {}
+        } catch (error) {
+          log(`[Moderation] warn auto-timeout failed for ${member.id}: ${error?.message || error}`);
+        }
       }
 
       writeModAudit({
@@ -1102,10 +1131,10 @@ export async function execute(toolName, input, message, ctx) {
 
       const reason = input.reason || "No reason provided";
 
+      const banResult = await _banMember(target, { reason: _attributedReason(message.author, `[TEMP ${durationStr}] ${reason}`) }, "inline tempban");
+      if (!banResult.ok) return banResult.message;
       const { addTempBan } = await import("../../database.js");
       addTempBan(guild.id, target.id, target.user.tag, durationMs, reason, message.author.id);
-
-      await target.ban({ reason: _attributedReason(message.author, `[TEMP ${durationStr}] ${reason}`) });
       // Send "ban" to Eris rather than "tempban" — Eris doesn't distinguish
       // sub-types of ban for economy enforcement, only that the user was
       // banned. Keeping tempban as a separate signal would silently no-op on

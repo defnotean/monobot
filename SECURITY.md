@@ -166,7 +166,7 @@ On top of the owner check, the PC-agent tool surface adds:
 | Twin HMAC channel | S | Body-bound HMAC, constant-time compare, timestamp skew window, replay cache pressure fail-closed. |
 | DB / authz | S locally | Parameterized local access behind owner/twin gates; service-role deployments must stay loopback/private. |
 | Rate limiting | S locally | Per-key plus process-wide caps; use shared state before horizontal scaling. |
-| Dependency freshness | S | `npm audit` currently reports zero vulnerabilities. |
+| Dependency freshness | S | `npm audit` currently reports zero vulnerabilities and CI fails on moderate-or-higher advisories. |
 | Deployment containment | S locally | Current documented topology is outbound-only/loopback; public exposure needs TLS and auth in front. |
 
 ## Known Gaps / Areas Needing Hardening
@@ -174,25 +174,23 @@ On top of the owner check, the PC-agent tool surface adds:
 We try to be honest about what's not done. The following are known and on the
 list, in no particular order:
 
-1. **No automated dependency scanning.** `npm audit` is run manually before
-   releases; nothing fails CI on a new advisory.
-2. **No CSP / sandboxing for the optional dashboard.** The dashboard
+1. **No CSP / sandboxing for the optional dashboard.** The dashboard
    currently inherits whatever CSP the host serves; a strict policy isn't
    shipped.
-3. **Audit log is append-only but not tamper-evident.** Owner with DB access
+2. **Audit log is append-only but not tamper-evident.** Owner with DB access
    can edit `eris_pc_audit` rows. A hash-chain or external WORM sink isn't
    wired up.
-4. **Twin secret rotation is offline-only.** No graceful dual-secret
+3. **Twin secret rotation is offline-only.** No graceful dual-secret
    acceptance window — operators must restart both processes.
-5. **Rate limiter is in-memory.** Multi-process or multi-host deploys do not
+4. **Rate limiter is in-memory.** Multi-process or multi-host deploys do not
    share state; a flooder can multiply their budget by the number of
    workers.
-6. **L3 firewall classifier is optional.** Self-hosters without Voyage or the
+5. **L3 firewall classifier is optional.** Self-hosters without Voyage or the
    Prompt Guard ONNX model run on L1+L2 only.
-7. **No formal threat model for the music subsystem.** Lavalink trust is
+6. **No formal threat model for the music subsystem.** Lavalink trust is
    assumed; an attacker who can reach the Lavalink port can do arbitrary
    playback / stream proxying.
-8. **No CSRF tokens on the dashboard's mutating endpoints.** SameSite=Lax
+7. **No CSRF tokens on the dashboard's mutating endpoints.** SameSite=Lax
    cookies plus the HMAC twin layer cover the most likely abuse paths, but
    a defense-in-depth CSRF layer isn't shipped yet.
 

@@ -43,7 +43,7 @@ vi.mock("../../../utils/twinPunish.js", () => ({
   firePunishSignal: vi.fn(async () => undefined),
 }));
 
-import { logAudit } from "../../../database.js";
+import { addTempBan, logAudit } from "../../../database.js";
 import { sendModLog } from "../../../utils/logger.js";
 
 // A member that HAS the given perm (mod). id ≠ ownerId so we exercise the real
@@ -82,7 +82,7 @@ function buildMessage(member: any, guild: any) {
   };
 }
 
-function buildTarget() {
+function buildTarget(extra: Record<string, any> = {}) {
   return {
     id: "victim-1",
     user: { id: "victim-1", tag: "victim#0001", username: "victim", createdTimestamp: 0 },
@@ -92,6 +92,7 @@ function buildTarget() {
     ban: vi.fn(async () => {}),
     kick: vi.fn(async () => {}),
     roles: { cache: { has: () => false } },
+    ...extra,
   };
 }
 
@@ -213,6 +214,36 @@ describe("AI-initiated destructive actions defer to confirm (Task 2)", () => {
     expect(String(result)).toMatch(/banned/i);
   });
 
+  it("inline ban refuses non-bannable targets before Discord/audit side effects", async () => {
+    const guild = buildGuild();
+    const member = buildPermedMember(PermissionFlagsBits.BanMembers);
+    const msg = buildMessage(member, guild);
+    const target = buildTarget({ bannable: false });
+    const ctx = buildCtx(guild, target);
+
+    const result = await executeMod("ban_user", { username: "victim", reason: "spam" }, msg, ctx);
+
+    expect(String(result)).toMatch(/can't ban/i);
+    expect(target.ban).not.toHaveBeenCalled();
+    expect(logAudit).not.toHaveBeenCalled();
+    expect(sendModLog).not.toHaveBeenCalled();
+  });
+
+  it("inline tempban does not write temp-ban state if Discord rejects the ban", async () => {
+    const guild = buildGuild();
+    const member = buildPermedMember(PermissionFlagsBits.BanMembers);
+    const msg = buildMessage(member, guild);
+    const target = buildTarget({ ban: vi.fn(async () => { throw new Error("missing permissions"); }) });
+    const ctx = buildCtx(guild, target);
+
+    const result = await executeMod("tempban", { username: "victim", duration: "1h", reason: "spam" }, msg, ctx);
+
+    expect(String(result)).toMatch(/failed to ban/i);
+    expect(target.ban).toHaveBeenCalledTimes(1);
+    expect(addTempBan).not.toHaveBeenCalled();
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
   it("AI-initiated kick defers; AI tempban defers", async () => {
     const guild = buildGuild();
     const member = buildPermedMember(PermissionFlagsBits.KickMembers);
@@ -231,6 +262,32 @@ describe("AI-initiated destructive actions defer to confirm (Task 2)", () => {
     const tbPending = getPendingAction(tbRes._pendingToken);
     expect(tbPending.action).toBe("tempban");
     expect(tbPending.durationStr).toBe("1d");
+  });
+
+  it("confirmed ban refuses non-bannable targets and keeps logs/audit silent", async () => {
+    const guild = buildGuild();
+    const target = buildTarget({ bannable: false });
+    const token = createPendingAction({
+      action: "ban_user",
+      input: { username: "victim", reason: "spam" },
+      requiredPerm: PermissionFlagsBits.BanMembers,
+      targetId: target.id,
+      summary: "Ban victim",
+    });
+    const pending = consumePendingAction(token);
+
+    const result = await commitPendingAction(pending, {
+      guild,
+      member: buildPermedMember(PermissionFlagsBits.BanMembers, "clicker-mod"),
+      clickedBy: { id: "clicker-mod", tag: "clicker#0001" },
+      deps: { findMember: () => target, checkHierarchy: () => null, logAudit, firePunishSignal: () => Promise.resolve() },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.message)).toMatch(/can't ban/i);
+    expect(target.ban).not.toHaveBeenCalled();
+    expect(sendModLog).not.toHaveBeenCalled();
+    expect(logAudit).not.toHaveBeenCalled();
   });
 });
 

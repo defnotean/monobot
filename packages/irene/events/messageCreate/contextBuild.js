@@ -42,6 +42,7 @@ import { registry as toolRegistry } from "../../ai/toolRegistry.js";
 import { buildMemoryContext } from "../../ai/memory.js";
 import { spotlight } from "../../ai/firewall.js";
 import { getMentionRegex } from "./gates.js";
+import { channelTypeLabel } from "../../utils/channelTypes.js";
 
 // Sanitize and normalize a Discord display name before injecting it into the
 // system prompt or history. Matches Eris's pattern (eris/events/messageCreate.js
@@ -173,11 +174,7 @@ export function resolveDiscordReferences(content, guild) {
   }).replace(/<#(\d+)>/g, (match, id) => {
     const channel = guild?.channels.cache.get(id);
     if (channel) {
-      const typeLabel = channel.type === 2 ? "voice channel"
-        : channel.type === 13 ? "stage channel"
-        : channel.type === 4  ? "category"
-        : channel.type === 15 ? "forum channel"
-        : "text channel";
+      const typeLabel = channelTypeLabel(channel);
       return `#${channel.name} [${typeLabel}, id:${id}]`;
     }
     return match;
@@ -186,11 +183,7 @@ export function resolveDiscordReferences(content, guild) {
     if (guild && gid === guild.id) {
       const channel = guild.channels.cache.get(cid);
       if (channel) {
-        const typeLabel = channel.type === 2 ? "voice channel"
-          : channel.type === 13 ? "stage channel"
-          : channel.type === 4  ? "category"
-          : channel.type === 15 ? "forum channel"
-          : "text channel";
+        const typeLabel = channelTypeLabel(channel);
         return `#${channel.name} [${typeLabel}, id:${cid}]`;
       }
     }

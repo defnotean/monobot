@@ -14,6 +14,7 @@ import {
   handleVoiceMembershipChange,
   isSpotifyHost,
 } from "../../music/player.js";
+import { log } from "../../utils/logger.js";
 
 // ─── Fakes ───────────────────────────────────────────────────────────────────
 // A Discord GuildVoiceChannel exposes `.members` as a Collection (has a
@@ -123,6 +124,23 @@ describe("handleVoiceMembershipChange — alone-in-VC pause + disconnect", () =>
     expect(queue._aloneDisconnectTimer).toBe(firstTimer);
   });
 
+  it("logs pause failures and does not mark the queue as auto-paused", () => {
+    const channel = makeChannel([true]);
+    const queue: any = createQueue(GUILD, channel as any, null);
+    queue.player = {
+      paused: false,
+      setPaused: vi.fn(() => { throw new Error("lavalink pause failed"); }),
+    };
+    queue.playing = true;
+
+    const result = handleVoiceMembershipChange(GUILD, { graceMs: 1000 });
+
+    expect(result.action).toBe("alone");
+    expect(queue._pausedForEmpty).toBe(false);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("music.pauseEmptyVc"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("lavalink pause failed"));
+  });
+
   it("does not pause an idle (not-playing) player, and does not resume it on rejoin", () => {
     // Player exists/connected but nothing is playing (queue.playing === false).
     const channel = makeChannel([true]); // just the bot
@@ -149,6 +167,24 @@ describe("handleVoiceMembershipChange — alone-in-VC pause + disconnect", () =>
 
   it("is a no-op when no queue exists for the guild", () => {
     expect(handleVoiceMembershipChange("no-such-guild")).toEqual({ action: "no-queue" });
+  });
+
+  it("logs cleanup failures while deleting a queue", async () => {
+    const channel = makeChannel([true]);
+    const queue: any = createQueue(GUILD, channel as any, null);
+    queue.player = {
+      removeAllListeners: vi.fn(() => { throw new Error("listener cleanup failed"); }),
+      stopTrack: vi.fn(() => { throw new Error("stop failed"); }),
+      connection: { disconnect: vi.fn(() => { throw new Error("disconnect failed"); }) },
+    };
+
+    deleteQueue(GUILD);
+    await Promise.resolve();
+
+    expect(getQueue(GUILD)).toBeUndefined();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("listener cleanup failed"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("stop failed"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("disconnect failed"));
   });
 });
 

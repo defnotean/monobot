@@ -23,5 +23,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint:version-sync
+      - run: npm audit --audit-level=moderate
       - run: npm test --workspaces --if-present
       - run: npm run build --workspaces --if-present
