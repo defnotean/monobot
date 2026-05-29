@@ -853,6 +853,23 @@ export async function isWhitelisted(guildId) {
 
 export async function addToWhitelist(guildId, info) {
   if (!supabase) { log(`[WHITELIST] addToWhitelist: supabase not configured`); return false; }
+  const entry = {
+    name: info.name || "Unknown",
+    icon_url: info.icon_url || null,
+    members: info.members || null,
+    invited_by: info.invited_by || null,
+    added_at: new Date().toISOString(),
+  };
+  // Atomic single-key merge (migration 007). Both twins write the shared
+  // bot_data:main blob (auto-track on every boot + whitelist_server), so a
+  // read-modify-write upsert here races and silently loses entries — a
+  // manually-whitelisted server gets clobbered by the other bot's next
+  // auto-track, and the gatekeep then evicts the bot on invite. The RPC mutates
+  // one jsonb path in a single statement so concurrent writers can't collide.
+  const { error: rpcErr } = await supabase.rpc("bot_whitelist_add", { p_guild_id: guildId, p_info: entry });
+  if (!rpcErr) return true;
+  log(`[WHITELIST] bot_whitelist_add RPC unavailable (${rpcErr.message}) — falling back to read-modify-write`);
+  // Fallback (pre-migration-007): whole-blob read-modify-write (lossy under concurrency).
   const { data: row, error: selectErr } = await supabase.from("bot_data").select("data").eq("id", "main").single();
   if (selectErr && selectErr.code !== "PGRST116") {
     log(`[WHITELIST] addToWhitelist select failed: ${selectErr.message} (code=${selectErr.code})`);
@@ -860,13 +877,7 @@ export async function addToWhitelist(guildId, info) {
   }
   const botData = row?.data || {};
   if (!botData.server_whitelist) botData.server_whitelist = {};
-  botData.server_whitelist[guildId] = {
-    name: info.name || "Unknown",
-    icon_url: info.icon_url || null,
-    members: info.members || null,
-    invited_by: info.invited_by || null,
-    added_at: new Date().toISOString(),
-  };
+  botData.server_whitelist[guildId] = entry;
   const { error: upsertErr } = await supabase.from("bot_data").upsert({ id: "main", data: botData });
   if (upsertErr) {
     log(`[WHITELIST] addToWhitelist upsert failed for ${guildId}: ${upsertErr.message} (code=${upsertErr.code})`);
@@ -877,6 +888,10 @@ export async function addToWhitelist(guildId, info) {
 
 export async function removeFromWhitelist(guildId) {
   if (!supabase) { log(`[WHITELIST] removeFromWhitelist: supabase not configured`); return false; }
+  // Atomic single-key delete (migration 007) — same race rationale as addToWhitelist.
+  const { error: rpcErr } = await supabase.rpc("bot_whitelist_remove", { p_guild_id: guildId });
+  if (!rpcErr) return true;
+  log(`[WHITELIST] bot_whitelist_remove RPC unavailable (${rpcErr.message}) — falling back to read-modify-write`);
   const { data: row, error: selectErr } = await supabase.from("bot_data").select("data").eq("id", "main").single();
   if (selectErr && selectErr.code !== "PGRST116") {
     log(`[WHITELIST] removeFromWhitelist select failed: ${selectErr.message} (code=${selectErr.code})`);
