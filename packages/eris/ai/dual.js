@@ -495,7 +495,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
       }
 
       // Network-bound tools need more time than in-memory tools
-      const SLOW_TOOLS = new Set(["web_search", "scrape_url", "search_images", "search_meme_templates", "send_gif", "analyze_image", "check_deploy", "read_emails", "github_repos", "github_issues", "github_prs"]);
+      const SLOW_TOOLS = new Set(["web_search", "scrape_url", "search_images", "show_image", "search_meme_templates", "send_gif", "analyze_image", "check_deploy", "read_emails", "github_repos", "github_issues", "github_prs"]);
 
       const responseParts = await Promise.all(calls.map(async (call) => {
         // Skip duplicate (same name + args) calls — already executed
@@ -508,7 +508,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
           return { functionResponse: { name: call.name, response: { result: "skipped — one game at a time" } } };
         }
         let result;
-        const timeoutMs = SLOW_TOOLS.has(call.name) ? 25_000 : 10_000;
+        const timeoutMs = SLOW_TOOLS.has(call.name) ? (config.timeouts?.slowTool ?? 30_000) : 10_000;
         // Pass the outer-timeout signal to the executor so tools that honor it
         // can abort their own in-flight work (e.g. fetch). Existing executors
         // ignore the extra arg, so this is backward-compatible.

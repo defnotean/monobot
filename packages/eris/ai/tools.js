@@ -152,6 +152,20 @@ export const EVERYONE_TOOLS = [
     },
   },
   {
+    name: "show_image",
+    tags: ["fun"],
+    description:
+      "Find a REAL photo of something and POST it directly into the chat with your own caption. Use this whenever someone asks what something looks like, wants to see something, or a real picture answers better than words (e.g. 'what does a quokka look like', 'show me the eiffel tower', 'whats a capybara'). It posts the actual image (not a URL) as an embed. ALWAYS pass a `caption` written in your own voice/personality — your reaction or one-line explanation to send alongside it. (send_gif = reaction GIFs, create_meme = memes, this = real reference photos.)",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The subject to find a real photo of (e.g. 'red-eyed tree frog', 'eiffel tower', 'capybara')" },
+        caption: { type: "string", description: "Your in-character message to post with the image — your explanation/reaction in your own voice" },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "search_meme_templates",
     tags: ["fun"],
     description: "Search for meme templates by keyword. You MUST call this BEFORE create_meme — ALWAYS search first, then create. This finds the right template name to use. If a user asks for a specific meme format (e.g. 'compressed avatar', 'drake', 'distracted boyfriend'), search for it here first to get the exact template name.",

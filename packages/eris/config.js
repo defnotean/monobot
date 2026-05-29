@@ -369,6 +369,10 @@ const config = {
   // Override any of these via env vars like TIMEOUT_WORKER=45000.
   timeouts: {
     quickReply: parseInt(env("TIMEOUT_QUICK_REPLY", "15000")),
+    // Per-call budget for slow tools (web_search/scrape_url grounding, image
+    // lookup, GitHub, etc.). Raised from the old hardcoded 25s so Gemini Search
+    // grounding has room to finish instead of being aborted mid-flight.
+    slowTool:   parseInt(env("TIMEOUT_SLOW_TOOL", "30000")),
     // runGeminiChat outer timeout, split by model path: the fast (conversational)
     // path is snappier, the worker (tool/thinking) path needs headroom for at
     // least one slow tool (web_search, scrape_url) plus a follow-up call.

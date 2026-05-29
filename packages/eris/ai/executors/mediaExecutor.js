@@ -22,7 +22,7 @@ const IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 const HTML_MAX_BYTES = 2 * 1024 * 1024;
 
 const HANDLED = new Set([
-  "send_gif", "analyze_image", "search_images", "create_meme", "search_meme_templates",
+  "send_gif", "analyze_image", "search_images", "show_image", "create_meme", "search_meme_templates",
 ]);
 
 function truncate(str, max = 1500) {
@@ -83,6 +83,58 @@ export async function execute(toolName, input, message, _context) {
         return `sent gif for ${query}`;
       } catch (e) {
         return `gif search failed: ${e.message}`;
+      }
+    }
+
+    // Find a REAL photo of a subject and POST it inline with the bot's caption.
+    // Free, no API key: Wikipedia (best for "what does X look like") → Openverse
+    // (CC image search) fallback. Mirrors send_gif's embed-and-send pattern.
+    case "show_image": {
+      const query = input.query || input.search || input.q;
+      if (!query) return "no image query provided";
+      const q = encodeURIComponent(query);
+      const fetchOpts = { headers: { "User-Agent": "Mozilla/5.0 (compatible; eris-bot/3 image lookup)" }, maxBytes: HTML_MAX_BYTES, timeoutMs: 6_000 };
+      let imageUrl = null;
+      let source = null;
+
+      // Source 1: Wikipedia — search for the best page, then grab its lead image.
+      try {
+        const sr = await safeFetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${q}&srlimit=1&format=json&origin=*`, fetchOpts);
+        const title = JSON.parse(sr.text)?.query?.search?.[0]?.title;
+        if (title) {
+          const pr = await safeFetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=pageimages&piprop=original%7Cthumbnail&pithumbsize=800&format=json&origin=*`, fetchOpts);
+          const pages = JSON.parse(pr.text)?.query?.pages || {};
+          const page = Object.values(pages)[0];
+          const candidate = page?.original?.source || page?.thumbnail?.source || null;
+          // Discord embeds can't render SVG — skip those so we fall through.
+          if (candidate && !/\.svg(\?|$)/i.test(candidate)) { imageUrl = candidate; source = "wikipedia"; }
+        }
+      } catch {}
+
+      // Source 2: Openverse — free CC image search, no key, broader coverage.
+      if (!imageUrl) {
+        try {
+          const or = await safeFetch(`https://api.openverse.org/v1/images/?q=${q}&page_size=5&mature=false`, fetchOpts);
+          const item = (JSON.parse(or.text)?.results || []).find((r) => r.url && !/\.svg(\?|$)/i.test(r.url));
+          if (item) { imageUrl = item.url || item.thumbnail; source = "openverse"; }
+        } catch {}
+      }
+
+      if (!imageUrl) return `couldn't find a good photo of "${query}" — tell the user in your own words (maybe describe it instead)`;
+
+      try {
+        const { EmbedBuilder } = await import("discord.js");
+        const embed = new EmbedBuilder().setImage(imageUrl).setColor(config.colors?.gif || 0x2b2d31);
+        const caption = (input.caption || "").trim();
+        await message.channel.send({
+          ...(caption ? { content: caption } : {}),
+          embeds: [embed],
+          // A caption is the bot's own text — never let it mass-ping the server.
+          allowedMentions: { parse: ["users"] },
+        });
+        return `posted a real photo of "${query}" (via ${source}) with your caption — the user can see the image now, so don't re-describe what's in it`;
+      } catch (e) {
+        return `found an image but couldn't post it: ${e.message}`;
       }
     }
 

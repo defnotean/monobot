@@ -66,9 +66,14 @@ export async function execute(toolName, input, message, _context) {
               config: {
                 tools: [{ googleSearch: {} }],
                 maxOutputTokens: 1024,
+                // Disable "thinking" — for a search-and-summarize task it adds
+                // 15-25s of latency with no quality gain and was pushing the
+                // grounding call past the tool timeout (it was timing out at 25s
+                // and falling back to DDG). Flash grounds + formats fine without it.
+                thinkingConfig: { thinkingBudget: 0 },
               },
             }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error("grounding timeout")), 25_000)),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("grounding timeout")), config.timeouts?.slowTool ?? 30_000)),
           ]);
           const parts = resp?.candidates?.[0]?.content?.parts ?? [];
           const text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("").trim();
