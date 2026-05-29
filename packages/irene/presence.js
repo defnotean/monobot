@@ -739,6 +739,17 @@ export function startPresenceAPI(client) {
   server.keepAliveTimeout = 5000;  // 5s idle before closing keep-alive sockets
   server.setTimeout(20000);        // per-socket inactivity timeout
 
+  // A bind failure (e.g. EADDRINUSE from a stale instance) must not crash-loop
+  // the bot — uncaughtException now fail-fast exits(1), so handle it locally:
+  // log and keep running (Discord/music/core still work; only the presence/
+  // dashboard HTTP surface is down until the port frees and the process restarts).
+  server.on("error", (e) => {
+    if (e.code === "EADDRINUSE") {
+      log(`⚠ Presence API port ${config.port} already in use — a stale instance may still be bound. Continuing WITHOUT the HTTP server (presence/health/tts/dashboard/twin unavailable). Free the port and restart to restore them.`);
+    } else {
+      log(`⚠ Presence API server error: ${e.message}`);
+    }
+  });
   server.listen(config.port, () => {
     log(`Presence API running on port ${config.port}`);
   });

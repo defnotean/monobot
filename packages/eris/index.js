@@ -225,6 +225,20 @@ async function main() {
   // and the whole process used to exit before /admin or /healthz could come up.
   // With the listen() in front, the admin panel + healthz are always reachable
   // — /healthz just reports ws_status=disconnected until the gateway connects.
+  //
+  // A bind failure (e.g. EADDRINUSE from a stale instance still holding the port
+  // after a messy restart) must NOT take the whole bot down. Since uncaughtException
+  // now fail-fast exits(1), an unhandled 'error' here would crash-loop the service.
+  // Handle it locally: log loudly and keep running — Discord/core still works; only
+  // the keepalive/dashboard/admin/twin-punish HTTP surface is unavailable until the
+  // port frees and the process restarts.
+  server.on("error", (e) => {
+    if (e.code === "EADDRINUSE") {
+      log(`[SYS] ⚠ HTTP port ${config.port} already in use — a stale instance may still be bound. Continuing WITHOUT the HTTP server (keepalive/dashboard/admin/twin-punish unavailable). Free the port and restart to restore them.`);
+    } else {
+      log(`[SYS] ⚠ HTTP server error: ${e.message}`);
+    }
+  });
   server.listen(config.port, () => {
     log(`[SYS] Server on port ${config.port} (keepalive + dashboard API)`);
   });

@@ -642,7 +642,23 @@ export async function handleApiRequest(req, res) {
         .order("balance", { ascending: false })
         .limit(limit);
       if (error) { json(res, 500, { error: error.message }); return; }
-      json(res, 200, { rows: data || [], limit });
+      const rows = data || [];
+      // Resolve display names from eris_memories (the same per-user lookup
+      // /api/relationships uses). Deliberately NOT a .in() batch: the local
+      // PostgREST proxy doesn't reliably forward supabase-js's quoted in.(...)
+      // lists, so a batch silently returns no names. Top-N is small (<=100).
+      for (const r of rows) {
+        if (!r.user_id) continue;
+        const { data: m } = await sb
+          .from("eris_memories")
+          .select("username")
+          .eq("user_id", r.user_id)
+          .eq("is_bot", false)
+          .limit(1)
+          .maybeSingle();
+        r.username = m?.username || null;
+      }
+      json(res, 200, { rows, limit });
       return;
     }
 

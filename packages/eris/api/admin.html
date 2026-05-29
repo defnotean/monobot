@@ -386,10 +386,13 @@ const sections = {
   async relationships() {
     const [eris, irene] = await Promise.all([
       tryApi('eris',  '/relationships?limit=100').catch(() => []),
-      tryApi('irene', '/humanity').catch(() => []),
+      tryApi('irene', '/relationships?limit=100').catch(() => []),
     ]);
     function table(bot, raw) {
-      const rows = Array.isArray(raw) ? raw : (raw?.relationships || raw?.rows || raw?.users || []);
+      let rows = Array.isArray(raw) ? raw : (raw?.relationships || raw?.rows || raw?.users || []);
+      // Some endpoints (e.g. /humanity) return relationships as a {userId: {...}}
+      // object map rather than an array — coerce so .slice/.length never throw.
+      if (rows && !Array.isArray(rows)) rows = Object.entries(rows).map(([user_id, v]) => ({ user_id, ...v }));
       const head = el('thead', {}, el('tr', {},
         el('th', {}, 'User'), el('th', {}, 'Affinity'),
         el('th', {style:'width:180px;'}, 'Adjust'),
@@ -439,7 +442,7 @@ const sections = {
     if (!topRows.length) topBody.appendChild(el('tr', {}, el('td', {colspan:7, class:'empty'}, top?._error ? `error: ${top._error}` : 'no economy rows')));
     for (const r of topRows) {
       topBody.appendChild(el('tr', {},
-        el('td', {class:'mono'}, String(r.user_id).slice(0, 20)),
+        el('td', {class:'mono', title: r.user_id}, r.username ? String(r.username) : String(r.user_id).slice(0, 20)),
         el('td', {class:'mono', style:'color:var(--ok); font-weight:600;'}, fmt(r.balance)),
         el('td', {class:'mono small'}, fmt(r.total_earned)),
         el('td', {class:'mono small'}, fmt(r.total_lost)),
