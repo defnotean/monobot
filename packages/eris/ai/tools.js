@@ -166,6 +166,49 @@ export const EVERYONE_TOOLS = [
     },
   },
   {
+    name: "send_file",
+    tags: ["fun"],
+    description:
+      "Post the full content as a downloadable FILE attachment. ALWAYS use this instead of pasting long code/scripts/text inline — inline replies are capped and get cut off mid-line. The right pattern: a SHORT normal message in your voice (1-2 sentences) PLUS the file attached. e.g. asked for a python script → caption 'made u a lil snake game, run it with python 🐍' and attach snake.py with the code. The file holds the long stuff so it's never truncated.",
+    input_schema: {
+      type: "object",
+      properties: {
+        filename: { type: "string", description: "File name WITH extension (e.g. 'snake.py', 'notes.md', 'data.json')" },
+        content: { type: "string", description: "The FULL file contents (code/text). Goes in the file, not the chat — length is fine here, write the whole thing." },
+        caption: { type: "string", description: "Short message to post alongside the file, in your own voice (1-2 sentences)" },
+      },
+      required: ["filename", "content"],
+    },
+  },
+  {
+    name: "generate_image",
+    tags: ["fun"],
+    description:
+      "Generate a brand-new AI image from a text description and post it. Use when someone asks you to draw/make/create/imagine a picture of something. (show_image = find a real photo; edit_image = alter a photo the user sent; this = make new art.)",
+    input_schema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "Description of the image to generate" },
+        caption: { type: "string", description: "Optional short message to post with it, in your voice" },
+      },
+      required: ["prompt"],
+    },
+  },
+  {
+    name: "edit_image",
+    tags: ["fun"],
+    description:
+      "Edit/alter an image the user ATTACHED to their current message, following their instruction, and post the result (e.g. 'make the sky blue', 'add sunglasses', 'turn this into a painting', 'remove the background'). Only works when the user actually attached an image. Pass `instruction` (what to change) and a short `caption` in your voice.",
+    input_schema: {
+      type: "object",
+      properties: {
+        instruction: { type: "string", description: "What to change about the attached image (e.g. 'make the sky blue', 'add a party hat')" },
+        caption: { type: "string", description: "Optional short message to post with the edited image, in your voice" },
+      },
+      required: ["instruction"],
+    },
+  },
+  {
     name: "search_meme_templates",
     tags: ["fun"],
     description: "Search for meme templates by keyword. You MUST call this BEFORE create_meme — ALWAYS search first, then create. This finds the right template name to use. If a user asks for a specific meme format (e.g. 'compressed avatar', 'drake', 'distracted boyfriend'), search for it here first to get the exact template name.",

@@ -495,7 +495,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
       }
 
       // Network-bound tools need more time than in-memory tools
-      const SLOW_TOOLS = new Set(["web_search", "scrape_url", "search_images", "show_image", "search_meme_templates", "send_gif", "analyze_image", "check_deploy", "read_emails", "github_repos", "github_issues", "github_prs"]);
+      const SLOW_TOOLS = new Set(["web_search", "scrape_url", "search_images", "show_image", "generate_image", "edit_image", "search_meme_templates", "send_gif", "analyze_image", "check_deploy", "read_emails", "github_repos", "github_issues", "github_prs"]);
 
       const responseParts = await Promise.all(calls.map(async (call) => {
         // Skip duplicate (same name + args) calls — already executed

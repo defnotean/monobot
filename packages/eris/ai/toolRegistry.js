@@ -200,7 +200,7 @@ export function registerOpenClawTools(EVERYONE_TOOLS, OWNER_TOOLS) {
   // ── Always-include (core tools for every conversation) ──
   const alwaysInclude = [
     "remember_fact", "forget_fact", "forget_all", "recall_memories",
-    "send_gif", "analyze_image", "search_images", "show_image", "search_meme_templates", "create_meme",
+    "send_gif", "analyze_image", "search_images", "show_image", "send_file", "generate_image", "edit_image", "search_meme_templates", "create_meme",
     "web_search", "scrape_url", "check_presence",
     "save_note", "list_notes", "delete_note", "search_notes",
     "set_reminder", "list_reminders", "cancel_reminder",
