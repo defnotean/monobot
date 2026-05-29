@@ -1870,6 +1870,19 @@ export const EVERYONE_TOOLS = [
     },
   },
   {
+    name: "show_image",
+    description:
+      "Find a REAL photo of something and POST it directly into the chat with your own caption. Use this whenever someone asks what something looks like, wants to see something, or a real picture answers better than words (e.g. 'what does a quokka look like', 'show me the eiffel tower', 'whats a capybara'). It posts the actual image (not a URL) as an embed. ALWAYS pass a `caption` written in your own voice — your reaction or one-line explanation to send with it. (send_gif = reaction GIFs/memes, generate_image = AI-generated art, this = real reference photos.)",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The subject to find a real photo of (e.g. 'red-eyed tree frog', 'eiffel tower', 'capybara')" },
+        caption: { type: "string", description: "Your in-character message to post with the image — your explanation/reaction in your own voice" },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "set_gif_style",
     description: "Toggle how GIFs are displayed in this server. 'raw' = just the GIF, no embed border (clean look). 'embed' = GIF inside a colored embed (default). Use when someone asks to remove the GIF border, make GIFs clean/raw, or bring back the embed style.",
     input_schema: {

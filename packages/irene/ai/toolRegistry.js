@@ -136,7 +136,7 @@ export function registerPresenceBotTools(ADMIN_TOOLS, EVERYONE_TOOLS) {
   // ── Always-include (core tools available to everyone) ──
   const alwaysInclude = [
     "remember_fact", "recall_memories", "forget_memory", "clear_all_memories",
-    "send_gif", "web_search", "web_read", "calculate", "snipe", "editsnipe",
+    "send_gif", "show_image", "web_search", "web_read", "calculate", "snipe", "editsnipe",
     "ask_eris", "reminder_set", "reminder_cancel",
   ];
   registry.registerAlwaysInclude(alwaysInclude);

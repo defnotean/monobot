@@ -84,6 +84,7 @@ import { ChannelType, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, Butto
 import { setAfkSettings, setCreateVcChannel, getCustomCommand, setCustomCommand, deleteCustomCommand, listCustomCommands, isDmOptout, setDmOptout, setVcTemplate, setVcDefaultLimit, setVcTextChannels, setWelcomeEmbed, getWelcomeEmbed, getGuildSettings, setBirthdayChannel, setBirthdayRole, setBirthdayMessage, getBirthdayConfig, addToWhitelist, removeFromWhitelist, getWhitelist, setGifEmbed, logAudit, saveTempVc } from "../database.js";
 import { buildWelcomeEmbed, parseEmbedColor } from "../events/guildMemberAdd.js";
 import config from "../config.js";
+import { safeFetch } from "@defnotean/shared/safeFetch";
 import { checkToolRateLimit } from "@defnotean/shared/toolRateLimit";
 import { sendModLog } from "../utils/logger.js";
 import { modEmbed } from "../utils/embeds.js";
@@ -1806,6 +1807,57 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
         }
       }
       return `sent GIF for "${input.query}"`;
+    }
+
+    // Find a REAL photo of a subject and POST it inline with the bot's caption.
+    // Free, no API key: Wikipedia (best for "what does X look like") → Openverse
+    // (CC image search) fallback. Mirrors send_gif's embed-and-send pattern.
+    case "show_image": {
+      const query = input.query || input.search || input.q;
+      if (!query) return "no image query provided";
+      const q = encodeURIComponent(query);
+      const fetchOpts = { headers: { "User-Agent": "Mozilla/5.0 (compatible; irene-bot/2 image lookup)" }, maxBytes: 2_000_000, timeoutMs: 6_000 };
+      let imageUrl = null;
+      let source = null;
+
+      // Source 1: Wikipedia — search for the best page, then grab its lead image.
+      try {
+        const sr = await safeFetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${q}&srlimit=1&format=json&origin=*`, fetchOpts);
+        const title = JSON.parse(sr.text)?.query?.search?.[0]?.title;
+        if (title) {
+          const pr = await safeFetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=pageimages&piprop=original%7Cthumbnail&pithumbsize=800&format=json&origin=*`, fetchOpts);
+          const pages = JSON.parse(pr.text)?.query?.pages || {};
+          const page = Object.values(pages)[0];
+          const candidate = page?.original?.source || page?.thumbnail?.source || null;
+          if (candidate && !/\.svg(\?|$)/i.test(candidate)) { imageUrl = candidate; source = "wikipedia"; }
+        }
+      } catch {}
+
+      // Source 2: Openverse — free CC image search, no key, broader coverage.
+      if (!imageUrl) {
+        try {
+          const or = await safeFetch(`https://api.openverse.org/v1/images/?q=${q}&page_size=5&mature=false`, fetchOpts);
+          const item = (JSON.parse(or.text)?.results || []).find((r) => r.url && !/\.svg(\?|$)/i.test(r.url));
+          if (item) { imageUrl = item.url || item.thumbnail; source = "openverse"; }
+        } catch {}
+      }
+
+      if (!imageUrl) return `couldn't find a good photo of "${query}" — tell the user in your own words (maybe describe it instead)`;
+
+      try {
+        const embed = new EmbedBuilder().setImage(imageUrl).setColor(config.colors?.gif || 0x2b2d31);
+        const caption = (input.caption || "").trim();
+        await message.channel.send({
+          ...(caption ? { content: caption } : {}),
+          embeds: [embed],
+          allowedMentions: { parse: ["users"] }, // never mass-ping from a caption
+        });
+        return `posted a real photo of "${query}" (via ${source}) with your caption — the user can see the image now, so don't re-describe what's in it`;
+      } catch (e) {
+        log(`[show_image] send failed: ${e.message} — falling back to URL`);
+        try { await message.channel.send((input.caption ? `${input.caption}\n` : "") + imageUrl); return `posted image URL for "${query}"`; }
+        catch (e2) { return `found an image but couldn't post it: ${e2.message}`; }
+      }
     }
 
     case "set_gif_style": {

@@ -529,7 +529,7 @@ export async function runGeminiChat({
     // Three tiers: FAST (in-memory) = 15s, SLOW (network) = 30s, VERY_SLOW
     // (multi-track resolution like Spotify playlists) = 60s.
     const VERY_SLOW_TOOLS = new Set(["play_music", "summarize_channel", "setup_reaction_roles", "setup_autorole", "setup_starboard", "set_leveling", "mass_role", "purge_messages"]);
-    const SLOW_TOOLS = new Set(["web_search", "web_read", "search_images", "send_gif", "generate_image", "configure_patch_news", "test_patch_news", "configure_twitch", "configure_youtube", "configure_github", "stop_music", "skip_track", "queue_info", "set_volume", "music_filter", "create_channel", "delete_channel", "nuke_channel"]);
+    const SLOW_TOOLS = new Set(["web_search", "web_read", "search_images", "show_image", "send_gif", "generate_image", "configure_patch_news", "test_patch_news", "configure_twitch", "configure_youtube", "configure_github", "stop_music", "skip_track", "queue_info", "set_volume", "music_filter", "create_channel", "delete_channel", "nuke_channel"]);
     const funcResponses = [];
     const toolResults = [];
     let _completedCount = 0;

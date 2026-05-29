@@ -565,9 +565,13 @@ export async function execute(toolName, input, message, ctx) {
               config: {
                 tools: [{ googleSearch: {} }],
                 maxOutputTokens: 1024,
+                // Disable "thinking" — for a search-and-summarize task it adds
+                // 15-25s of latency with no quality gain and was pushing the
+                // grounding call past the tool timeout (timing out, falling back).
+                thinkingConfig: { thinkingBudget: 0 },
               },
             }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error("grounding timeout")), 25_000)),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("grounding timeout")), config.timeouts?.toolSlow ?? 30_000)),
           ]);
           const parts = resp?.candidates?.[0]?.content?.parts ?? [];
           const text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("").trim();
