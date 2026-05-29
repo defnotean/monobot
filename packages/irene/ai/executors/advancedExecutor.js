@@ -1,8 +1,9 @@
 // ─── Advanced / Misc Executor ───────────────────────────────────────────────
 
 import { addReminder, removeReminder, addScheduledTask, getScheduledTasks, getScheduledTask, removeScheduledTask, getSupabase } from "../../database.js";
-import { armScheduledTask, scheduledTaskTimers, NON_SCHEDULABLE } from "../../utils/scheduler.js";
+import { armScheduledTask, scheduledTaskTimers, NON_SCHEDULABLE, isAdminToolName } from "../../utils/scheduler.js";
 import { log } from "../../utils/logger.js";
+import { isAdminMember } from "../../utils/permissions.js";
 import config from "../../config.js";
 import { GoogleGenAI } from "@google/genai";
 import { signTwinRequest } from "@defnotean/shared/twinSign";
@@ -424,6 +425,9 @@ export async function execute(toolName, input, message, ctx) {
       const toolName = toolNameRaw.toLowerCase();
       if (NON_SCHEDULABLE.has(toolName) || NON_SCHEDULABLE.has(toolNameRaw)) {
         return `${toolNameRaw} can't be scheduled (would recurse). Pick a different tool.`;
+      }
+      if (isAdminToolName(toolName) && !isAdminMember(message.member)) {
+        return `${toolNameRaw} is admin-only and can only be scheduled by server admins.`;
       }
 
       const toolInput = input.tool_input;

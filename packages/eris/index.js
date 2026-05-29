@@ -15,6 +15,7 @@ import { initDatabase, flushAll, isPersistenceHealthy } from "./database.js";
 import { log } from "./utils/logger.js";
 import { maybeAutoDeploy } from "./utils/autoDeploy.js";
 import { sendAlert } from "@defnotean/shared/alert";
+import { handleAdminAuxRoute } from "./api/adminAuxRoutes.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -98,38 +99,6 @@ async function loadEvents() {
 
 // ─── HTTP Server (keepalive + dashboard API + admin panel) ───
 const ADMIN_HTML_PATH = join(__dirname, "api", "admin.html");
-const HOME_DIR = process.env.HOME || `/home/${process.env.USER || "defnotean"}`;
-const LOG_DIR = `${HOME_DIR}/.local/monobot-logs`;
-
-// Cross-bot admin proxy — /api/irene/* on Eris's port forwards to Irene's
-// :3001/api/*. Lets the admin page (served from Eris) talk to both bots
-// without CORS headaches. Localhost-only because both bots bind localhost.
-async function proxyToIrene(req, res) {
-  const remappedPath = req.url.replace(/^\/api\/irene/, "/api");
-  const proxyUrl = `http://127.0.0.1:3001${remappedPath}`;
-  try {
-    const chunks = [];
-    if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
-      await new Promise((resolve) => { req.on("data", (c) => chunks.push(c)); req.on("end", resolve); });
-    }
-    const upstreamReq = http.request(proxyUrl, {
-      method: req.method,
-      headers: { ...req.headers, host: "127.0.0.1:3001" },
-    }, (upstreamRes) => {
-      res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
-      upstreamRes.pipe(res);
-    });
-    upstreamReq.on("error", (e) => {
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "irene_unreachable", message: e.message }));
-    });
-    if (chunks.length) upstreamReq.write(Buffer.concat(chunks));
-    upstreamReq.end();
-  } catch (e) {
-    res.writeHead(500, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "proxy_error", message: e.message }));
-  }
-}
 
 const server = http.createServer(async (req, res) => {
   // Admin panel HTML (localhost-only by virtue of the dashboard.js auth bypass)
@@ -144,35 +113,8 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Cross-bot proxy — admin page calls /api/irene/* for the other bot
-  if (req.url?.startsWith("/api/irene/") || req.url === "/api/irene") {
-    await proxyToIrene(req, res);
-    return;
-  }
-
-  // Log tail — /api/logs?bot=eris|irene&lines=N (default 200). Reads from
-  // the file logs systemd appends to; admin panel polls this every few sec.
-  if (req.url?.startsWith("/api/logs")) {
-    try {
-      const u = new URL(req.url, `http://localhost:${config.port}`);
-      const bot = (u.searchParams.get("bot") || "eris").replace(/[^a-z]/gi, "");
-      const lines = Math.min(2000, Math.max(10, parseInt(u.searchParams.get("lines") || "200", 10)));
-      const path = `${LOG_DIR}/${bot}.log`;
-      if (!existsSync(path)) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "log_not_found", path }));
-        return;
-      }
-      const raw = readFileSync(path, "utf-8");
-      const allLines = raw.split("\n");
-      const tail = allLines.slice(-lines - 1).join("\n");
-      res.setHeader("Content-Type", "application/json");
-      res.writeHead(200);
-      res.end(JSON.stringify({ bot, lines: allLines.length, tail }));
-    } catch (e) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "log_read_failed", message: e.message }));
-    }
+  // Dashboard-admin auxiliary routes: /api/irene/* proxy and /api/logs.
+  if (await handleAdminAuxRoute(req, res)) {
     return;
   }
 

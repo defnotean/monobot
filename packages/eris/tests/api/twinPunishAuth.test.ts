@@ -14,6 +14,9 @@ const dbState = {
   guildSettings: { cross_bot_punish: true } as Record<string, unknown>,
   balance: { balance: 0 } as { balance: number },
   updateBalanceCalls: [] as Array<{ userId: string; delta: number; type: string; details: string }>,
+  saveReminderCalls: [] as Array<{ userId: string; channelId: string; text: string; remindAt: string }>,
+  saveNoteCalls: [] as Array<{ userId: string; title: string; content: string }>,
+  saveFactCalls: [] as Array<{ userId: string; fact: string }>,
 };
 
 vi.mock("../../database.js", () => ({
@@ -28,9 +31,18 @@ vi.mock("../../database.js", () => ({
   getFacts: async () => [],
   deleteFact: async () => true,
   getRecentHistory: async () => [],
-  saveReminder: async () => true,
-  saveNote: async () => true,
-  saveFact: async () => true,
+  saveReminder: async (userId: string, channelId: string, text: string, remindAt: string) => {
+    dbState.saveReminderCalls.push({ userId, channelId, text, remindAt });
+    return true;
+  },
+  saveNote: async (userId: string, title: string, content: string) => {
+    dbState.saveNoteCalls.push({ userId, title, content });
+    return true;
+  },
+  saveFact: async (userId: string, fact: string) => {
+    dbState.saveFactCalls.push({ userId, fact });
+    return true;
+  },
   getNotes: async () => [],
   getUserReminders: async () => [],
   updatePersonality: async () => true,
@@ -157,10 +169,14 @@ const validBodyJson = JSON.stringify({
 
 beforeEach(() => {
   _resetReplayCacheForTests();
+  process.env.TWIN_API_SECRET = SECRET;
   // Reset our in-memory db harness state.
   dbState.guildSettings = { cross_bot_punish: true };
   dbState.balance = { balance: 0 };
   dbState.updateBalanceCalls.length = 0;
+  dbState.saveReminderCalls.length = 0;
+  dbState.saveNoteCalls.length = 0;
+  dbState.saveFactCalls.length = 0;
   // Wipe the per-process dashboard rate-limit map between tests so a flood of
   // requests from the same IP doesn't trip the 30/min/IP guard in dashboard.js.
   if ((globalThis as any)._dashRateLimits) (globalThis as any)._dashRateLimits.clear();
@@ -259,7 +275,78 @@ describe("/api/twin/punish — strict HMAC auth (legacy body.secret removed)", (
   });
 });
 
-// ─── Dashboard Bearer auth gate (non-twin paths) ──────────────────────────────
+// State-changing legacy twin endpoints must fail closed unless HMAC-signed.
+describe("/api/twin/remind, /api/twin/note, /api/twin/fact - strict HMAC auth", () => {
+  const legacyEndpoints = [
+    {
+      path: "/api/twin/remind",
+      payload: {
+        user_id: "234567890123456789",
+        channel_id: "345678901234567890",
+        reminder_text: "drink water",
+        remind_at: "2026-05-30T00:00:00.000Z",
+      },
+      calls: () => dbState.saveReminderCalls,
+    },
+    {
+      path: "/api/twin/note",
+      payload: {
+        user_id: "234567890123456789",
+        title: "note title",
+        content: "note body",
+      },
+      calls: () => dbState.saveNoteCalls,
+    },
+    {
+      path: "/api/twin/fact",
+      payload: {
+        user_id: "234567890123456789",
+        fact: "likes regression tests",
+      },
+      calls: () => dbState.saveFactCalls,
+    },
+  ];
+
+  it.each(legacyEndpoints)("fails closed for $path when TWIN_API_SECRET is missing", async ({ path, payload, calls }) => {
+    delete process.env.TWIN_API_SECRET;
+    const req = makeReq({
+      path,
+      body: JSON.stringify({ ...payload, secret: SECRET }),
+    });
+    const res = makeRes();
+    const { status, body } = await call(req, res);
+
+    expect(status).toBe(500);
+    expect(body.error).toMatch(/twin secret/i);
+    expect(calls()).toHaveLength(0);
+  });
+
+  it.each(legacyEndpoints)("rejects $path with only legacy body.secret and no HMAC", async ({ path, payload, calls }) => {
+    const req = makeReq({
+      path,
+      body: JSON.stringify({ ...payload, secret: SECRET }),
+    });
+    const res = makeRes();
+    const { status, body } = await call(req, res);
+
+    expect(status).toBe(401);
+    expect(body.error).toMatch(/twin auth/i);
+    expect(calls()).toHaveLength(0);
+  });
+
+  it.each(legacyEndpoints)("accepts $path with a valid HMAC signature", async ({ path, payload, calls }) => {
+    const bodyJson = JSON.stringify(payload);
+    const headers = signTwinRequest(bodyJson, SECRET);
+    const req = makeReq({ path, body: bodyJson, headers });
+    const res = makeRes();
+    const { status, body } = await call(req, res);
+
+    expect(status).toBe(201);
+    expect(body.success).toBe(true);
+    expect(calls()).toHaveLength(1);
+  });
+});
+
 // Non-twin dashboard paths require an Authorization: Bearer <key> header where
 // <key> is DASHBOARD_API_KEY or TWIN_API_SECRET, compared via safeStringEqual
 // (constant-time). The legacy truncated-bot-token fallback was removed. These

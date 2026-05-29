@@ -3,7 +3,9 @@
 // Uses dynamic imports to dodge the ai/executor.js ↔ advancedExecutor cycle.
 
 import { log } from "./logger.js";
-import { PermissionFlagsBits } from "discord.js";
+import { ADMIN_TOOLS } from "../ai/tools.js";
+import { TOOL_ALIASES } from "../ai/toolAliases.js";
+import { isAdminMember } from "./permissions.js";
 
 // Max delay — setTimeout clamps at 2^31-1 ms (~24.8 days). We cap the
 // queue-creation AND restore-path at 30 days.
@@ -23,17 +25,23 @@ export const NON_SCHEDULABLE = new Set([
   "list_scheduled_tasks",
 ]);
 
-// Admin-class tools — if the user who queued the task no longer has admin
-// status at fire time, we refuse to execute the action.
-const ADMIN_TOOL_NAMES = new Set([
-  "ban_user", "kick_user", "timeout_user", "mute_user", "warn_user",
-  "unban_user", "untimeout_user", "unmute_user", "remove_warning", "clear_warnings",
-  "purge_messages", "mass_role", "create_role", "delete_role",
-  "create_channel", "delete_channel", "rename_channel",
-]);
-
 export function normalizeToolName(name) {
   return typeof name === "string" ? name.trim().toLowerCase() : "";
+}
+
+// Admin-class tools — derived from the same source that builds the admin-only
+// tool schema, so newly added admin tools cannot bypass scheduled execution.
+export const ADMIN_TOOL_NAMES = new Set(
+  ADMIN_TOOLS.map((tool) => normalizeToolName(tool?.name)).filter(Boolean)
+);
+
+export function resolveScheduledToolName(name) {
+  const normalized = normalizeToolName(name);
+  return normalizeToolName(TOOL_ALIASES[normalized] || normalized);
+}
+
+export function isAdminToolName(name) {
+  return ADMIN_TOOL_NAMES.has(resolveScheduledToolName(name));
 }
 
 // Restore idempotency — ready-event racing could trigger restore twice.
@@ -63,15 +71,6 @@ async function rehydrateMessage(client, { guildId, channelId, authorId }) {
     reply: async (payload) => channel.send(typeof payload === "string" ? { content: payload } : payload),
     _scheduled: true,
   };
-}
-
-function _isMemberAdmin(member, guild) {
-  if (!member) return false;
-  if (member.id === guild.ownerId) return true;
-  try {
-    if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
-  } catch {}
-  return false;
 }
 
 // Actually run the scheduled task. Called by setTimeout and on-startup restore.
@@ -126,7 +125,7 @@ async function fireScheduledTask(task, client) {
     }
 
     // Admin re-check — demoted users shouldn't get delayed admin powers.
-    if (ADMIN_TOOL_NAMES.has(normalized) && !_isMemberAdmin(msg.member, msg.guild)) {
+    if (isAdminToolName(normalized) && !isAdminMember(msg.member)) {
       log(`[Schedule] Task #${task.id} (${task.toolName}) dropped — scheduler ${task.authorId} no longer admin`);
       await safeRemove();
       return;

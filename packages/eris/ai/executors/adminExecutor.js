@@ -54,6 +54,12 @@ function truncate(str, max = 1500) {
   return str.length > max ? str.slice(0, max) + "\n...(truncated)" : str;
 }
 
+function canManageServerSettings(message) {
+  if (!message?.guild || !message?.author?.id) return false;
+  const hasManageGuild = message.member?.permissions?.has?.("ManageGuild");
+  return canCustomize(message.author.id, message.guild) || hasManageGuild;
+}
+
 export async function execute(toolName, input, message, _context) {
   if (!HANDLED.has(toolName)) return undefined;
 
@@ -153,12 +159,14 @@ export async function execute(toolName, input, message, _context) {
 
     case "toggle_twin_chat": {
       if (!message.guild) return "only works in servers";
+      if (!canManageServerSettings(message)) return denyMessage("customize");
       db.setGuildSetting(message.guild.id, "twin_chat_enabled", input.enabled);
       return input.enabled ? "twin chat enabled \u2014 me and irene can talk to each other again" : "twin chat disabled \u2014 we'll stop talking to each other in this server";
     }
 
     case "toggle_cross_bot_punish": {
       if (!message.guild) return "only works in servers";
+      if (!canManageServerSettings(message)) return denyMessage("customize");
       const settings = db.getGuildSettings(message.guild.id) || {};
       const current = !!settings.cross_bot_punish;
       const next = typeof input.enabled === "boolean" ? input.enabled : !current;
@@ -196,6 +204,7 @@ export async function execute(toolName, input, message, _context) {
 
     case "save_directive": {
       if (!message.guild) return "directives only work in servers";
+      if (!canManageServerSettings(message)) return denyMessage("customize");
       const text = input.directive || input.text || input.rule;
       if (!text) return "what's the rule? give me a directive to save";
 
@@ -245,6 +254,7 @@ export async function execute(toolName, input, message, _context) {
 
     case "remove_directive": {
       if (!message.guild) return "directives only work in servers";
+      if (!canManageServerSettings(message)) return denyMessage("customize");
       const keyword = input.keyword || input.index || input.text;
       if (!keyword && keyword !== 0) return "tell me which directive to remove — keyword or index number";
       const idx = /^\d+$/.test(String(keyword)) ? parseInt(keyword) : keyword;

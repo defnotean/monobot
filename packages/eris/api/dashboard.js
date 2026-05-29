@@ -54,6 +54,46 @@ export function isOriginAllowed(origin, allowedOrigins) {
   return false;
 }
 
+export function isDashboardRequestAuthorized(req) {
+  const remote = req.socket?.remoteAddress || "";
+  const isLocalhost = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+  if (isLocalhost) return true;
+
+  const authHeader = req.headers.authorization;
+  const token = typeof authHeader === "string" ? authHeader.replace(/^Bearer\s+/i, "") : "";
+  const validKeys = [process.env.DASHBOARD_API_KEY, process.env.TWIN_API_SECRET].filter(Boolean);
+  return !!token && validKeys.some((k) => safeStringEqual(token, k));
+}
+
+export function requireDashboardAuth(req, res) {
+  if (isDashboardRequestAuthorized(req)) return true;
+  res.setHeader?.("Content-Type", "application/json");
+  json(res, 401, { error: "unauthorized" });
+  return false;
+}
+
+function requireTwinHmac(req, res, rawBody) {
+  const twinSecret = process.env.TWIN_API_SECRET;
+  if (!twinSecret) {
+    json(res, 500, { error: "twin secret not configured on server" });
+    return false;
+  }
+
+  const hasHmacHeaders = !!(req.headers["x-twin-timestamp"] && req.headers["x-twin-signature"]);
+  if (!hasHmacHeaders) {
+    json(res, 401, { error: "twin auth required (missing HMAC headers)" });
+    return false;
+  }
+
+  const v = verifyTwinRequest(req.headers, rawBody, twinSecret);
+  if (!v.ok) {
+    json(res, 401, { error: `twin auth: ${v.reason}` });
+    return false;
+  }
+
+  return true;
+}
+
 export async function handleApiRequest(req, res) {
   // CORS — only allow same-origin and configured dashboard domains
   const allowedOrigins = [process.env.EXTERNAL_URL, process.env.RENDER_EXTERNAL_URL, config.twinApiUrl, process.env.DASHBOARD_URL].filter(Boolean);
@@ -101,22 +141,11 @@ export async function handleApiRequest(req, res) {
     // The admin panel is served from the same process at /admin, so any
     // browser tab on this machine (or an SSH-tunneled session) is trusted.
     // Anyone with shell access to this user already owns the bots.
-    const remote = req.socket?.remoteAddress || "";
-    const isLocalhost = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
-    if (!isLocalhost) {
-      const authHeader = req.headers.authorization;
-      const token = authHeader?.replace("Bearer ", "");
-      const validKeys = [process.env.DASHBOARD_API_KEY, process.env.TWIN_API_SECRET].filter(Boolean);
-      // Constant-time compare via safeStringEqual (crypto.timingSafeEqual over
-      // length-equalized buffers). Array.includes uses === under the hood, which
-      // short-circuits on the first mismatched byte and leaks the secret one byte
-      // at a time through response-time deltas.
-      const tokenOk = !!token && validKeys.some((k) => safeStringEqual(token, k));
-      if (!tokenOk) {
-        json(res, 401, { error: "unauthorized" });
-        return;
-      }
-    }
+    // Constant-time compare via safeStringEqual (crypto.timingSafeEqual over
+    // length-equalized buffers). Array.includes uses === under the hood, which
+    // short-circuits on the first mismatched byte and leaks the secret one byte
+    // at a time through response-time deltas.
+    if (!requireDashboardAuth(req, res)) return;
   }
 
   try {
@@ -326,21 +355,10 @@ export async function handleApiRequest(req, res) {
     }
 
     // ─── INTER-BOT API (Irene ↔ Eris twin communication) ───
-    // Legacy body.secret gate for twin POSTs. HMAC-signed requests skip this
-    // and are verified downstream in their specific handler — without the
-    // skip, HMAC-only callers (which carry no body.secret) get 403'd here
-    // before their specific handler ever runs.
-    if (path.startsWith("/api/twin/") && req.method === "POST") {
-      const hasHmacHeaders = !!(req.headers["x-twin-timestamp"] && req.headers["x-twin-signature"]);
-      if (!hasHmacHeaders) {
-        const twinSecret = process.env.TWIN_API_SECRET;
-        if (twinSecret && !safeStringEqual(body?.secret, twinSecret)) {
-          json(res, 403, { error: "invalid twin secret" }); return;
-        }
-      }
-    }
-
+    // State-changing twin POSTs are HMAC-only. Legacy body.secret is ignored
+    // so captured bearer-style values cannot mutate Eris state.
     if (path === "/api/twin/remind" && req.method === "POST") {
+      if (!requireTwinHmac(req, res, rawBody)) return;
       if (!body?.user_id || !body?.reminder_text || !body?.remind_at) {
         json(res, 400, { error: "user_id, reminder_text, remind_at required" }); return;
       }
@@ -350,6 +368,7 @@ export async function handleApiRequest(req, res) {
     }
 
     if (path === "/api/twin/note" && req.method === "POST") {
+      if (!requireTwinHmac(req, res, rawBody)) return;
       if (!body?.user_id || !body?.title || !body?.content) {
         json(res, 400, { error: "user_id, title, content required" }); return;
       }
@@ -359,6 +378,7 @@ export async function handleApiRequest(req, res) {
     }
 
     if (path === "/api/twin/fact" && req.method === "POST") {
+      if (!requireTwinHmac(req, res, rawBody)) return;
       if (!body?.user_id || !body?.fact) {
         json(res, 400, { error: "user_id, fact required" }); return;
       }
@@ -381,19 +401,7 @@ export async function handleApiRequest(req, res) {
     // legacy `body.secret` fallback was removed — every caller (Irene,
     // dashboard, scripts) must sign the request through shared/twinSign.
     if (path === "/api/twin/punish" && req.method === "POST") {
-      const twinSecret = process.env.TWIN_API_SECRET;
-      if (!twinSecret) { json(res, 500, { error: "twin secret not configured on server" }); return; }
-
-      // HMAC-only. A request without signed headers is rejected outright;
-      // body.secret used to be accepted as a fallback but the wire-leak
-      // and lack of replay protection made it not worth the back-compat.
-      const hasHmacHeaders = !!(req.headers["x-twin-timestamp"] && req.headers["x-twin-signature"]);
-      if (!hasHmacHeaders) {
-        json(res, 401, { error: "twin auth required (missing HMAC headers)" });
-        return;
-      }
-      const v = verifyTwinRequest(req.headers, rawBody, twinSecret);
-      if (!v.ok) { json(res, 401, { error: `twin auth: ${v.reason}` }); return; }
+      if (!requireTwinHmac(req, res, rawBody)) return;
 
       // Schema validation — reject malformed inputs BEFORE touching balances.
       if (!body?.user_id || typeof body.user_id !== "string" || !/^\d{5,20}$/.test(body.user_id)) {

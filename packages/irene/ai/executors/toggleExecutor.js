@@ -1,7 +1,7 @@
 // ─── Toggle / Auto-Responder / Trust Executor ──────────────────────────────
 
-import { PermissionFlagsBits } from "discord.js";
 import { setFeatureToggle, addTrustedUser, removeTrustedUser, getTrustedUsers, addAutoResponder, getAutoResponders, removeAutoResponder } from "../../database.js";
+import { isAdminMember } from "../../utils/permissions.js";
 
 const HANDLED = new Set([
   "toggle_twin_chat", "toggle_auto_responders", "toggle_voice_tracking",
@@ -10,10 +10,25 @@ const HANDLED = new Set([
   "toggle_invite_filter",
 ]);
 
+const ADMIN_MUTATORS = new Set([
+  "toggle_twin_chat",
+  "toggle_auto_responders",
+  "toggle_voice_tracking",
+  "create_auto_responder",
+  "delete_auto_responder",
+  "trust_user",
+  "untrust_user",
+  "toggle_invite_filter",
+]);
+
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
 
   const { guild, findMember } = ctx;
+
+  if (ADMIN_MUTATORS.has(toolName) && !isAdminMember(message.member)) {
+    return "permission denied";
+  }
 
   switch (toolName) {
     case "toggle_twin_chat": {
@@ -32,9 +47,6 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "create_auto_responder": {
-      const isAdmin = message.member?.permissions.has(PermissionFlagsBits.Administrator) ||
-        message.member?.id === guild.ownerId || getTrustedUsers(guild.id).includes(message.author.id);
-      if (!isAdmin) return "only admins can create auto-responders";
       const added = addAutoResponder(guild.id, input.trigger, input.response, message.author.id);
       return added ? `auto-responder created: "${input.trigger}" → "${input.response}"` : "failed to create auto-responder";
     }
@@ -47,9 +59,6 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "delete_auto_responder": {
-      const isAdmin = message.member?.permissions.has(PermissionFlagsBits.Administrator) ||
-        message.member?.id === guild.ownerId || getTrustedUsers(guild.id).includes(message.author.id);
-      if (!isAdmin) return "only admins can delete auto-responders";
       const removed = removeAutoResponder(guild.id, input.trigger);
       return removed ? `removed auto-responder for "${input.trigger}"` : `no auto-responder found for "${input.trigger}"`;
     }
