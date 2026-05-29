@@ -2,7 +2,7 @@
 
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
-import { executeTool } from "../executor.js";
+import { executeTool, postDeferralIfNeeded } from "../executor.js";
 
 const OC = config.openaiCompat || {};
 let _apiKeyCursor = 0;
@@ -431,7 +431,9 @@ export async function runOpenAICompatChat(arg1, ...rest) {
     executor = rest[4];
     useFastModel = rest[5]?.useFastModel;
   }
-  if (!executor) executor = (toolName, toolArgs) => executeTool(toolName, toolArgs, msgCtx);
+  // aiInitiated:true engages moderationExecutor's destructive-action confirm
+  // gate — these calls come from the LLM tool loop, not a slash command.
+  if (!executor) executor = (toolName, toolArgs) => executeTool(toolName, toolArgs, msgCtx, { aiInitiated: true });
 
   const model = useFastModel ? (OC.fastModel || OC.model) : OC.model;
   const openaiTools = toOpenAICompatTools(tools);
@@ -563,7 +565,11 @@ export async function runOpenAICompatChat(arg1, ...rest) {
     const results = await Promise.all(fresh.map(async ({ fnName, fnArgs }) => {
       try {
         log(`[${OC.providerName || "OpenAICompat"}] ${fnName}(${JSON.stringify(fnArgs).slice(0, 100)})`);
-        return await withTimeout(Promise.resolve(executor(fnName, fnArgs)), toolTimeoutMs(), `tool ${fnName}`);
+        const raw = await withTimeout(Promise.resolve(executor(fnName, fnArgs)), toolTimeoutMs(), `tool ${fnName}`);
+        // Render bridge: a destructive AI action returns a confirm-prompt OBJECT
+        // — post the Confirm/Cancel buttons as a real message and feed the model
+        // the pending notice instead of stringifying the object back.
+        return await postDeferralIfNeeded(raw, msgCtx?.channel);
       } catch (err) {
         log(`[${OC.providerName || "OpenAICompat"}] tool ${fnName} failed: ${err.message}`);
         return `tool error: ${err.message}`;

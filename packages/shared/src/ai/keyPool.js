@@ -63,6 +63,7 @@ export class KeyPool {
   }
 
   // Mark a specific client as rate-limited
+  /** @param {any} client @param {number} [durationMs] */
   markRateLimited(client, durationMs = 60_000) {
     const entry = this.clients.find(e => e.client === client);
     if (entry) {
@@ -73,6 +74,7 @@ export class KeyPool {
   }
 
   // Mark a successful request (resets error count)
+  /** @param {any} client */
   markSuccess(client) {
     const entry = this.clients.find(e => e.client === client);
     if (entry) entry.errorCount = 0;

@@ -2,6 +2,7 @@ import { SlashCommandBuilder , MessageFlags } from "discord.js";
 import { tryDeductBalance, updateBalance, recordGameResult } from "../../database.js";
 import { diceEmbed, diceButtonsEmbed } from "../../ai/gameVisuals.js";
 import { randomQuip } from "../../ai/gambling.js";
+import { log } from "../../utils/logger.js";
 
 export const data = new SlashCommandBuilder()
   .setName("dice")
@@ -33,7 +34,7 @@ export async function execute(interaction) {
     try {
       newBalance = await updateBalance(userId, amount * 5, "gamble_dice_win", `dice:${guess}`);
     } catch (err) {
-      console.error(`[Dice] win credit failed for ${userId} payout=${amount * 5}:`, err);
+      log(`[Dice] win credit failed for ${userId} payout=${amount * 5}: ${err?.message || err}`);
     }
   }
   await recordGameResult(userId, "dice", won, amount, won ? amount * 5 : 0);

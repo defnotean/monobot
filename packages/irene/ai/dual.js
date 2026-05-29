@@ -9,7 +9,7 @@
 // Gemini is the primary AI for all conversations and tool execution.
 // Supports full chat (text replies) and multi-turn tool calling loops.
 
-import { executeTool } from "./executor.js";
+import { executeTool, postDeferralIfNeeded } from "./executor.js";
 import { ADMIN_TOOLS } from "./tools.js";
 import { registry } from "./toolRegistry.js";
 import { log, redact } from "../utils/logger.js";
@@ -572,7 +572,7 @@ export async function runGeminiChat({
           // still attach a handler to its eventual completion. This prevents
           // silent half-finished state (e.g. a role created after the timeout)
           // from vanishing without a trace and logs unhandled rejections.
-          const toolPromise = executeTool(name, args, message);
+          const toolPromise = executeTool(name, args, message, { aiInitiated: true });
           let timedOut = false;
           try {
             result = await Promise.race([
@@ -582,6 +582,10 @@ export async function runGeminiChat({
                 rej(new Error(`tool "${name}" timed out after ${timeoutMs / 1000}s`));
               }, timeoutMs)),
             ]);
+            // Render bridge: a destructive AI action returns a confirm-prompt
+            // OBJECT instead of a string — post the Confirm/Cancel buttons as a
+            // real message and feed the model the pending notice instead.
+            result = await postDeferralIfNeeded(result, message.channel);
           } catch (err) {
             result = `Error: ${err.message}`;
             log(`[Gemini] tool error in ${name}: ${err.message}`);

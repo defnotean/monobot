@@ -28,6 +28,10 @@ export async function execute(interaction) {
   }
 
   const skipped = queue.songs[0];
+  // Bypass single-track loop for this one stop — without this, stopTrack()
+  // fires the "end" event and handleTrackEnd replays the same song under
+  // `queue.looping`. Mirrors the working button path in interactionCreate.js.
+  queue._skipOnce = true;
   queue.player?.stopTrack();
 
   await interaction.reply({

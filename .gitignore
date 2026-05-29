@@ -6,3 +6,7 @@ npm-debug.log*
 dist/
 coverage/
 *.log
+# Local self-hosting setup (machine-specific; postgrest.conf holds local DB
+# password + JWT secret). Keep out of the repo — the DB schema is captured by
+# packages/*/migrations/.
+.local-setup/

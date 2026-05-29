@@ -105,6 +105,7 @@ const HELPER_PERMS = [
   P.ViewAuditLog,
 ];
 
+/** @param {any} perms @param {any[]} list */
 function _hasAny(perms, list) {
   for (const p of list) {
     try { if (perms.has(p)) return true; } catch { /* invalid perm id — skip */ }
@@ -118,6 +119,8 @@ function _hasAny(perms, list) {
  *
  * Name is ignored. Position is ignored. Only the permission bitfield is
  * consulted, so self-made aesthetic roles can't be miscategorized.
+ * @param {any} role
+ * @param {any} [guild]
  */
 export function categorizeRole(role, guild) {
   if (!role) return "cosmetic";
@@ -134,8 +137,10 @@ export function categorizeRole(role, guild) {
 /**
  * Snapshot every role in the guild → category. Returns a plain object
  * keyed by role ID for easy serialization.
+ * @param {any} guild
  */
 export function categorizeAllRoles(guild) {
+  /** @type {Record<string, string>} */
   const out = {};
   if (!guild?.roles?.cache) return out;
   for (const [id, role] of guild.roles.cache) {
@@ -148,6 +153,8 @@ export function categorizeAllRoles(guild) {
  * Get all roles matching a category (or meta-category). Returns an array
  * of Role objects, sorted by position descending (highest first) so the
  * caller can prefer the most privileged mod when using just one.
+ * @param {any} guild
+ * @param {string} category
  */
 export function getRolesByCategory(guild, category) {
   if (!guild?.roles?.cache) return [];
@@ -161,6 +168,7 @@ export function getRolesByCategory(guild, category) {
   return matches;
 }
 
+/** @param {string} category */
 function _expandCategory(category) {
   if (!category) return null;
   const key = String(category).toLowerCase();
@@ -194,6 +202,7 @@ function _expandCategory(category) {
  * if the input doesn't look like a category keyword.
  *
  * Handles common prefixes like "@" and plural/casing variants.
+ * @param {any} input
  */
 export function asCategoryKeyword(input) {
   if (!input || typeof input !== "string") return null;
@@ -210,6 +219,8 @@ export function asCategoryKeyword(input) {
  *   3. Category keyword (mods, admins, staff, helpers, trusted).
  * If the hint resolves to nothing at all, returns []. Caller is expected
  * to surface the miss; this function doesn't throw.
+ * @param {any} guild
+ * @param {any} hints
  */
 export function resolveRoleHints(guild, hints) {
   if (!guild?.roles?.cache) return [];
@@ -228,7 +239,7 @@ export function resolveRoleHints(guild, hints) {
     // 2. Exact name (case-insensitive, allow leading @)
     const normalized = hint.toLowerCase().replace(/^@/, "");
     const byName = guild.roles.cache.find(
-      (r) => r.name.toLowerCase() === normalized && r.id !== guild.id
+      (/** @type {any} */ r) => r.name.toLowerCase() === normalized && r.id !== guild.id
     );
     if (byName) { ids.add(byName.id); continue; }
 

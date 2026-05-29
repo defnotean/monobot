@@ -10,6 +10,10 @@ import { GoogleGenAI } from "@google/genai";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
 import { getEconomyMutatingTools } from "./toolRegistry.js";
+// Shared work-pool singleton — read-only, used by isRateLimited() to report real
+// provider exhaustion. geminiPool.js is a module-scope singleton with no
+// dependency back on the ai/ layer, so importing it here introduces no cycle.
+import { _geminiPools as _geminiPoolsRef } from "../events/messageCreate/geminiPool.js";
 
 // ─── Internal helpers (exported for unit tests) ─────────────────────────────
 
@@ -105,6 +109,15 @@ export function toGeminiTools(tools) {
  * @returns {Promise<string|null>} short acknowledgment or null on failure
  */
 export async function quickReply(client, systemInstruction, userText, context) {
+  // Operator-tunable timeout (TIMEOUT_QUICK_REPLY). Fallback matches the sibling
+  // providers (nvidia.js / openaiCompat.js both use `?? 15_000`); config default
+  // is 15s, so all three paths resolve consistently.
+  const timeoutMs = config.timeouts?.quickReply ?? 15_000;
+  // Cancel the in-flight generateContent when the outer timeout fires instead
+  // of leaking a detached request — the SDK threads config.abortSignal into the
+  // underlying fetch.
+  const controller = new AbortController();
+  let timer;
   try {
     const contextParts = context ? `${context}\n\nUser: ${userText}` : userText;
 
@@ -121,9 +134,10 @@ export async function quickReply(client, systemInstruction, userText, context) {
           // these are deterministic acknowledgements, not reasoning.
           maxOutputTokens: 512,
           thinkingConfig: { thinkingBudget: 0 },
+          abortSignal: controller.signal,
         },
       }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("quickReply timeout")), 5000)),
+      new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error(`quickReply timeout after ${timeoutMs / 1000}s`)); }, timeoutMs); }),
     ]);
 
     const parts = result.candidates?.[0]?.content?.parts;
@@ -139,6 +153,8 @@ export async function quickReply(client, systemInstruction, userText, context) {
   } catch (err) {
     log(`quickReply failed: ${err.message}`);
     return null;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -210,8 +226,46 @@ export function setRateLimitCallbacks(onRateLimit, onSuccess) {
   _onSuccess = onSuccess;
 }
 
-// Legacy compatibility — always returns false since rate limiting is now per-key in the pool
-export function isRateLimited() { return false; }
+// Work pool handle for provider-exhaustion checks. Injectable (tests / explicit
+// wiring) via setWorkPool; otherwise isRateLimited() falls back to reading the
+// shared work pool singleton lazily on first call.
+let _workPool = null;
+let _workPoolResolved = false;
+
+export function setWorkPool(pool) {
+  _workPool = pool;
+  _workPoolResolved = true;
+}
+
+// isRateLimited reflects real provider exhaustion: true when every key in the
+// work pool is currently rate-limited (rateLimitedUntil in the future), so the
+// provider-exhaustion gate in messageCreate can short-circuit instead of
+// hammering a dry pool. Returns false when there is no work pool (e.g. a
+// non-Gemini provider, or no keys configured). Must stay synchronous — index.js
+// calls it without awaiting, and an async (Promise) return would always read as
+// truthy there.
+export function isRateLimited() {
+  // Lazily resolve the shared work pool the first time we're asked, so the gate
+  // is live without requiring an explicit setWorkPool() wiring call. Guarded so
+  // a non-Gemini provider (where the pool object is empty) degrades to false.
+  if (!_workPoolResolved) {
+    _workPoolResolved = true;
+    try {
+      _workPool = _resolveWorkPoolSync();
+    } catch {
+      _workPool = null;
+    }
+  }
+  if (!_workPool || typeof _workPool.allLimited !== "function") return false;
+  return _workPool.allLimited();
+}
+
+// Synchronously read the already-instantiated work pool singleton. The pool is
+// created at module-eval in geminiPool.js (a module-scope singleton), so this
+// just reads the existing instance — it does not build a new one.
+function _resolveWorkPoolSync() {
+  return _geminiPoolsRef?.work || null;
+}
 
 /**
  * Main AI chat loop with multi-turn tool calling.
@@ -230,7 +284,13 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
   const { useFastModel = false } = options;
   // Conversational replies timeout faster than worker-with-thinking reasoning loops, but
   // leave headroom for at least one slow tool (web_search, scrape_url) plus a follow-up call.
-  const TIMEOUT_MS = useFastModel ? 45_000 : 90_000;
+  // Operator-tunable via distinct keys so the split is actually preserved:
+  // the fast path reads TIMEOUT_WORKER_FAST (config.timeouts.workerFast, 45s)
+  // and the worker path reads TIMEOUT_WORKER_SLOW (config.timeouts.workerSlow,
+  // 90s). The prior single `worker` key collapsed both to one value.
+  const TIMEOUT_MS = useFastModel
+    ? (config.timeouts?.workerFast ?? 45_000)
+    : (config.timeouts?.workerSlow ?? 90_000);
 
   // tools may already be in Gemini format [{functionDeclarations}] or Anthropic format [{name, input_schema}]
   const geminiTools = Array.isArray(tools) && tools[0]?.functionDeclarations ? tools : toGeminiTools(tools);
@@ -264,6 +324,14 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
   // fix landed in irene/ai/dual.js.
   const currentMaxOutputTokens = useFastModel ? 2048 : 8192;
 
+  // Outer-timeout cancellation. The previous Promise.race only abandoned the
+  // run() promise — the underlying generateContent + tool executor kept running
+  // detached. Thread this signal into every generateContent call (the SDK wires
+  // config.abortSignal into the underlying fetch) and into the tool executor so
+  // the outer timeout actually aborts in-flight work instead of leaking it.
+  const controller = new AbortController();
+  const { signal: abortSignal } = controller;
+
   const run = async () => {
     for (let i = 0; i < MAX_ITERATIONS; i++) {
       let response;
@@ -276,6 +344,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
             tools: geminiTools,
             maxOutputTokens: currentMaxOutputTokens,
             thinkingConfig: { thinkingBudget: currentThinkBudget },
+            abortSignal,
           },
         });
         // Surface MAX_TOKENS truncation so future regressions are visible
@@ -301,7 +370,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
               // maxOutputTokens MUST exceed thinkingBudget — otherwise thinking
               // eats the entire budget and visible text is silently truncated.
               // Match the primary call's headroom (thinkingBudget + 2048+).
-              config: { systemInstruction, tools: geminiTools, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 4096 } },
+              config: { systemInstruction, tools: geminiTools, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 4096 }, abortSignal },
             });
             log(`[AI] Fallback to ${config.geminiFallbackModel} succeeded`);
           } catch {
@@ -321,7 +390,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
             response = await client.models.generateContent({
               model: config.geminiFallbackModel,
               contents,
-              config: { systemInstruction, maxOutputTokens: 256 },
+              config: { systemInstruction, maxOutputTokens: 256, abortSignal },
             });
           } catch (e) { /* non-critical */ }
           if (!response?.candidates?.[0]?.content?.parts?.length) {
@@ -334,7 +403,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
             response = await client.models.generateContent({
               model: config.geminiFallbackModel,
               contents,
-              config: { systemInstruction, maxOutputTokens: 1024 },
+              config: { systemInstruction, maxOutputTokens: 1024, abortSignal },
             });
           } catch (retryErr) {
             log(`[Eris] Retry failed: ${retryErr.message}`);
@@ -440,8 +509,12 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
         }
         let result;
         const timeoutMs = SLOW_TOOLS.has(call.name) ? 25_000 : 10_000;
-        const toolPromise = executor(call.name, call.args);
+        // Pass the outer-timeout signal to the executor so tools that honor it
+        // can abort their own in-flight work (e.g. fetch). Existing executors
+        // ignore the extra arg, so this is backward-compatible.
+        const toolPromise = executor(call.name, call.args, abortSignal);
         let timedOut = false;
+        let onAbort;
         try {
           result = await Promise.race([
             toolPromise,
@@ -449,11 +522,20 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
               timedOut = true;
               rej(new Error(`tool "${call.name}" timed out after ${timeoutMs / 1000}s`));
             }, timeoutMs)),
+            // Unwind promptly when the OUTER timeout aborts — otherwise this
+            // Promise.all would keep awaiting a tool the caller already gave up on.
+            new Promise((_, rej) => {
+              if (abortSignal.aborted) return rej(new Error(`tool "${call.name}" aborted (run timed out)`));
+              onAbort = () => { timedOut = true; rej(new Error(`tool "${call.name}" aborted (run timed out)`)); };
+              abortSignal.addEventListener("abort", onAbort, { once: true });
+            }),
           ]);
           if (typeof result !== "string") result = JSON.stringify(result);
         } catch (err) {
           result = `Error: ${err.message}`;
           log(`Tool ${call.name} failed: ${err.message}`);
+        } finally {
+          if (onAbort) abortSignal.removeEventListener("abort", onAbort);
         }
         // Attach observer to late completion so orphaned in-flight work is
         // logged rather than silently producing partial side-effects.
@@ -485,7 +567,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
         const fallback = await client.models.generateContent({
           model: config.geminiFallbackModel,
           contents,
-          config: { systemInstruction, tools: geminiTools, maxOutputTokens: 1024 },
+          config: { systemInstruction, tools: geminiTools, maxOutputTokens: 1024, abortSignal },
         });
         const fbParts = fallback.candidates?.[0]?.content?.parts || [];
         allText = fbParts.filter(p => p.text && !p.thought).map(p => p.text).join("").trim();
@@ -498,11 +580,17 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
     return { text: allText, toolsUsed, functionCalls };
   };
 
-  // Race against timeout
+  // Race against timeout. When the timer wins, abort the controller so the
+  // in-flight generateContent + tool executor are cancelled rather than left
+  // running detached, then reject with the actual timeout that was used.
+  let timeoutTimer;
   return Promise.race([
-    run(),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("runGeminiChat timed out after 90s")), TIMEOUT_MS)
-    ),
+    run().finally(() => { if (timeoutTimer) clearTimeout(timeoutTimer); }),
+    new Promise((_, reject) => {
+      timeoutTimer = setTimeout(() => {
+        controller.abort();
+        reject(new Error(`runGeminiChat timed out after ${Math.round(TIMEOUT_MS / 1000)}s`));
+      }, TIMEOUT_MS);
+    }),
   ]);
 }

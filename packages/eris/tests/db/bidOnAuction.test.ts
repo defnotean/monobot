@@ -14,16 +14,60 @@ type AuctionRow = {
   current_bid: number;
   current_bidder_id: string | null;
 };
+type EconRow = { user_id: string; balance: number; version: number; total_earned: number; total_lost: number; total_gambled: number };
 const auctions: Map<string, AuctionRow> = new Map();
+// bidOnAuction now escrows the bid via tryDeductBalance, so the bidders need
+// real economy balances. Seeded generously in beforeEach.
+const econ: Map<string, EconRow> = new Map();
 
 // Tunable: how long select/update yield the event loop. Forcing both calls
 // through real awaits ensures the read-modify-write window is wide enough
 // that without locking, two concurrent bids interleave their phases.
 let yieldDelayMs = 1;
 
+function makeEconChain() {
+  return {
+    select(_cols: string = "*") {
+      return {
+        eq(_col: string, val: any) {
+          return {
+            async single() {
+              await delay(yieldDelayMs);
+              const row = econ.get(val);
+              return { data: row ? { ...row } : null, error: null };
+            },
+          };
+        },
+      };
+    },
+    update(updates: Partial<EconRow>) {
+      return {
+        eq(col1: string, val1: any) {
+          return {
+            eq(col2: string, val2: any) {
+              return {
+                async select(_cols: string = "*") {
+                  await delay(yieldDelayMs);
+                  const row = econ.get(val1);
+                  if (!row) return { data: [], error: null };
+                  if ((row as any)[col2] !== val2) return { data: [], error: null };
+                  Object.assign(row, updates);
+                  return { data: [{ user_id: row.user_id }], error: null };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+    insert(_row: any) { return Promise.resolve({ data: null, error: null }); },
+  };
+}
+
 function makeMockSupabase() {
   return {
     from(table: string) {
+      if (table === "eris_economy") return makeEconChain();
       if (table !== "eris_auctions") {
         // Other tables — return a no-op chainable so init/load doesn't crash.
         return makeNoopChain();
@@ -67,6 +111,11 @@ function makeMockSupabase() {
         },
       };
     },
+    // Force the CAS fallback so the escrow's tryDeductBalance uses the
+    // deterministic, mockable economy path.
+    rpc(_name: string, _args: any) {
+      return Promise.resolve({ data: null, error: { code: "PGRST202", message: "Could not find the function" } });
+    },
   };
 }
 
@@ -98,6 +147,13 @@ import { initDatabase, bidOnAuction } from "../../database.js";
 describe("bidOnAuction concurrency", () => {
   beforeEach(async () => {
     auctions.clear();
+    econ.clear();
+    // Seed every bidder used across the tests with ample funds so the escrow
+    // never fails for insufficient balance (these tests exercise the
+    // optimistic-concurrency winner logic, not the can't-pay rejection).
+    for (const uid of ["userA", "userB", "lowballer", "raceWinner", "external", "seller"]) {
+      econ.set(uid, { user_id: uid, balance: 100_000, version: 0, total_earned: 0, total_lost: 0, total_gambled: 0 });
+    }
     await initDatabase();
   });
 
@@ -107,7 +163,7 @@ describe("bidOnAuction concurrency", () => {
       id: auctionId,
       status: "active",
       current_bid: 50,
-      current_bidder_id: "seller",
+      current_bidder_id: null, // matches createAuction (starting price, no escrowed bidder)
     });
 
     const [resultA, resultB] = await Promise.all([
@@ -143,7 +199,7 @@ describe("bidOnAuction concurrency", () => {
       id: auctionId,
       status: "active",
       current_bid: 100,
-      current_bidder_id: "seller",
+      current_bidder_id: null,
     });
 
     // userA bids 150, userB bids 120 — userB MUST lose since 120 < 150.
@@ -169,7 +225,7 @@ describe("bidOnAuction concurrency", () => {
       id: auctionId,
       status: "active",
       current_bid: 500,
-      current_bidder_id: "seller",
+      current_bidder_id: null,
     });
 
     const result = await bidOnAuction(auctionId, "lowballer", 100);
@@ -188,7 +244,7 @@ describe("bidOnAuction concurrency", () => {
       id: auctionId,
       status: "active",
       current_bid: 100,
-      current_bidder_id: "seller",
+      current_bidder_id: null,
     });
 
     // Hijack: increase yieldDelayMs so we can sneak in an out-of-band update.

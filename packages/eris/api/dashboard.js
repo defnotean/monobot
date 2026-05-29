@@ -3,6 +3,7 @@ import config from "../config.js";
 import { log } from "../utils/logger.js";
 import { verifyTwinRequest, safeStringEqual } from "@defnotean/shared/twinSign";
 import { createRateLimiter } from "@defnotean/shared/rateLimit";
+import { getClientIp } from "@defnotean/shared/getClientIp";
 
 // Per-source rate limit for /api/twin/state. The endpoint is Bearer-gated, so
 // "identity" reduces to source IP — anyone holding TWIN_API_SECRET can read
@@ -68,7 +69,10 @@ export async function handleApiRequest(req, res) {
   res.setHeader("Content-Type", "application/json");
 
   // ── Rate limiting (per-IP, 30 req/min) ──────────────────────────────────
-  const clientIP = req.socket.remoteAddress;
+  // Use getClientIp (X-Forwarded-For aware): behind Render's proxy every
+  // request shares one socket peer, so keying on remoteAddress would collapse
+  // all visitors into a single bucket.
+  const clientIP = getClientIp(req);
   const now = Date.now();
   if (!globalThis._dashRateLimits) globalThis._dashRateLimits = new Map();
   const hits = globalThis._dashRateLimits.get(clientIP) || [];
@@ -113,7 +117,12 @@ export async function handleApiRequest(req, res) {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace("Bearer ", "");
       const validKeys = [process.env.DASHBOARD_API_KEY, process.env.TWIN_API_SECRET].filter(Boolean);
-      if (!token || !validKeys.includes(token)) {
+      // Constant-time compare via safeStringEqual (crypto.timingSafeEqual over
+      // length-equalized buffers). Array.includes uses === under the hood, which
+      // short-circuits on the first mismatched byte and leaks the secret one byte
+      // at a time through response-time deltas.
+      const tokenOk = !!token && validKeys.some((k) => safeStringEqual(token, k));
+      if (!tokenOk) {
         json(res, 401, { error: "unauthorized" });
         return;
       }
@@ -126,16 +135,31 @@ export async function handleApiRequest(req, res) {
 
     let body = null;
     let rawBody = "";
+    let bodyTooLarge = false;
     if (["POST", "PUT", "PATCH"].includes(req.method)) {
       const parsed = await new Promise(resolve => {
         let d = "";
-        req.on("data", c => d += c);
+        req.on("data", c => {
+          d += c;
+          // Cap accumulation at ~1MB — a dashboard JSON payload is never this
+          // big, so anything past it is a memory-exhaustion attempt. Destroy
+          // the socket (mirrors the 10KB twin-command cap in presence.js).
+          if (d.length > 1_048_576) {
+            bodyTooLarge = true;
+            req.destroy();
+            resolve(null);
+          }
+        });
         req.on("end", () => {
           rawBody = d;
           try { resolve(JSON.parse(d)); } catch { resolve(null); }
         });
       });
       body = parsed;
+    }
+    if (bodyTooLarge) {
+      json(res, 413, { error: "payload too large" });
+      return;
     }
 
     if (path === "/api/health") {
@@ -463,7 +487,7 @@ export async function handleApiRequest(req, res) {
         json(res, 403, { error: "twin state requires Bearer TWIN_API_SECRET" });
         return;
       }
-      const ipKey = req.socket.remoteAddress || "unknown";
+      const ipKey = getClientIp(req);
       if (!_twinStateLimiter.allow(ipKey)) {
         res.setHeader("Retry-After", "60");
         json(res, 429, { error: "twin state rate limit (10/min)" });

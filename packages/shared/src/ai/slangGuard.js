@@ -1,3 +1,4 @@
+/** @param {string} text */
 export function getSlangGuardContext(text) {
   const lower = (text || "").toLowerCase();
   

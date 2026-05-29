@@ -84,7 +84,7 @@ npm install                    # installs all workspace deps at root, hoists whe
 npm run test                   # runs ~1100 tests across both bots + shared
 npm run start:eris             # starts Eris locally (needs .env in packages/eris/)
 npm run start:irene            # starts Irene locally (needs .env in packages/irene/)
-npm run dev:eris               # tsx --watch index.ts for fast inner loop
+npm run dev:eris               # node --watch index.js for fast inner loop
 npm run dev:irene
 npm run lint:version-sync      # CI guard — both bots must pin identical shared deps
 ```

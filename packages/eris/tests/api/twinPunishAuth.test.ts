@@ -72,6 +72,7 @@ type MockReq = {
   headers: Record<string, string>;
   socket: { remoteAddress: string };
   on: (event: string, cb: (chunk: string) => void) => MockReq;
+  destroy: () => void;
 };
 
 type MockRes = {
@@ -87,18 +88,21 @@ function makeReq({
   path,
   body,
   headers = {},
+  method = "POST",
   ip = `127.0.0.${Math.floor(Math.random() * 200) + 1}`,
 }: {
   path: string;
   body: string;
   headers?: Record<string, string>;
+  method?: string;
   ip?: string;
 }): MockReq {
   const dataHandlers: Array<(chunk: string) => void> = [];
   const endHandlers: Array<() => void> = [];
+  let destroyed = false;
   const req: MockReq = {
     url: path,
-    method: "POST",
+    method,
     headers,
     socket: { remoteAddress: ip },
     on(event: string, cb: any) {
@@ -106,12 +110,15 @@ function makeReq({
       if (event === "end") endHandlers.push(cb);
       return req;
     },
+    // The handler calls req.destroy() when the body exceeds the ~1MB cap.
+    // Mark the stream destroyed so we stop feeding it further chunks/end.
+    destroy() { destroyed = true; },
   };
   // Flush body asynchronously so the handler's Promise that listens on the
   // stream actually subscribes before we emit. Microtask is enough.
   queueMicrotask(() => {
-    if (body) for (const cb of dataHandlers) cb(body);
-    for (const cb of endHandlers) cb();
+    if (body) for (const cb of dataHandlers) { if (destroyed) break; cb(body); }
+    if (!destroyed) for (const cb of endHandlers) cb();
   });
   return req;
 }
@@ -245,5 +252,77 @@ describe("/api/twin/punish — strict HMAC auth (legacy body.secret removed)", (
 
     expect(status).toBe(401);
     expect(body.error).toMatch(/twin auth/);
+  });
+});
+
+// ─── Dashboard Bearer auth gate (non-twin paths) ──────────────────────────────
+// Non-twin dashboard paths require an Authorization: Bearer <key> header where
+// <key> is DASHBOARD_API_KEY or TWIN_API_SECRET, compared via safeStringEqual
+// (constant-time). The legacy truncated-bot-token fallback was removed. These
+// tests lock in the accept/reject behavior on a representative GET path.
+describe("dashboard Bearer auth gate (/api/stats — non-twin)", () => {
+  it("rejects a request with NO Authorization header with 401", async () => {
+    const req = makeReq({ path: "/api/stats", body: "", method: "GET" });
+    const res = makeRes();
+    const { status, body } = await call(req, res);
+
+    expect(status).toBe(401);
+    expect(body.error).toMatch(/unauthorized/);
+  });
+
+  it("rejects a request with a WRONG Bearer token with 401", async () => {
+    const req = makeReq({
+      path: "/api/stats",
+      body: "",
+      method: "GET",
+      headers: { authorization: "Bearer not-the-real-secret" },
+    });
+    const res = makeRes();
+    const { status, body } = await call(req, res);
+
+    expect(status).toBe(401);
+    expect(body.error).toMatch(/unauthorized/);
+  });
+
+  it("accepts a request whose Bearer token equals TWIN_API_SECRET with 200", async () => {
+    // process.env.TWIN_API_SECRET is set to SECRET by tests/setup.ts and is one
+    // of the validKeys safeStringEqual accepts.
+    const req = makeReq({
+      path: "/api/stats",
+      body: "",
+      method: "GET",
+      headers: { authorization: `Bearer ${SECRET}` },
+    });
+    const res = makeRes();
+    const { status, body } = await call(req, res);
+
+    expect(status).toBe(200);
+    expect(body.status).toBe("online");
+  });
+});
+
+// ─── 413 payload-too-large cap ────────────────────────────────────────────────
+// POST/PUT/PATCH bodies are capped at ~1MB; anything larger destroys the socket
+// and returns 413 before reaching business logic. This mirrors the 10KB
+// twin-command cap and protects against memory-exhaustion floods.
+describe("dashboard body cap (413 payload too large)", () => {
+  it("returns 413 and skips business logic for a body exceeding ~1MB", async () => {
+    // /api/mood PATCH would normally call db.updateMood; an oversized body must
+    // be rejected before that. Send 1MB + 1 byte so the > 1_048_576 cap trips.
+    // This is a non-twin path, so it must clear the Bearer gate first; the cap
+    // applies to authenticated callers too.
+    const huge = "x".repeat(1_048_577);
+
+    const req = makeReq({
+      path: "/api/mood",
+      body: huge,
+      method: "PATCH",
+      headers: { authorization: `Bearer ${SECRET}` },
+    });
+    const res = makeRes();
+    const { status, body } = await call(req, res);
+
+    expect(status).toBe(413);
+    expect(body.error).toMatch(/payload too large/);
   });
 });

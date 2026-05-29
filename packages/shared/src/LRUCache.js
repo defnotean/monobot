@@ -64,8 +64,8 @@
 
 export class LRUCache {
   /**
-   * @param {number} maxSize — maximum number of entries
-   * @param {number} [ttlMs] — optional time-to-live in milliseconds (0 = no expiry)
+   * @param {number} maxSize - maximum number of entries
+   * @param {number} [ttlMs] - optional time-to-live in milliseconds (0 = no expiry)
    */
   constructor(maxSize, ttlMs = 0) {
     this._max = maxSize;
@@ -77,6 +77,7 @@ export class LRUCache {
 
   get size() { return this._map.size; }
 
+  /** @param {any} key */
   has(key) {
     if (!this._map.has(key)) return false;
     if (this._ttl && Date.now() - this._map.get(key).ts > this._ttl) {
@@ -86,6 +87,7 @@ export class LRUCache {
     return true;
   }
 
+  /** @param {any} key */
   get(key) {
     const entry = this._map.get(key);
     if (!entry) return undefined;
@@ -100,9 +102,9 @@ export class LRUCache {
   }
 
   /**
-   * @param {string} key
+   * @param {any} key
    * @param {*}      value
-   * @param {string} [group] — optional group id; enables O(1) deleteGroup(group).
+   * @param {string} [group] - optional group id; enables O(1) deleteGroup(group).
    */
   set(key, value, group) {
     // Remove existing to update position (also clean any stale group index)
@@ -121,11 +123,13 @@ export class LRUCache {
     return this;
   }
 
+  /** @param {any} key */
   delete(key) { return this._deleteWithGroup(key); }
 
   /**
    * Drop every key in a group. O(k) where k = group size, independent of
    * total cache size. Returns the number of keys removed.
+   * @param {string} group
    */
   deleteGroup(group) {
     if (group == null) return 0;
@@ -161,6 +165,7 @@ export class LRUCache {
   }
 
   // ─── Internals ─────────────────────────────────────────────────────────
+  /** @param {any} key */
   _deleteWithGroup(key) {
     const entry = this._map.get(key);
     if (!entry) return false;

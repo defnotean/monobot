@@ -6,7 +6,7 @@
 
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
-import { executeTool } from "../executor.js";
+import { executeTool, postDeferralIfNeeded } from "../executor.js";
 
 const NV = config.nvidia;
 
@@ -138,9 +138,11 @@ export async function runGeminiChat(arg1, ...rest) {
   }
 
   // Default executor — uses the bot's own executeTool if caller didn't provide one
-  // (Irene's runGeminiChat doesn't take an executor; it uses the global executor)
+  // (Irene's runGeminiChat doesn't take an executor; it uses the global executor).
+  // aiInitiated:true so moderationExecutor's destructive-action confirm gate
+  // engages — these calls originate from the LLM tool loop.
   if (!executor) {
-    executor = (toolName, toolArgs) => executeTool(toolName, toolArgs, msgCtx);
+    executor = (toolName, toolArgs) => executeTool(toolName, toolArgs, msgCtx, { aiInitiated: true });
   }
 
   const model = useFastModel ? NV.fastModel : NV.model;
@@ -298,7 +300,11 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
       log(`[NVIDIA] ${fnName}(${JSON.stringify(fnArgs).slice(0, 100)})`);
       try {
         if (!executor) return "no executor";
-        return await executor(fnName, fnArgs);
+        const raw = await executor(fnName, fnArgs);
+        // Render bridge: a destructive AI action returns a confirm-prompt OBJECT
+        // — post the Confirm/Cancel buttons as a real message and feed the model
+        // the pending notice instead of JSON-stringifying the object back.
+        return await postDeferralIfNeeded(raw, msgCtx?.channel);
       } catch (e) {
         log(`[NVIDIA] Tool ${fnName} failed: ${e.message}`);
         return `tool error: ${e.message}`;

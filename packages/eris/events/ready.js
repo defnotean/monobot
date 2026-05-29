@@ -511,7 +511,12 @@ Write ONE reflection — a higher-order observation about yourself. Example: "i'
       if (closed?.length) {
         for (const auction of closed) {
           if (auction.current_bidder_id && auction.current_bid > 0) {
+            // The winning bid was escrowed from the winner at bid time (see
+            // bidOnAuction), so crediting the seller here just hands over the
+            // already-held coins — net coin creation is zero. Grant the item to
+            // the winner to complete the trade.
             await db.updateBalance(auction.seller_id, auction.current_bid, "auction_sale", auction.item_name);
+            await db.addToInventory?.(auction.current_bidder_id, auction.item_name, "auction");
             log(`[AUCTION] ${auction.item_name} sold to ${auction.current_bidder_id} for ${auction.current_bid}`);
           }
         }

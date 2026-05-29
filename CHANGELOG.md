@@ -11,7 +11,25 @@ are recorded in `packages/eris/package.json` (currently `3.2.0`) and
 
 ## [Unreleased]
 
-_No changes yet._
+P0 + P1 hardening pass across the monorepo. High-level summary:
+
+### Added
+- CI workflow (`.github/workflows/test.yml`): runs the version-sync lint,
+  the full test suite, and the `tsc --noEmit` typecheck across a Node 18/20/22
+  matrix on push and pull request — the target the README CI badge points at.
+
+### Changed
+- Dev loop now uses `node --watch index.js` (Node 18+ native watch) for both
+  bots instead of the broken `tsx --watch index.ts` (only `index.js` ships),
+  so `npm run dev:eris` / `dev:irene` work on a clean checkout.
+- Render `buildCommand` switched from `npm install` to `npm ci` in all three
+  blueprints so deploys honour the committed lockfile.
+
+### Fixed
+- Documentation honesty: corrected the `ARCHITECTURE.md` tool-surface claim
+  that Eris uses the two-tier tool path — neither bot does today; the full
+  (profile-filtered) schema is sent every turn and the registry tiering is
+  planned/being wired.
 
 ## [3.2.0] - 2026-05-16
 

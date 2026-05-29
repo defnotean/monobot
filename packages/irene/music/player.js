@@ -12,6 +12,7 @@ import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "disc
 import { onTrackStart, onTrackEnd, hasSession, extractSongInfo, stopKaraoke } from "../ai/karaoke.js";
 import { log } from "../utils/logger.js";
 import { saveQueue as dbSaveQueue, getSavedQueues, clearSavedQueue, clearAllSavedQueues } from "../database.js";
+import * as settingsStore from "./settingsStore.js";
 
 // Shoukaku instance — set by initMusic() from index.js
 let shoukaku = null;
@@ -68,6 +69,26 @@ const queues = new Map();
 
 const PLAYLIST_LIMIT = 300;
 
+// ─── Durable music/voice settings (soundboard, DJ role, wake word) ──────────
+// These were previously in-memory-only and lost on every restart. They now
+// live in settingsStore.js (Supabase-backed, degrades to in-memory). Re-export
+// the accessors here so the music command files and the voice listener have a
+// single import surface and trigger a load-on-demand the first time a guild's
+// settings are touched.
+//
+// Wiring note: commands/music/soundboard.js and commands/music/dj.js (NOT
+// owned by this stream) keep their own in-memory Maps. Migrating them to read
+// through these accessors (and calling loadGuildSettings on first use) is the
+// one remaining step to make soundboard + DJ role survive restarts; recorded
+// as an open concern. The voice-listener wake word IS wired here.
+export const loadGuildSettings = settingsStore.loadGuild;
+export const getSoundboardSetting = settingsStore.getSoundboard;
+export const setSoundboardSetting = settingsStore.setSoundboard;
+export const getDjRoleSetting = settingsStore.getDjRole;
+export const setDjRoleSetting = settingsStore.setDjRole;
+export const getWakeWordSetting = settingsStore.getWakeWord;
+export const setWakeWordSetting = settingsStore.setWakeWord;
+
 export function getQueue(guildId) {
   return queues.get(guildId);
 }
@@ -87,6 +108,8 @@ export function createQueue(guildId, voiceChannel, textChannel) {
     songStartedAt: null,
     nowPlayingMsg: null,  // reference to the control panel message
     _autoLeaveTimer: null,
+    _aloneDisconnectTimer: null,  // armed when bot is alone in the VC
+    _pausedForEmpty: false,       // true when we auto-paused due to empty VC
   };
 
   queues.set(guildId, queue);
@@ -99,6 +122,7 @@ export function deleteQueue(guildId) {
   queues.delete(guildId);
   if (queue._autoLeaveTimer) clearTimeout(queue._autoLeaveTimer);
   if (queue._stuckTimeout) clearTimeout(queue._stuckTimeout);
+  if (queue._aloneDisconnectTimer) clearTimeout(queue._aloneDisconnectTimer);
   try { queue.nowPlayingMsg?.delete().catch(() => {}); } catch {}
   // Stop lyrics if running — music is gone
   if (hasSession(guildId)) stopKaraoke(guildId, "queue deleted").catch(() => {});
@@ -114,6 +138,91 @@ export function deleteQueue(guildId) {
   queue.player = null;
   queue.tracks = [];
   queue._destroyed = true;
+}
+
+// ─── Alone-in-VC: pause + scheduled disconnect (cost control) ───────────────
+// When the bot is the only non-bot member left in its voice channel it keeps
+// streaming to nobody — burning Lavalink bandwidth and (for paid sources) API
+// budget for hours. We pause immediately when alone and schedule a disconnect
+// after a short grace period; if a human rejoins before the grace expires we
+// resume and cancel the disconnect.
+//
+// Wiring note: the bot's voice membership is observed in
+// events/voiceStateUpdate.js (NOT owned by this stream). That handler should
+// call handleVoiceMembershipChange(guildId) on any voiceStateUpdate whose
+// channel matches the bot's active music VC. Until that one-line wiring lands
+// the helper is still exercised by tests and is a no-op otherwise.
+const ALONE_DISCONNECT_GRACE_MS = 60_000;
+
+/**
+ * Count the non-bot members currently in the queue's voice channel.
+ * Reads from the channel's live member cache (discord.js GuildVoiceChannel).
+ */
+function countHumanMembers(voiceChannel) {
+  const members = voiceChannel?.members;
+  if (!members || typeof members.filter !== "function") return 0;
+  return members.filter((m) => !m.user?.bot).size;
+}
+
+/**
+ * Re-evaluate whether the bot is alone in its voice channel and react.
+ * - Alone  → pause playback (if playing) and schedule a disconnect after the
+ *            grace period. Idempotent: an already-scheduled timer is left be.
+ * - Joined → cancel a pending disconnect and resume if we auto-paused.
+ *
+ * Exported so the (unowned) voiceStateUpdate handler can drive it. Returns a
+ * small status object for testability.
+ *
+ * @param {string} guildId
+ * @param {{ graceMs?: number }} [opts]
+ */
+export function handleVoiceMembershipChange(guildId, opts = {}) {
+  const queue = queues.get(guildId);
+  if (!queue) return { action: "no-queue" };
+
+  const graceMs = opts.graceMs ?? ALONE_DISCONNECT_GRACE_MS;
+  const humans = countHumanMembers(queue.voiceChannel);
+
+  if (humans === 0) {
+    // Bot is alone — pause now (cheap) and arm the disconnect timer.
+    // Only pause an actively-playing queue: pausing an idle player and then
+    // resuming it on rejoin would un-pause something that was never playing.
+    if (queue.playing && queue.player && !queue.player.paused) {
+      try { queue.player.setPaused(true); } catch {}
+      queue._pausedForEmpty = true;
+    }
+    if (!queue._aloneDisconnectTimer) {
+      queue._aloneDisconnectTimer = setTimeout(() => {
+        const q = queues.get(guildId);
+        if (!q) return;
+        q._aloneDisconnectTimer = null;
+        // Re-check at fire time — someone may have rejoined without a fresh
+        // membership event reaching us (e.g. missed gateway event).
+        if (countHumanMembers(q.voiceChannel) === 0) {
+          log(`[Music] Alone in VC for ${guildId} past grace — disconnecting`);
+          deleteQueue(guildId);
+        }
+      }, graceMs);
+      if (typeof queue._aloneDisconnectTimer?.unref === "function") queue._aloneDisconnectTimer.unref();
+      log(`[Music] Bot alone in VC for ${guildId} — paused, disconnecting in ${graceMs}ms`);
+    }
+    return { action: "alone", scheduledDisconnect: true };
+  }
+
+  // Someone is here — cancel any pending disconnect and resume if we paused.
+  let resumed = false;
+  if (queue._aloneDisconnectTimer) {
+    clearTimeout(queue._aloneDisconnectTimer);
+    queue._aloneDisconnectTimer = null;
+  }
+  if (queue._pausedForEmpty) {
+    queue._pausedForEmpty = false;
+    if (queue.player && queue.player.paused) {
+      try { queue.player.setPaused(false); resumed = true; } catch {}
+    }
+    log(`[Music] Member rejoined VC for ${guildId} — resumed playback`);
+  }
+  return { action: "occupied", resumed };
 }
 
 // ─── Now Playing Control Panel ──────────────────────────────────────────────
@@ -456,7 +565,21 @@ export async function playSong(queue, _retries = 0) {
 
 import getPreview from "spotify-url-info";
 import fetch from "node-fetch";
+import { safeFetch } from "@defnotean/shared/safeFetch";
 const spotifyExt = getPreview(fetch);
+
+// Strict allowlist for the Spotify HTML-scrape fallback. The old check was a
+// bare `.includes('spotify.com')`, which `evil.com/spotify.com` (or
+// `spotify.com.evil.com`) trivially bypasses to point our fetch at an
+// attacker-controlled host. Validate the parsed hostname instead.
+function isSpotifyHost(rawUrl) {
+  let host;
+  try { host = new URL(rawUrl).hostname.toLowerCase(); }
+  catch { return false; }
+  return host === "spotify.com" || host === "open.spotify.com" || host.endsWith(".spotify.com");
+}
+
+export { isSpotifyHost };
 
 export async function searchPlaylist(query) {
   if (!shoukaku) return null;
@@ -539,11 +662,14 @@ export async function searchSong(query) {
 
     let result = await node.rest.resolve(searchQuery);
 
-    // Spotify Fallback: If Lavalink lacks LavaSrc and rejects the URL, scrape Spotify and search YouTube
-    if ((result?.loadType === "empty" || result?.loadType === "NO_MATCHES" || result?.loadType === "error" || result?.loadType === "LOAD_FAILED" || !result) && resolveQuery.includes("spotify.com")) {
+    // Spotify Fallback: If Lavalink lacks LavaSrc and rejects the URL, scrape Spotify and search YouTube.
+    // Validate the host properly (parsed hostname must be a real *.spotify.com)
+    // and route through safeFetch — a raw substring check on the URL is
+    // bypassable (evil.com/spotify.com) and the raw fetch was a clean SSRF.
+    if ((result?.loadType === "empty" || result?.loadType === "NO_MATCHES" || result?.loadType === "error" || result?.loadType === "LOAD_FAILED" || !result) && isSpotifyHost(resolveQuery)) {
       try {
-        const res = await fetch(resolveQuery);
-        const html = await res.text();
+        const res = await safeFetch(resolveQuery);
+        const html = res.text;
         const match = html.match(/<title>(.*?)<\/title>/);
         if (match) {
           let title = match[1].replace(/ \| Spotify/gi, "").trim();

@@ -36,13 +36,15 @@ const QUIRK_HINTS = [
 /**
  * Maybe return a memory-quirk hint. Returns empty string most of the time.
  * Override the chance with `opts.chance` (useful for tests / higher realism).
+ * @param {{ chance?: number, excludeIds?: string[] }} [opts]
  */
 export function getMemoryQuirkHint(opts = {}) {
   const chance = opts.chance ?? 0.03;
   if (Math.random() > chance) return "";
   // Exclude quirks by id if caller asks (e.g. name_fuzz when no username is set).
-  const pool = opts.excludeIds?.length
-    ? QUIRK_HINTS.filter(q => !opts.excludeIds.includes(q.id))
+  const excludeIds = opts.excludeIds;
+  const pool = excludeIds?.length
+    ? QUIRK_HINTS.filter(q => !excludeIds.includes(q.id))
     : QUIRK_HINTS;
   if (!pool.length) return "";
   return pool[Math.floor(Math.random() * pool.length)].text;

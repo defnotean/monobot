@@ -2,6 +2,7 @@ import { SlashCommandBuilder , MessageFlags } from "discord.js";
 import { tryDeductBalance, updateBalance, recordGameResult, getMood, getRelationship } from "../../database.js";
 import { slotsEmbed, slotsAnimFrames, animateEmbed } from "../../ai/gameVisuals.js";
 import { spinSlots, slotsPayout, randomQuip } from "../../ai/gambling.js";
+import { log } from "../../utils/logger.js";
 
 export const data = new SlashCommandBuilder()
   .setName("slots")
@@ -45,7 +46,7 @@ export async function execute(interaction) {
     try {
       newBalance = await updateBalance(userId, credit, won ? "gamble_slots_win" : "gamble_slots_loss", `slots:${label}`);
     } catch (err) {
-      console.error(`[Slots] credit failed for ${userId} credit=${credit}:`, err);
+      log(`[Slots] credit failed for ${userId} credit=${credit}: ${err?.message || err}`);
     }
   }
   await recordGameResult(userId, "slots", won, amount, won ? Math.floor(amount * multiplier) : 0);

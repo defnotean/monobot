@@ -8,6 +8,7 @@
 // all bots. A tool that doesn't exist on a particular bot just never reaches
 // `checkToolRateLimit()` (the registry won't dispatch it), so listing an
 // unused tool here is harmless. Add new entries here, not in a per-bot copy.
+/** @type {Record<string, { max: number, windowMs: number }>} */
 const TOOL_LIMITS = {
   web_search:     { max: 10, windowMs: 60_000 },
   scrape_url:     { max: 5,  windowMs: 60_000 },
@@ -35,7 +36,7 @@ setInterval(() => {
   for (const [key, times] of _windows) {
     const limit = TOOL_LIMITS[key.split(":")[1]];
     if (!limit) { _windows.delete(key); continue; }
-    const filtered = times.filter(t => now - t < limit.windowMs);
+    const filtered = times.filter((/** @type {number} */ t) => now - t < limit.windowMs);
     if (filtered.length === 0) _windows.delete(key);
     else _windows.set(key, filtered);
   }
@@ -53,7 +54,7 @@ export function checkToolRateLimit(userId, toolName) {
 
   const key = `${userId}:${toolName}`;
   const now = Date.now();
-  const times = (_windows.get(key) || []).filter(t => now - t < limit.windowMs);
+  const times = (_windows.get(key) || []).filter((/** @type {number} */ t) => now - t < limit.windowMs);
 
   if (times.length >= limit.max) {
     const oldest = times[0];

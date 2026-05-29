@@ -20,12 +20,17 @@ function getVoyage() {
   return _voyage;
 }
 
-// Voyage rate limiter: max 1 call per 2 seconds to avoid 429s
-const _voyageLastCall = { ts: 0 };
-const _VOYAGE_MIN_GAP = 5000;
+// Voyage rate limiter — separate trackers for store vs search so a per-message
+// search and a per-message store don't mutually block each other (a single
+// shared 5s gate silently degraded recall to keyword-only). Each function gets
+// its own 2s gap, matching Irene's split design.
+const _voyageStore = { ts: 0 };
+const _voyageSearch = { ts: 0 };
+const _VOYAGE_MIN_GAP = 2000;
 const _searchCache = new Map();
+const _SEARCH_CACHE_MAX = 500;
 const _SEARCH_CACHE_TTL = 60000;
-function canCallVoyage() { const n = Date.now(); if (n - _voyageLastCall.ts < _VOYAGE_MIN_GAP) return false; _voyageLastCall.ts = n; return true; }
+function canCallVoyage(type = "store") { const tracker = type === "search" ? _voyageSearch : _voyageStore; const n = Date.now(); if (n - tracker.ts < _VOYAGE_MIN_GAP) return false; tracker.ts = n; return true; }
 
 // Local-Ollama embedding fallback. Activated by config.local.ollamaEmbedUrl
 // (env OLLAMA_EMBED_URL). When set, Voyage is bypassed entirely.
@@ -63,7 +68,7 @@ export async function generateEmbedding(text) {
   if (!text) return null;
   if (config.local?.ollamaEmbedUrl) return _ollamaEmbed(text,500);
   if (!config.voyageApiKey) return null;
-  if (!canCallVoyage()) { log("[Semantic] Voyage rate-limited, skipping"); return null; }
+  if (!canCallVoyage("store")) { log("[Semantic] Voyage rate-limited, skipping"); return null; }
 
   try {
     const res = await fetch("https://api.voyageai.com/v1/embeddings", {
@@ -82,7 +87,7 @@ export async function generateEmbedding(text) {
     if (!res.ok) {
       if (res.status === 429) {
         // Back off for 30 seconds on rate limit
-        _voyageLastCall.ts = Date.now() + 25_000;
+        _voyageStore.ts = Date.now() + 25_000;
         log(`[Semantic] Voyage rate-limited (429), backing off 30s`);
       } else {
         log(`[Semantic] Voyage API error: ${res.status}`);
@@ -105,7 +110,7 @@ export async function generateQueryEmbedding(text) {
   if (!text) return null;
   if (config.local?.ollamaEmbedUrl) return _ollamaEmbed(text,200);
   if (!config.voyageApiKey) return null;
-  if (!canCallVoyage()) return null;
+  if (!canCallVoyage("search")) return null;
 
   try {
     const res = await fetch("https://api.voyageai.com/v1/embeddings", {
@@ -122,7 +127,7 @@ export async function generateQueryEmbedding(text) {
     });
 
     if (!res.ok) {
-      if (res.status === 429) _voyageLastCall.ts = Date.now() + 25_000;
+      if (res.status === 429) _voyageSearch.ts = Date.now() + 25_000;
       return null;
     }
     const data = await res.json();
@@ -226,8 +231,21 @@ export async function bumpExistingMemory(supabase, memoryId) {
  * or exact content match when embeddings are missing), bump the existing row
  * instead of inserting — keeps the table from filling with paraphrases of the
  * same event.
+ *
+ * PRIVACY: pass `opts.sensitivity = "secret"` for content derived from a
+ * secret-tier disclosure. Secret content is NEVER embedded or written to the
+ * searchable semantic store — once it's in the access-gated facts table that's
+ * the only place it lives. Default ("normal"/"sensitive") preserves the prior
+ * always-store behavior so existing callers are unaffected.
  */
-export async function storeEpisode(botId, userId, channelId, guildId, type, content) {
+export async function storeEpisode(botId, userId, channelId, guildId, type, content, opts = {}) {
+  // Secret-tier guard: a "forget everything" disclosure or a fact the user
+  // locked away as a secret must not leak into the searchable episodic store
+  // where it would be retrievable by similarity/keyword forever with no
+  // access gate. Skip the embedding + insert entirely.
+  if (opts && opts.sensitivity === "secret") {
+    return { skipped: true, reason: "secret-tier-not-embedded" };
+  }
   try {
     const { getSupabase } = await import("../database.js");
     const supabase = getSupabase();
@@ -285,6 +303,21 @@ export async function storeEpisode(botId, userId, channelId, guildId, type, cont
  * Find relevant memories for the current message using vector similarity.
  * Falls back to keyword matching if embeddings aren't available.
  */
+// Note: empty/zero-hit results are now cached for the full _SEARCH_CACHE_TTL too
+// (the cache was previously read but never written, so every call recomputed).
+// A memory stored within the TTL window after an empty search for a colliding
+// key will be missed until the entry expires — bounded, and matches Irene's
+// port which also caches empties.
+function _cachePut(key, results) {
+  if (_searchCache.size >= _SEARCH_CACHE_MAX) {
+    // Cheap FIFO drop — oldest insertion first. Bounds a previously-unbounded
+    // Map that would grow once per unique message on a long-running channel.
+    const firstKey = _searchCache.keys().next().value;
+    if (firstKey !== undefined) _searchCache.delete(firstKey);
+  }
+  _searchCache.set(key, { ts: Date.now(), results });
+}
+
 export async function searchRelevantMemories(botId, userId, messageText, limit = 3) {
   const _ck = botId+":"+userId+":"+msgHash(messageText); const _cc = _searchCache.get(_ck); if (_cc && Date.now()-_cc.ts < _SEARCH_CACHE_TTL) return _cc.results;
   try {
@@ -305,11 +338,13 @@ export async function searchRelevantMemories(botId, userId, messageText, limit =
             match_count: limit,
           });
           if (data?.length) {
-            return data.map(d => ({
+            const results = data.map(d => ({
               type: d.type,
               content: d.content,
               similarity: d.similarity,
             }));
+            _cachePut(_ck, results);
+            return results;
           }
         } catch {
           // RPC might not exist yet — fall through to keyword search
@@ -336,7 +371,9 @@ export async function searchRelevantMemories(botId, userId, messageText, limit =
         .order("created_at", { ascending: false })
         .limit(limit);
 
-      return (data || []).map(d => ({ type: d.type, content: d.content, similarity: 0.5 }));
+      const results = (data || []).map(d => ({ type: d.type, content: d.content, similarity: 0.5 }));
+      _cachePut(_ck, results);
+      return results;
     } catch {
       return [];
     }
@@ -411,6 +448,56 @@ export function __setConsolidationBudget(used, windowStartedAt = Date.now()) {
 }
 export function __getConsolidationBudget() {
   return { used: _budget.used, windowStartedAt: _budget.windowStartedAt };
+}
+
+/**
+ * RIGHT TO BE FORGOTTEN — hard-delete ALL episodic memories for a single user.
+ *
+ * Unlike pruneMemories (age-bounded, type-exempt), this deletes every row for
+ * (botId, userId) regardless of type or age — bond/tension/venting/opinion
+ * included. This is the destructive companion to clearAllFacts: when a user
+ * says "forget everything about me", their facts AND their episodic store must
+ * both go, or the same emotional disclosures survive in the searchable vector
+ * store forever.
+ *
+ * Returns { ok: boolean, deleted: number, error?: string }. `ok` is false on a
+ * reported delete error so the caller can surface a partial-erasure warning
+ * instead of falsely claiming a clean wipe. Missing table / no Supabase are
+ * treated as ok:true (nothing to delete) so a fresh install degrades cleanly.
+ */
+export async function deleteEpisodicMemoriesForUser(botId, userId) {
+  if (!userId) return { ok: false, deleted: 0, error: "missing-user" };
+  try {
+    const { getSupabase } = await import("../database.js");
+    const supabase = getSupabase();
+    if (!supabase) return { ok: true, deleted: 0 };
+
+    let query = supabase
+      .from("eris_episodic_memories")
+      .delete()
+      .eq("user_id", userId);
+    // Scope to this bot when known so a shared table isn't over-deleted, but
+    // still wipe userId-only when botId is absent (right-to-be-forgotten must
+    // not silently leave rows behind because the caller didn't pass botId).
+    if (botId) query = query.eq("bot_id", botId);
+
+    const result = await query;
+    if (result?.error) {
+      // A missing table on a fresh install is not a failure — there's nothing
+      // to erase. Any other error IS a failure: report it so the caller
+      // doesn't claim a full wipe.
+      if (/does not exist/i.test(result.error.message || "")) {
+        return { ok: true, deleted: 0 };
+      }
+      log(`[Semantic] forget-user delete error: ${result.error.message}`);
+      return { ok: false, deleted: 0, error: result.error.message };
+    }
+    return { ok: true, deleted: result?.count ?? 0 };
+  } catch (e) {
+    if (/does not exist/i.test(e.message || "")) return { ok: true, deleted: 0 };
+    log(`[Semantic] forget-user delete failed: ${e.message}`);
+    return { ok: false, deleted: 0, error: e.message };
+  }
 }
 
 /**
@@ -601,6 +688,16 @@ export async function consolidateMemories(botId, userId, opts = {}) {
   // no record of what was consolidated.
   const oldestAt = toFold[0]?.created_at;
   const newestAt = toFold[toFold.length - 1]?.created_at;
+
+  // Extract keywords from the summary so the keyword-overlap fallback can find
+  // this row — same shape as storeEpisode. Without this the consolidated row is
+  // invisible to .overlaps("keywords", ...) and recall silently drops it.
+  const keywords = summary.toLowerCase()
+    .replace(/[^a-z0-9 ]/g, "")
+    .split(/\s+/)
+    .filter(w => w.length > 3)
+    .slice(0, 10);
+
   const consolidatedRow = {
     bot_id: botId,
     user_id: userId,
@@ -608,8 +705,14 @@ export async function consolidateMemories(botId, userId, opts = {}) {
     guild_id: null,
     type: CONSOLIDATED_TYPE,
     content: `[consolidated ${toFold.length} memories ${oldestAt || ""}→${newestAt || ""}] ${summary}`.slice(0, 500),
-    keywords: [],
+    keywords,
   };
+
+  // Embed the summary so the vector search RPC can surface this row. Without an
+  // embedding the consolidated memory is excluded from similarity search forever
+  // and the 100 originals it replaced are already deleted below.
+  const consolidatedEmbedding = await generateEmbedding(summary);
+  if (consolidatedEmbedding) consolidatedRow.embedding = JSON.stringify(consolidatedEmbedding);
 
   try {
     const { error: insertErr } = await supabase
@@ -727,6 +830,22 @@ export async function consolidateAllOverThreshold(opts = {}) {
  */
 export async function runMemoryMaintenance(opts = {}) {
   const pruneResult = await pruneMemories(opts);
+
+  // Sweep expired sensitive-tier facts (TTL). Best-effort + degrades to a no-op
+  // when the expires_at column / TTL aren't configured, so this never affects
+  // the green baseline. Imported lazily so semantic.js doesn't hard-depend on
+  // the facts table existing.
+  let expiredFacts = 0;
+  try {
+    const { pruneExpiredFacts } = await import("../database.js");
+    if (typeof pruneExpiredFacts === "function") {
+      const r = await pruneExpiredFacts();
+      expiredFacts = r?.deleted ?? 0;
+    }
+  } catch (e) {
+    log(`[Memory] pruneExpiredFacts skipped: ${e.message}`);
+  }
+
   // Consolidation only runs when botId is provided — we need to scope the
   // candidate-user scan. The 6h scheduler in events/ready.js passes botId.
   let consolidationResult = { users: 0, consolidated: 0, skipped: 0 };
@@ -735,6 +854,7 @@ export async function runMemoryMaintenance(opts = {}) {
   }
   return {
     pruned: pruneResult.deleted,
+    expiredFacts,
     consolidatedUsers: consolidationResult.consolidated,
     consolidationSkipped: consolidationResult.skipped,
   };

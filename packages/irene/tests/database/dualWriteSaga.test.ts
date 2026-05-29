@@ -193,12 +193,19 @@ vi.mock("../../database/perEntity.js", () => {
   };
 });
 
+// sagaReplayer.js now routes its [SAGA] failure logs through the redacting
+// logger. Mock `log` so the "PERMANENT FAILURE" assertion can observe it.
+vi.mock("../../utils/logger.js", () => ({
+  log: vi.fn(),
+}));
+
 import {
   createSaga,
   markSagaLeg,
   runReconcilerOnce,
   _internal,
 } from "../../sagaReplayer.js";
+import { log as mockLog } from "../../utils/logger.js";
 
 // ─── Test lifecycle ──────────────────────────────────────────────────────────
 
@@ -321,7 +328,7 @@ describe("runReconcilerOnce — max-attempts cap", () => {
     await markSagaLeg(id, "secondary", "failed", "initial fail");
 
     perEntityBehavior = "fail";
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    (mockLog as any).mockClear();
 
     // Each reconciler pass picks up the row (attempts < MAX), runs replay
     // (which throws), increments attempts. After MAX_ATTEMPTS the row is
@@ -333,7 +340,7 @@ describe("runReconcilerOnce — max-attempts cap", () => {
     const row = sagaStore.get(id!);
     expect(row?.attempts).toBe(_internal.MAX_ATTEMPTS);
     expect(row?.secondary_status).toBe("permanent");
-    expect(errSpy).toHaveBeenCalledWith(
+    expect(mockLog).toHaveBeenCalledWith(
       expect.stringContaining("PERMANENT FAILURE")
     );
 
@@ -343,7 +350,6 @@ describe("runReconcilerOnce — max-attempts cap", () => {
     perEntityBehavior = "ok"; // even if it would succeed, it shouldn't run
     const stats = await runReconcilerOnce();
     expect(stats.processed).toBe(0);
-    errSpy.mockRestore();
   });
 
   it("increments attempts on each failed replay without exceeding MAX_ATTEMPTS", async () => {
@@ -352,14 +358,12 @@ describe("runReconcilerOnce — max-attempts cap", () => {
     await markSagaLeg(id, "secondary", "failed", "first fail");
 
     perEntityBehavior = "fail";
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await runReconcilerOnce();
     expect(sagaStore.get(id!)?.attempts).toBe(1);
     expect(sagaStore.get(id!)?.secondary_status).toBe("failed");
     await runReconcilerOnce();
     expect(sagaStore.get(id!)?.attempts).toBe(2);
     expect(sagaStore.get(id!)?.secondary_status).toBe("failed");
-    errSpy.mockRestore();
   });
 });
 

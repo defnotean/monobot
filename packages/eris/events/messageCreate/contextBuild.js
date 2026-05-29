@@ -36,6 +36,17 @@ const TWIN_BOT_ID = config.twinBotId || "";
 // it survives across messageCreate invocations.
 const _memoryCtxCache = new LRUCache(500, 60_000);
 
+// Passive channel-awareness cache. The CHANNEL CONTEXT block re-fetched up to
+// 12 messages from the Discord API on EVERY guild turn — but in a busy
+// channel that's the same window of messages seconds apart. We cache the
+// per-channel building blocks (summary lines + this bot's recent
+// openers/endings) keyed by channel id with a short TTL, and only re-fetch
+// when the latest seen message id changed (new traffic) or the entry expired.
+// The per-speaker header (which embeds the current displayName) is rebuilt
+// from the cached blocks each turn, so caching doesn't leak one speaker's
+// name into another's prompt. 8s TTL, max 500 channels.
+const _channelCtxCache = new LRUCache(500, 8_000);
+
 /**
  * Build the system instruction + history payload for the active turn.
  *
@@ -298,30 +309,46 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
   if (!isTwinMsg && !isDM) {
     try {
       const MY_BOT_ID = message.client.user.id;
-      const recentMsgs = await message.channel.messages.fetch({ limit: 12, before: message.id });
-      const ordered = [...recentMsgs.values()].reverse();
-      const summaryLines = [];
-      const myRecentOpeners = [];
-      const myRecentEndings = [];
-      for (const m of ordered) {
-        if (!m.content?.trim()) continue;
-        let who;
-        if (m.author.id === MY_BOT_ID) who = botName;
-        else if (m.author.id === TWIN_BOT_ID) who = "Irene";
-        else who = normalizeUnicode(m.member?.displayName || m.author.username) || m.author.username;
-        // Truncate each line — full text lives in real history when she
-        // was actually @mentioned in those moments.
-        const snippet = m.content.replace(/\s+/g, " ").slice(0, 120);
-        summaryLines.push(`${who}: ${snippet}`);
-        // Track this bot's own openers/endings so we can enforce variety
-        // below — LLMs don't reliably notice their own repetition without
-        // the evidence shown back to them.
-        if (m.author.id === MY_BOT_ID) {
-          const opener = m.content.trim().split(/\s+/).slice(0, 2).join(" ").slice(0, 30).toLowerCase();
-          if (opener) myRecentOpeners.push(opener);
-          const endMatch = m.content.trim().match(/(\S+)\s*$/);
-          if (endMatch) myRecentEndings.push(endMatch[1].slice(0, 20).toLowerCase());
+      // Try the short-TTL per-channel cache first. In a busy channel, back-
+      // to-back turns hit the SAME 12-message window — re-fetching from the
+      // Discord API each time is pure waste. Reuse the cached building blocks
+      // unless the channel's latest message changed (new traffic arrived) or
+      // the entry expired. The blocks are speaker-agnostic; the per-speaker
+      // header is rebuilt below from whichever cached/fresh blocks we use.
+      const cached = _channelCtxCache.get(message.channel.id);
+      let summaryLines, myRecentOpeners, myRecentEndings;
+      if (cached && cached.lastMsgId === message.channel.lastMessageId) {
+        ({ summaryLines, myRecentOpeners, myRecentEndings } = cached);
+      } else {
+        const recentMsgs = await message.channel.messages.fetch({ limit: 12, before: message.id });
+        const ordered = [...recentMsgs.values()].reverse();
+        summaryLines = [];
+        myRecentOpeners = [];
+        myRecentEndings = [];
+        for (const m of ordered) {
+          if (!m.content?.trim()) continue;
+          let who;
+          if (m.author.id === MY_BOT_ID) who = botName;
+          else if (m.author.id === TWIN_BOT_ID) who = "Irene";
+          else who = normalizeUnicode(m.member?.displayName || m.author.username) || m.author.username;
+          // Truncate each line — full text lives in real history when she
+          // was actually @mentioned in those moments.
+          const snippet = m.content.replace(/\s+/g, " ").slice(0, 120);
+          summaryLines.push(`${who}: ${snippet}`);
+          // Track this bot's own openers/endings so we can enforce variety
+          // below — LLMs don't reliably notice their own repetition without
+          // the evidence shown back to them.
+          if (m.author.id === MY_BOT_ID) {
+            const opener = m.content.trim().split(/\s+/).slice(0, 2).join(" ").slice(0, 30).toLowerCase();
+            if (opener) myRecentOpeners.push(opener);
+            const endMatch = m.content.trim().match(/(\S+)\s*$/);
+            if (endMatch) myRecentEndings.push(endMatch[1].slice(0, 20).toLowerCase());
+          }
         }
+        _channelCtxCache.set(message.channel.id, {
+          summaryLines, myRecentOpeners, myRecentEndings,
+          lastMsgId: message.channel.lastMessageId,
+        });
       }
       if (summaryLines.length) {
         const last = summaryLines.slice(-10);
@@ -352,10 +379,13 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
     history = history.slice(-config.aiMaxHistory * 2);
   }
 
-  // Load tools — pre-filtered profiles computed once at module scope.
-  // Profile selection logic lives in messageCreate/toolProfiles.js.
+  // Load tools — two-tier split computed per-turn (toolProfiles.js →
+  // registry.selectByMessage). Tier 1 = full schemas sent to the model;
+  // Tier 2 = a name+desc catalog appended to the system prompt so the model
+  // still knows those tools exist (the executor dispatches by name).
   const isOwner = message.author.id === config.ownerId;
-  const { formattedTools } = pickToolProfile({ isTwinMsg, isOwner, cleanMessage });
+  const { tier1Schemas, tier2CatalogText } = pickToolProfile({ isTwinMsg, isOwner, cleanMessage, channelKey });
+  const formattedTools = tier1Schemas;
 
   // Inject humanity context
   const humanityCtx = buildHumanityContext(message.author.id, displayName);
@@ -407,6 +437,22 @@ HOW TO INTERACT:
     }
     log(`[PERF] Prompt budgeted to ${systemInstruction.length} chars`);
   }
+
+  // Tier-2 tool catalog — appended AFTER budget trimming so the model's
+  // awareness of every callable-by-name tool never gets sliced off. Without
+  // this, a Tier-2 tool would vanish from both the declarations and the
+  // prompt, making it unreachable.
+  //
+  // IMPORTANT — DO NOT move this append back ABOVE the budget block. The
+  // catalog (~10.8k for owner) is load-bearing and intentionally lives OUTSIDE
+  // PROMPT_BUDGET: the effective prompt ceiling is therefore PROMPT_BUDGET +
+  // catalog length, not PROMPT_BUDGET. The 12000 cap now bounds only the
+  // core+runtime that precedes this line. Appending the catalog inside the
+  // budgeted region would let the final hard slice (line 436) lop tool names
+  // off the end whenever the catalog alone exceeds the budget — exactly the
+  // bug that bit Irene's contextBuild. This is a deliberate, disclosed
+  // tradeoff (no tool lost; still a net token win vs sending all schemas).
+  if (tier2CatalogText) systemInstruction += tier2CatalogText;
 
   // Force-research trigger + per-turn length budget — deterministic
   // heuristics. Prompt rules alone kept getting ignored.

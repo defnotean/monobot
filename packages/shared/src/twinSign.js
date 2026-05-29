@@ -89,6 +89,7 @@
  */
 
 import { createHmac, timingSafeEqual } from "crypto";
+import { redactString } from "./logRedact.js";
 
 export const TWIN_MAX_SKEW_MS = 60_000; // 60 seconds each direction
 const TWIN_HEADER_TIMESTAMP = "x-twin-timestamp";
@@ -127,6 +128,7 @@ const _seen = new Map();
 export const _REPLAY_CACHE_PRESSURE = 10_000;
 let _lastPressureWarnAt = 0;
 
+/** @param {number} now */
 function _pruneReplay(now) {
   // Always drop aged-out entries (older than 2× skew window).
   for (const [sig, ts] of _seen) {
@@ -145,8 +147,11 @@ function _pruneReplay(now) {
 export function verifyTwinRequest(headers, body, secret, now = Date.now()) {
   if (!secret) return { ok: false, reason: "server missing twin secret" };
   // Normalize — some frameworks give case-preserved headers.
+  /** @type {Record<string, any>} */
   const norm = {};
-  for (const k in headers) norm[k.toLowerCase()] = headers[k];
+  /** @type {Record<string, any>} */
+  const rawHeaders = headers;
+  for (const k in rawHeaders) norm[k.toLowerCase()] = rawHeaders[k];
   const ts = norm[TWIN_HEADER_TIMESTAMP];
   const sigRaw = norm[TWIN_HEADER_SIGNATURE];
   if (!ts || !sigRaw) return { ok: false, reason: "missing twin signature headers" };
@@ -185,7 +190,13 @@ export function verifyTwinRequest(headers, body, secret, now = Date.now()) {
     // also flood the log.
     if (now - _lastPressureWarnAt > 60_000) {
       _lastPressureWarnAt = now;
-      try { console.warn(`[twinSign] replay cache pressure: ${_seen.size} entries in-window — refusing new requests`); } catch {}
+      // No logger instance is reachable from this leaf crypto module — the
+      // shared package only exports a `createLogger` factory that each bot
+      // binds to its own bot.log; twinSign is imported by both bots and by
+      // their test suites with no logger threaded in. So we keep `console.warn`
+      // here but route the line through `redactString` first, closing the
+      // documented gap where a console.* call bypasses the last-mile redactor.
+      try { console.warn(redactString(`[twinSign] replay cache pressure: ${_seen.size} entries in-window — refusing new requests`)); } catch {}
     }
     return { ok: false, reason: "replay-cache-pressure" };
   }

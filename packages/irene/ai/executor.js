@@ -88,12 +88,13 @@ import { checkToolRateLimit } from "@defnotean/shared/toolRateLimit";
 import { sendModLog } from "../utils/logger.js";
 import { modEmbed } from "../utils/embeds.js";
 import { log } from "../utils/logger.js";
+import { ADMIN_TOOLS, EVERYONE_TOOLS } from "./tools.js";
 import { tempChannels, tempTextChannels, tempVcSeq, manualRenames } from "../utils/tempvc.js";
 
 // ─── Sub-Executor Imports ───────────────────────────────────────────────────
 import { execute as executeChannel } from "./executors/channelExecutor.js";
 import { execute as executeRole } from "./executors/roleExecutor.js";
-import { execute as executeModeration } from "./executors/moderationExecutor.js";
+import { execute as executeModeration, consumePendingAction } from "./executors/moderationExecutor.js";
 import { execute as executeVoice } from "./executors/voiceExecutor.js";
 import { execute as executeSetup } from "./executors/setupExecutor.js";
 import { execute as executePersonalize } from "./executors/personalizeExecutor.js";
@@ -388,8 +389,10 @@ function checkRoleAssignment(moderator, target, role, guild) {
 
 // ─── Main Executor ──────────────────────────────────────────────────────────
 
-// Complete tool name alias map — all 150+ Irene tools
-const TOOL_ALIASES = {
+// Complete tool name alias map — all 150+ Irene tools.
+// Exported so tests + the boot-time validator below can audit drift between
+// alias targets and the canonical tool registry (tools.js).
+export const TOOL_ALIASES = {
   remember: "remember_fact", save_fact: "remember_fact", memorize: "remember_fact",
   forget: "forget_memory", clear_memories: "clear_all_memories", forget_everything: "clear_all_memories",
   recall: "recall_memories", memories: "recall_memories", facts: "recall_memories",
@@ -460,6 +463,75 @@ const TOOL_ALIASES = {
   trust: "trust_user", trusted: "list_trusted_users", untrust: "untrust_user",
 };
 
+// ─── Alias resolution + registry validation ────────────────────────────────
+// Mirror of Eris's executor guardrails (packages/eris/ai/executor.js): a
+// boot-time audit that catches stale aliases pointing at tools that no longer
+// exist, plus an unknown-tool counter so model hallucinations are visible
+// instead of silently swallowed by the "Unknown action" fallback. The registry
+// is the union of ADMIN_TOOLS + EVERYONE_TOOLS in tools.js — the only tool
+// surface the model ever sees and the only set the dispatcher can serve.
+
+// Canonical name set, computed once at module load. Used by the boot-time audit
+// below and exported helpers/tests.
+const _toolRegistryNames = new Set(
+  [...ADMIN_TOOLS, ...EVERYONE_TOOLS].map((t) => t.name)
+);
+
+/**
+ * Boot-time audit: every TOOL_ALIASES *value* must point to a real registered
+ * tool. If drift is found we throw a clear error listing the offenders, so a
+ * stale alias is caught at startup instead of silently mapping a model typo
+ * onto a tool name that no longer exists (which would otherwise fall through to
+ * the "Unknown action" string at request time).
+ *
+ * Accepts an optional `registry` (Set or array of names) to make the helper
+ * testable in isolation — production calls pass the live tool list.
+ *
+ * @param {Set<string>|string[]} [registry]
+ * @param {object} [opts]
+ * @param {boolean} [opts.throwOnDrift=true]  — set false for "soft" mode (log + return)
+ * @returns {string[]} the list of alias targets that are NOT in the registry
+ */
+export function validateToolAliases(registry = _toolRegistryNames, opts = {}) {
+  const { throwOnDrift = true } = opts;
+  const registrySet = registry instanceof Set ? registry : new Set(registry || []);
+
+  const offenders = [];
+  for (const [alias, target] of Object.entries(TOOL_ALIASES)) {
+    if (!registrySet.has(target)) offenders.push({ alias, target });
+  }
+
+  if (offenders.length === 0) return [];
+
+  const lines = offenders.map((o) => `  - ${o.alias} -> ${o.target}`).join("\n");
+  const msg =
+    `[EXECUTOR] TOOL_ALIASES drift detected: ${offenders.length} alias(es) ` +
+    `point to tool names not in the registry. The model would silently ` +
+    `auto-correct to a nonexistent tool. Fix tools.js or remove the alias.\n` +
+    lines;
+
+  if (throwOnDrift) {
+    throw new Error(msg);
+  }
+
+  // Soft mode: visible warning, no crash. Used if a future build wants to ship
+  // with known drift while a tool rename rolls out.
+  log(msg);
+  return offenders.map((o) => o.target);
+}
+
+// Boot-time audit. Throws on drift unless IRENE_SKIP_ALIAS_VALIDATION=1 is set,
+// which is the escape hatch for test runs that need to import the module
+// without enforcing the full registry contract (e.g. when mocking).
+if (process.env.IRENE_SKIP_ALIAS_VALIDATION !== "1") {
+  validateToolAliases(_toolRegistryNames, { throwOnDrift: true });
+}
+
+// Counter for AI-hallucinated tools. Logged on first occurrence and every 10th
+// thereafter so repeated hallucinations are visible without log spam. Exported
+// for tests so a regression can assert a hallucinated name is tracked.
+export const _unknownToolCounts = new Map();
+
 // ─── Tool Result Cache ─────────────────────────────────────────────────────
 const _toolCache = new Map();
 const CACHE_TTL = 15_000; // 15 seconds
@@ -522,7 +594,71 @@ function invalidateGuildCache(guildId) {
   }
 }
 
-export async function executeTool(toolName, input, message) {
+// ─── Destructive-action confirm bridge ──────────────────────────────────────
+//
+// moderationExecutor._maybeDeferToConfirm returns a renderable OBJECT (not a
+// string) carrying { content, components, _pendingToken } when an AI-initiated
+// destructive action must be confirmed by a human. That object has to survive
+// the executor pipeline untouched (no caching, no error-string stringify) and
+// reach the provider loop so a real Confirm/Cancel message gets posted.
+//
+// isDeferralResult guards the cache/serialize paths here; postDeferralIfNeeded
+// is the single render bridge the provider loops share (see dual.js / nvidia.js
+// / openaiCompat.js) so the detection + post logic can't diverge.
+
+// A deferral result is a plain object with a string token + a components array.
+// Anything else (string success/error, undefined fall-through, {error:...} from
+// twin helpers) is a normal result.
+export function isDeferralResult(result) {
+  return (
+    !!result &&
+    typeof result === "object" &&
+    typeof result._pendingToken === "string" &&
+    Array.isArray(result.components)
+  );
+}
+
+// Short string fed back to the MODEL after a confirm prompt is posted, so it
+// doesn't re-issue the destructive tool call thinking it failed.
+export const PENDING_CONFIRM_NOTICE =
+  "A moderator confirmation prompt has been posted; the action is pending human approval.";
+
+/**
+ * Render bridge shared by every provider loop. If `result` is a deferral
+ * object, post its { content, components } as a real Discord message to
+ * `channel` so the Confirm/Cancel buttons render, then return the short
+ * pending-notice string for the model. Otherwise return `result` unchanged.
+ *
+ * Fail-closed: the destructive action is already stashed in the pending store
+ * before we get here, so it CANNOT auto-execute. If we can't post the prompt we
+ * surface an error string to the model (never silently drop, never auto-run) and
+ * immediately reclaim the now-unreachable pending entry (its Confirm/Cancel
+ * buttons never rendered) instead of letting it linger until TTL.
+ *
+ * @param {*} result   the raw executeTool result
+ * @param {object} channel  a Discord channel-like object with .send()
+ * @returns {Promise<*>} the model-facing result (string for deferrals)
+ */
+export async function postDeferralIfNeeded(result, channel) {
+  if (!isDeferralResult(result)) return result;
+  if (!channel || typeof channel.send !== "function") {
+    // No channel to render into — fail closed: tell the model it couldn't be
+    // posted rather than pretending the action ran. Reclaim the orphaned token.
+    log(`[EXECUTOR] confirm bridge: no channel.send available — confirm prompt NOT posted`);
+    consumePendingAction(result._pendingToken);
+    return "Couldn't post the moderator confirmation prompt (no channel) — the destructive action was NOT performed.";
+  }
+  try {
+    await channel.send({ content: result.content, components: result.components });
+    return PENDING_CONFIRM_NOTICE;
+  } catch (err) {
+    log(`[EXECUTOR] confirm bridge: failed to post confirm prompt: ${err?.message || err}`);
+    consumePendingAction(result._pendingToken);
+    return `Couldn't post the moderator confirmation prompt (${err?.message || "send failed"}) — the destructive action was NOT performed.`;
+  }
+}
+
+export async function executeTool(toolName, input, message, opts = {}) {
   input ||= {};
   // Auto-correct common Gemini tool name mistakes
   if (TOOL_ALIASES[toolName]) {
@@ -554,7 +690,13 @@ export async function executeTool(toolName, input, message) {
   // the per-guild key prefix.
   if (CACHE_INVALIDATING_TOOLS.has(toolName)) invalidateGuildCache(guildId);
 
-  const result = await _executeToolInner(toolName, input, message);
+  const result = await _executeToolInner(toolName, input, message, opts);
+  // A pending-confirm deferral object must reach the provider loop intact —
+  // never cache it (it carries a one-shot token) and never let the error-string
+  // refusal logic stringify it. setCachedResult already no-ops for these
+  // (ban/kick/tempban/purge aren't CACHEABLE_TOOLS), but guard explicitly so a
+  // future cacheable tool can't accidentally stash one.
+  if (isDeferralResult(result)) return result;
   setCachedResult(toolName, input, guildId, result);
   return result;
 }
@@ -610,7 +752,7 @@ const GUILD_REQUIRED_TOOLS = new Set([
   "summarize_channel",
 ]);
 
-async function _executeToolInner(toolName, input, message) {
+async function _executeToolInner(toolName, input, message, opts = {}) {
   const guild = message.guild;
   // Guard tools that can't run in DMs. Without this, the inline switch and
   // several sub-executors crash on `guild.something` or `findChannel(undefined)`.
@@ -632,6 +774,12 @@ async function _executeToolInner(toolName, input, message) {
     checkHierarchy,
     checkRoleAssignment,
     webRateLimitPerMin: config.webRateLimitPerMin || 10,
+    // AI-initiated when the call originates from a provider tool loop (dual /
+    // nvidia / openaiCompat pass aiInitiated:true). Slash commands, scheduled
+    // tasks and presence-triggered calls go through executeTool WITHOUT this
+    // flag, so moderationExecutor's confirm gate stays off for them and they
+    // execute destructive actions immediately as before.
+    aiInitiated: !!opts.aiInitiated,
   };
 
   if (toolName === "create_channel" && createVcIntentTargetsExistingChannel(message)) {
@@ -1994,7 +2142,19 @@ async function _executeToolInner(toolName, input, message) {
       return `📋 **Whitelisted Servers** (${entries.length}):\n${lines.join("\n")}`;
     }
 
-    default:
+    default: {
+      // Track unknown tools so we can spot AI hallucination patterns — if
+      // Gemini/NVIDIA keeps inventing the same nonexistent tool, we want to
+      // know so we can either add it or tighten the prompt. Logged on the
+      // first hit and every 10th thereafter to stay visible without spam.
+      const unknownUserId = message?.author?.id || "unknown";
+      _unknownToolCounts.set(toolName, (_unknownToolCounts.get(toolName) || 0) + 1);
+      const count = _unknownToolCounts.get(toolName);
+      const argPreview = JSON.stringify(input || {}).slice(0, 120);
+      if (count === 1 || count % 10 === 0) {
+        log(`[EXECUTOR] Unknown tool: ${toolName} (hit #${count}, user ${unknownUserId}, args: ${argPreview})`);
+      }
       return `Unknown action: ${toolName}`;
+    }
   }
 }

@@ -30,10 +30,12 @@ const DEFAULT_PREFS = Object.freeze({
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+/** @param {string} botName */
 function tableFor(botName) {
   return botName === "irene" ? "irene_bump_user_prefs" : "eris_bump_user_prefs";
 }
 
+/** @param {string} botName @param {string} userId */
 function cacheKey(botName, userId) {
   return `${botName}:${userId}`;
 }
@@ -47,7 +49,7 @@ const _noop = () => {};
  * @param {() => any} deps.getSupabase  Lazy getter for the Supabase client (or null).
  * @param {(msg: string) => void} [deps.log]  Optional logger. Defaults to no-op.
  */
-export function createBumpUserPrefs({ getSupabase, log } = {}) {
+export function createBumpUserPrefs({ getSupabase, log } = /** @type {any} */ ({})) {
   if (typeof getSupabase !== "function") {
     throw new Error("createBumpUserPrefs: getSupabase function is required");
   }
@@ -59,6 +61,7 @@ export function createBumpUserPrefs({ getSupabase, log } = {}) {
 
   // ─── Read ───────────────────────────────────────────────────────────────────
 
+  /** @param {string} userId @param {string} [botName] */
   async function getUserPrefs(userId, botName = "eris") {
     if (!userId) return { ...DEFAULT_PREFS };
     const key = cacheKey(botName, userId);
@@ -87,7 +90,7 @@ export function createBumpUserPrefs({ getSupabase, log } = {}) {
         for (const [k, v] of _cache) if (v.fetchedAt < cutoff) _cache.delete(k);
       }
       return { ...prefs };
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       _log(`[BumpPrefs] getUserPrefs: ${e.message}`);
       return { ...DEFAULT_PREFS };
     }
@@ -97,6 +100,7 @@ export function createBumpUserPrefs({ getSupabase, log } = {}) {
 
   /**
    * Upsert one pref for a user. Returns { ok: true } or { ok: false, error }.
+   * @param {string} userId @param {string} prefKey @param {any} value @param {string} [botName]
    */
   async function setUserPref(userId, prefKey, value, botName = "eris") {
     if (!userId) return { ok: false, error: "userId required" };
@@ -119,7 +123,7 @@ export function createBumpUserPrefs({ getSupabase, log } = {}) {
       // Invalidate cache so next read reflects the write.
       _cache.delete(cacheKey(botName, userId));
       return { ok: true };
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       _log(`[BumpPrefs] setUserPref: ${e.message}`);
       return { ok: false, error: e.message };
     }
@@ -129,6 +133,7 @@ export function createBumpUserPrefs({ getSupabase, log } = {}) {
   // Used by the bump reminder to find who to DM when a timer fires. Filtered
   // by bot so Eris doesn't DM Irene's opt-ins or vice versa.
 
+  /** @param {string} [botName] */
   async function getPersonalPingOptIns(botName = "eris") {
     try {
       const sb = getSupabase();
@@ -141,8 +146,8 @@ export function createBumpUserPrefs({ getSupabase, log } = {}) {
         _log(`[BumpPrefs] optins read failed: ${error.message}`);
         return [];
       }
-      return (data || []).map(r => r.user_id);
-    } catch (e) {
+      return (data || []).map((/** @type {any} */ r) => r.user_id);
+    } catch (/** @type {any} */ e) {
       _log(`[BumpPrefs] getPersonalPingOptIns: ${e.message}`);
       return [];
     }

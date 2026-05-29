@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const crypto = require('crypto');
 const { exec } = require('child_process');
 
 // ─── ENV ─────────────────────────────────────────────────────────────────────
@@ -45,13 +46,129 @@ try {
     }
 } catch {}
 
+// ─── DESTRUCTIVE-COMMAND GATE ──────────────────────────────────────────────────
+// HOST-SIDE copy of the bot's looksDestructive detector. SOURCE OF TRUTH lives
+// in packages/eris/utils/pcAgent.js (~lines 40-134) — keep the two in sync. The
+// agent-ui is a separate CommonJS app that can't cleanly import the bot's ESM
+// modules, so the logic is duplicated here. This runs on every drained
+// local_commands row and every run-terminal IPC so a poisoned queue / renderer
+// can't wipe the host: the enqueuer is NOT trusted.
+const WS = "[\\s\\u00A0\\u2000-\\u200B\\u202F\\u205F\\u3000\\uFEFF]";
+const DESTRUCTIVE_PATTERNS = [
+    new RegExp(`\\brm${WS}+(-[a-z]*[rfRF][a-z]*${WS}+)?[\\/~]`, "iu"),
+    new RegExp(`\\brm${WS}+-[a-z]*[rfRF]`, "iu"),
+    new RegExp(`\\b(del|erase)${WS}+\\/[sfq]`, "iu"),
+    new RegExp(`\\b(rmdir|rd)${WS}+\\/s`, "iu"),
+    new RegExp(`\\brd${WS}+(-[a-z]*[rfRF][a-z]*${WS}+)?[\\/~]`, "iu"),
+    new RegExp(`\\bformat${WS}+[a-z]:`, "iu"),
+    /\bdiskpart\b/iu,
+    new RegExp(`\\bmkfs(\\.|${WS})`, "iu"),
+    new RegExp(`\\bdd${WS}+[^|]*\\bof=\\/dev\\/`, "iu"),
+    /\b:(?:\(\s*\)\s*\{\s*:\|:&\s*\}\s*;\s*:|\s*\(\)\s*\{\s*:\|:)/iu,
+    new RegExp(`\\breg${WS}+delete\\b`, "iu"),
+    new RegExp(`\\bsc${WS}+delete\\b`, "iu"),
+    /\bshutdown\b/iu,
+    new RegExp(`\\bnet${WS}+user\\b.*\\/(add|delete)`, "iu"),
+    new RegExp(`\\btakeown${WS}+\\/f`, "iu"),
+    /\bicacls\b.*\/deny/iu,
+    /\bRemove-Item\b[^|]*-Recurse[^|]*-Force/iu,
+    new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Recurse[^|]*-Force`, "iu"),
+    new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Force[^|]*-Recurse`, "iu"),
+    /\bStop-Computer\b/iu,
+    /\bRestart-Computer\b/iu,
+    /\bClear-EventLog\b/iu,
+    new RegExp(`\\bpowershell(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
+    new RegExp(`\\bpwsh(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
+    new RegExp(`\\bcmd(\\.exe)?\\b[^|]*${WS}\\/c\\b`, "iu"),
+];
+const CHAIN_SPLIT = /(?:&&|\|\||;|\||&|`|\$\()/u;
+
+function normalizeForMatch(command) {
+    if (typeof command !== 'string') return '';
+    let s;
+    try { s = command.normalize('NFKC'); } catch { s = command; }
+    s = s.replace(/[​-‍⁠﻿­]/g, '');
+    return s;
+}
+function matchDestructive(normalized) {
+    for (const pat of DESTRUCTIVE_PATTERNS) {
+        if (pat.test(normalized)) return pat.source;
+    }
+    return null;
+}
+// Returns the matched pattern source if the command looks destructive, else null.
+function looksDestructive(command) {
+    if (!command || typeof command !== 'string') return null;
+    const normalized = normalizeForMatch(command);
+    if (!normalized) return null;
+    const whole = matchDestructive(normalized);
+    if (whole) return whole;
+    if (CHAIN_SPLIT.test(normalized)) {
+        for (const part of normalized.split(CHAIN_SPLIT)) {
+            const trimmed = part.trim();
+            if (!trimmed) continue;
+            const hit = matchDestructive(trimmed);
+            if (hit) return hit;
+        }
+    }
+    return null;
+}
+
+// ─── LOCAL-COMMAND AUTHENTICATION ──────────────────────────────────────────────
+// local_commands is an UNAUTHENTICATED host-command channel: anyone who can
+// insert a row gets shell on the owner's box. Before exec, the poller must
+// independently verify the row was enqueued by the owner and signed with the
+// shared secret — never trust requested_by alone. The bot signs on enqueue with
+//   sig = HMAC_SHA256(TWIN_API_SECRET, `${requested_by}.${command}.${ts}`)
+// (hex), so we recompute and timingSafeEqual-compare here. Fails CLOSED: a
+// missing secret, missing sig/ts (pre-migration rows), wrong owner, bad sig, or
+// stale ts all reject with a logged reason. Pure function so it is unit-testable
+// in isolation without Electron/Supabase.
+const LOCAL_CMD_MAX_AGE_MS = 5 * 60 * 1000; // reject rows older than 5 minutes
+
+function verifyLocalCommand(row, { ownerId, secret, now = Date.now() } = {}) {
+    if (!secret) return { ok: false, reason: 'no TWIN_API_SECRET configured on host — cannot verify command signature' };
+    if (!ownerId) return { ok: false, reason: 'no BOT_OWNER_ID configured on host — cannot verify command origin' };
+    if (!row || typeof row !== 'object') return { ok: false, reason: 'invalid command row' };
+    if (String(row.requested_by || '') !== String(ownerId)) {
+        return { ok: false, reason: `requested_by (${row.requested_by}) is not the owner` };
+    }
+    if (row.sig == null || row.ts == null) {
+        return { ok: false, reason: 'missing sig/ts columns (pre-migration row?) — rejecting fail-closed' };
+    }
+    const ts = Number(row.ts);
+    if (!Number.isFinite(ts)) return { ok: false, reason: 'non-numeric ts' };
+    if (Math.abs(now - ts) > LOCAL_CMD_MAX_AGE_MS) {
+        return { ok: false, reason: `stale ts (age ${Math.round((now - ts) / 1000)}s exceeds ${LOCAL_CMD_MAX_AGE_MS / 1000}s)` };
+    }
+    const expected = crypto.createHmac('sha256', secret)
+        .update(`${row.requested_by}.${row.command}.${row.ts}`)
+        .digest('hex');
+    const provided = String(row.sig);
+    const a = Buffer.from(expected, 'utf8');
+    const b = Buffer.from(provided, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+        return { ok: false, reason: 'bad signature' };
+    }
+    return { ok: true };
+}
+
+// Exported for unit tests (required from a non-Electron context). Under Electron
+// these are also used directly within this module.
+module.exports = { looksDestructive, verifyLocalCommand, normalizeForMatch };
+
 // ─── ELECTRON ────────────────────────────────────────────────────────────────
-const electron = require('electron');
-const app = electron.app;
-const BrowserWindow = electron.BrowserWindow;
-const ipcMain = electron.ipcMain;
-const dialog = electron.dialog;
-const shell = electron.shell;
+// Guarded require: when this file is loaded outside Electron (e.g. a vitest
+// unit test of the pure guard/verify functions above), `require('electron')`
+// throws. We swallow that so the module still loads and exports its helpers;
+// the app bootstrap below is skipped when `app` is unavailable.
+let electron = null;
+try { electron = require('electron'); } catch {}
+const app = electron && electron.app;
+const BrowserWindow = electron && electron.BrowserWindow;
+const ipcMain = electron && electron.ipcMain;
+const dialog = electron && electron.dialog;
+const shell = electron && electron.shell;
 
 const { createClient } = require('@supabase/supabase-js');
 
@@ -71,7 +188,7 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            webSecurity: false
+            webSecurity: true
         },
         title: 'Eris IDE'
     });
@@ -150,6 +267,8 @@ async function pollCommands() {
         return;
     }
     try {
+        const ownerId = getEnv('BOT_OWNER_ID');
+        const secret = getEnv('TWIN_API_SECRET');
         const { data: commands, error } = await supabase
             .from('local_commands').select('*').eq('status', 'pending')
             .order('created_at', { ascending: true }).limit(5);
@@ -160,6 +279,23 @@ async function pollCommands() {
             if (isPcAgentDisabled()) {
                 mainWindow?.webContents.send('agent-log', `Skipped command ${cmd.id}: PC_AGENT_DISABLED=1`);
                 break;
+            }
+            // local_commands is unauthenticated at the DB layer — independently
+            // verify owner + HMAC sig before this row gets a shell. Fail closed.
+            const auth = verifyLocalCommand(cmd, { ownerId, secret });
+            if (!auth.ok) {
+                mainWindow?.webContents.send('agent-log', `Rejected command ${cmd.id}: ${auth.reason}`);
+                await supabase.from('local_commands').update({ status: 'error', result: `rejected: ${auth.reason}` }).eq('id', cmd.id);
+                continue;
+            }
+            // Block destructive commands unless the row carries an explicit
+            // confirm flag — same gate the bot applies, re-enforced host-side.
+            const destructive = looksDestructive(cmd.command);
+            if (destructive && !cmd.confirm) {
+                const reason = `refusing — destructive command (matched /${destructive}/); set confirm: true to override`;
+                mainWindow?.webContents.send('agent-log', `Blocked command ${cmd.id}: ${reason}`);
+                await supabase.from('local_commands').update({ status: 'error', result: reason }).eq('id', cmd.id);
+                continue;
             }
             await supabase.from('local_commands').update({ status: 'running' }).eq('id', cmd.id);
             mainWindow?.webContents.send('agent-command-start', { command: cmd.command, id: cmd.id });
@@ -221,7 +357,10 @@ async function callGemini(message, history = [], systemOverride = null, useSearc
 }
 
 // ─── APP READY ────────────────────────────────────────────────────────────────
-app.whenReady().then(() => {
+// Guarded: only bootstrap the Electron app when Electron actually loaded. Under
+// vitest (no Electron) `app` is null and we skip straight past, leaving only the
+// exported pure helpers reachable.
+if (app) app.whenReady().then(() => {
     createWindow();
 
     // ── Agent ──────────────────────────────────────────────────────────────────
@@ -274,10 +413,16 @@ app.whenReady().then(() => {
     });
 
     // ── Terminal ──────────────────────────────────────────────────────────────
-    ipcMain.handle('run-terminal', async (_, { command, cwd }) => {
+    ipcMain.handle('run-terminal', async (_, { command, cwd, confirm }) => {
         // Honor the same kill switch as the bot-side enqueue path.
         if (isPcAgentDisabled()) {
             return { output: 'PC agent is disabled (PC_AGENT_DISABLED=1).', exitCode: 1 };
+        }
+        // Re-enforce the destructive-command gate host-side: the renderer is
+        // not trusted, so block destructive matches unless caller confirms.
+        const destructive = looksDestructive(command);
+        if (destructive && !confirm) {
+            return { output: `refusing — destructive command (matched /${destructive}/). re-run with confirm to override.`, exitCode: 1 };
         }
         return new Promise(resolve => {
             exec(command, { shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/bash', timeout: 60000, cwd: cwd || undefined }, (err, stdout, stderr) => {
@@ -295,11 +440,15 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle('read-file', async (_, filePath) => {
+        // Kill switch gates filesystem reads too, not just the terminal.
+        if (isPcAgentDisabled()) return { ok: false, error: 'PC agent is disabled (PC_AGENT_DISABLED=1).' };
         try { return { ok: true, content: fs.readFileSync(filePath, 'utf8') }; }
         catch (err) { return { ok: false, error: err.message }; }
     });
 
     ipcMain.handle('write-file', async (_, { filePath, content }) => {
+        // Kill switch gates filesystem writes too, not just the terminal.
+        if (isPcAgentDisabled()) return { ok: false, error: 'PC agent is disabled (PC_AGENT_DISABLED=1).' };
         try { fs.writeFileSync(filePath, content, 'utf8'); return { ok: true }; }
         catch (err) { return { ok: false, error: err.message }; }
     });
@@ -450,4 +599,4 @@ app.whenReady().then(() => {
     ipcMain.on('open-external', (_, url) => shell.openExternal(url));
 });
 
-app.on('window-all-closed', () => app.quit());
+if (app) app.on('window-all-closed', () => app.quit());

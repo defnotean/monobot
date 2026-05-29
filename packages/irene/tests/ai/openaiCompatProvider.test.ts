@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../ai/executor.js", () => ({
   executeTool: vi.fn(async () => "stubbed"),
+  // Destructive-action confirm render bridge openaiCompat.js now calls on every
+  // tool result — passthrough so string results flow through unchanged.
+  postDeferralIfNeeded: vi.fn(async (result: unknown) => result),
 }));
 
 // @ts-expect-error JS module without types

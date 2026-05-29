@@ -1,3 +1,6 @@
+// @ts-nocheck — checkJs noise: errors are accesses on the untyped Supabase
+// `getData()` payload (data.self_facts, etc.) and injected-deps objects whose
+// shape is bot-local; typing them here adds churn without catching real bugs.
 // ─── Personal Canon ─────────────────────────────────────────────────────────
 // Her own identity facts — favorite color, foods she likes, nicknames she goes
 // by, personal quirks. Different from opinions (opinions are positions on

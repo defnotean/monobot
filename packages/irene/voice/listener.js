@@ -21,6 +21,7 @@ import { Transform } from "stream";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
 import { playTTS } from "../music/player.js";
+import * as settingsStore from "../music/settingsStore.js";
 
 // ─── State ──────────────────────────────────────────────────────────────────
 // guildId → { connection, channelId, textChannelId, wakeWord, listening: Map<userId, AudioState> }
@@ -53,6 +54,74 @@ const NO_DATA_TIMEOUT_MS = 10 * 60 * 1000;
 // Per-guild settings
 const guildSettings = new Map(); // guildId → { wakeWord, enabled }
 
+// ─── STT capability gate ────────────────────────────────────────────────────
+// The original wake-word pipeline concatenated raw Opus frames and sent them
+// to Gemini as mimeType "audio/ogg". Gemini cannot decode that — raw Opus
+// frames are NOT an Ogg container — so every utterance produced "[inaudible]"
+// (or a decode error) while still burning a Gemini API call AND holding a
+// 60-minute voice connection. /listen reported success but never transcribed.
+//
+// A correct fix needs to decode Opus → PCM/WAV before sending. prism-media's
+// opus.Decoder can do that, but it requires a native binding
+// (@discordjs/opus / opusscript / node-opus) — none of which ship by default.
+// When no decoder is available we cannot transcribe at all, so we DISABLE the
+// feature outright: refuse to open the connection and never make the
+// per-utterance Gemini call. This is the safe option — it stops the cost leak
+// and the dead connection instead of pretending to listen.
+//
+// Detect once at module load. If an operator installs a native Opus binding
+// the decoder becomes constructible and the gate opens automatically.
+let _opusDecoderAvailable = false;
+let _prismOpus = null;
+try {
+  // prism-media is a hard dependency (used elsewhere); the *native binding* it
+  // wraps may not be. Construct a throwaway decoder to prove decoding works.
+  const prism = (await import("prism-media")).default;
+  const probe = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+  try { probe.destroy(); } catch {}
+  _prismOpus = prism.opus;
+  _opusDecoderAvailable = true;
+} catch (err) {
+  _opusDecoderAvailable = false;
+  log(`[VoiceListen] Opus decoder unavailable (${err?.message || err}) — /listen is disabled (no native opus binding installed)`);
+}
+
+const STT_DISABLED_NOTICE =
+  "voice listening is currently **disabled** on this instance — the server is missing a native Opus audio decoder, " +
+  "so I can't transcribe what's said in voice. (Ask the host to install `@discordjs/opus` to enable it.)";
+
+/** Whether the wake-word STT pipeline can actually transcribe audio. */
+export function isSttAvailable() {
+  return _opusDecoderAvailable;
+}
+
+// PCM → WAV header helper. Mirrors the one in music/player.js but WITHOUT the
+// 50% attenuation that one applies (that's for TTS playback; for STT input we
+// want the captured signal intact). Decoded Discord voice is signed 16-bit LE,
+// 48kHz stereo by default.
+function pcmToWav(pcmBuffer, sampleRate = 48000, numChannels = 2, bitsPerSample = 16) {
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize = pcmBuffer.length;
+
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);       // chunk size
+  header.writeUInt16LE(1, 20);        // PCM format
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcmBuffer]);
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
@@ -61,6 +130,14 @@ const guildSettings = new Map(); // guildId → { wakeWord, enabled }
  */
 export async function startListening(voiceChannel, textChannel, options = {}) {
   const guildId = voiceChannel.guild.id;
+
+  // Hard gate: if we can't decode Opus we can't transcribe. Refuse to open the
+  // connection at all rather than holding a dead 60-min session and burning a
+  // Gemini call per utterance for nothing.
+  if (!_opusDecoderAvailable) {
+    log(`[VoiceListen] Refusing to start in ${guildId} — STT disabled (no Opus decoder)`);
+    return { success: false, error: STT_DISABLED_NOTICE };
+  }
 
   // If already listening in this guild, stop first
   if (listeners.has(guildId)) {
@@ -150,7 +227,8 @@ export function stopListening(guildId) {
   for (const [userId, audioState] of state.listening) {
     if (audioState.silenceTimer) clearTimeout(audioState.silenceTimer);
     if (audioState.maxTimer) clearTimeout(audioState.maxTimer);
-    if (audioState.stream) audioState.stream.destroy();
+    if (audioState.stream) { try { audioState.stream.destroy(); } catch {} }
+    if (audioState.decoder) { try { audioState.decoder.destroy(); } catch {} }
   }
   state.listening.clear();
 
@@ -177,19 +255,38 @@ export function isListening(guildId) {
 
 /**
  * Get/set wake word for a guild.
+ * Reads prefer the durable settingsStore (survives restart); the local
+ * guildSettings Map is kept as a synchronous fallback when the store has no
+ * cached value yet (e.g. before loadWakeWord has hydrated it).
  */
 export function getWakeWord(guildId) {
-  return guildSettings.get(guildId)?.wakeWord || DEFAULT_WAKE_WORD;
+  return settingsStore.getWakeWord(guildId)
+    || guildSettings.get(guildId)?.wakeWord
+    || DEFAULT_WAKE_WORD;
 }
 
 export function setWakeWord(guildId, word) {
+  const lowered = word.toLowerCase();
   const settings = guildSettings.get(guildId) || {};
-  settings.wakeWord = word.toLowerCase();
+  settings.wakeWord = lowered;
   guildSettings.set(guildId, settings);
+
+  // Persist durably (degrades to in-memory if Supabase/table absent)
+  settingsStore.setWakeWord(guildId, lowered);
 
   // Update live listener if active
   const state = listeners.get(guildId);
-  if (state) state.wakeWord = settings.wakeWord;
+  if (state) state.wakeWord = lowered;
+}
+
+/**
+ * Hydrate a guild's durable settings (wake word) from Supabase. Best-effort —
+ * callers can fire-and-forget. Safe to call before startListening so the
+ * loaded wake word is picked up.
+ */
+export async function loadWakeWord(guildId) {
+  try { await settingsStore.loadGuild(guildId); } catch {}
+  return getWakeWord(guildId);
 }
 
 export function getListenerData() {
@@ -217,11 +314,15 @@ function startCapturingUser(state, userId, receiver) {
   const lastResponse = state.userCooldowns.get(userId) || 0;
   if (now - lastResponse < COOLDOWN_MS) return;
 
-  const audioChunks = [];
+  const pcmChunks = [];
   let totalBytes = 0;
   const startTime = Date.now();
 
-  // Subscribe to this user's audio stream (Opus packets → PCM)
+  // Subscribe to this user's raw Opus stream, then decode to PCM via prism.
+  // Discord voice is 48kHz stereo, 20ms frames (960 samples/channel). We MUST
+  // decode before sending to Gemini — raw Opus frames are not a container any
+  // STT model can read. (startListening already refused to run if the decoder
+  // is unavailable, so _prismOpus is guaranteed here.)
   const opusStream = receiver.subscribe(userId, {
     end: {
       behavior: EndBehaviorType.AfterSilence,
@@ -229,9 +330,13 @@ function startCapturingUser(state, userId, receiver) {
     },
   });
 
+  const decoder = new _prismOpus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+  const pcmStream = opusStream.pipe(decoder);
+
   const audioState = {
     stream: opusStream,
-    chunks: audioChunks,
+    decoder,
+    chunks: pcmChunks,
     startTime,
     silenceTimer: null,
     maxTimer: null,
@@ -239,21 +344,21 @@ function startCapturingUser(state, userId, receiver) {
 
   state.listening.set(userId, audioState);
 
-  // Collect raw Opus packets
-  opusStream.on("data", (chunk) => {
-    audioChunks.push(chunk);
+  // Collect decoded PCM (signed 16-bit LE, 48kHz stereo)
+  pcmStream.on("data", (chunk) => {
+    pcmChunks.push(chunk);
     totalBytes += chunk.length;
     state.lastAudioAt = Date.now();
   });
 
   // When the stream ends (after silence threshold), process the audio
-  opusStream.on("end", async () => {
+  pcmStream.on("end", async () => {
     state.listening.delete(userId);
 
     const duration = Date.now() - startTime;
 
     // Ignore very short audio
-    if (duration < MIN_AUDIO_DURATION_MS || audioChunks.length === 0) {
+    if (duration < MIN_AUDIO_DURATION_MS || pcmChunks.length === 0) {
       return;
     }
 
@@ -263,27 +368,32 @@ function startCapturingUser(state, userId, receiver) {
       return;
     }
 
-    // Combine Opus frames into a single buffer for Gemini
-    const opusBuffer = Buffer.concat(audioChunks);
-    log(`[VoiceListen] Captured ${opusBuffer.length} bytes (${duration}ms) from user ${userId}`);
+    // Wrap decoded PCM in a WAV container Gemini can actually read.
+    const pcmBuffer = Buffer.concat(pcmChunks);
+    const wavBuffer = pcmToWav(pcmBuffer, 48000, 2, 16);
+    log(`[VoiceListen] Captured ${pcmBuffer.length} PCM bytes (${duration}ms) from user ${userId}`);
 
     // Process with Gemini (or local whisper if LOCAL_STT=1 — frames passed for prism decode)
     try {
-      await processAudio(state, userId, opusBuffer, audioChunks);
+      await processAudio(state, userId, wavBuffer, audioChunks);
     } catch (err) {
       log(`[VoiceListen] Error processing audio from ${userId}: ${err.message}`);
     }
   });
 
-  opusStream.on("error", (err) => {
+  const onStreamError = (err) => {
     log(`[VoiceListen] Stream error for ${userId}: ${err.message}`);
+    try { decoder.destroy(); } catch {}
     state.listening.delete(userId);
-  });
+  };
+  opusStream.on("error", onStreamError);
+  pcmStream.on("error", onStreamError);
 
   // Safety: force-end after max duration
   audioState.maxTimer = setTimeout(() => {
     if (state.listening.has(userId)) {
       opusStream.destroy();
+      try { decoder.destroy(); } catch {}
       state.listening.delete(userId);
     }
   }, MAX_AUDIO_DURATION_MS + 1000);
@@ -347,7 +457,7 @@ async function _whisperTranscribe(opusFrames) {
   });
 }
 
-async function processAudio(state, userId, opusBuffer, opusFrames) {
+async function processAudio(state, userId, wavBuffer, opusFrames) {
   const localStt = !!config.local?.stt;
   const client = localStt ? null : getSttClient();
   if (!localStt && !client) {
@@ -362,8 +472,10 @@ async function processAudio(state, userId, opusBuffer, opusFrames) {
     if (localStt) {
       transcript = await _whisperTranscribe(opusFrames);
     } else {
-      // Step 1: Send audio to Gemini for transcription + wake word check
-      // Gemini accepts raw audio and can transcribe + respond in one call
+      // Step 1: Send audio to Gemini for transcription + wake word check.
+      // We send a real WAV container (decoded from Opus → PCM, wrapped with a
+      // RIFF/WAVE header) — Gemini cannot decode raw Opus frames, which is why
+      // the previous "audio/ogg" path always returned "[inaudible]".
       const transcribeResponse = await client.models.generateContent({
         model: config.geminiFastModel || "gemini-2.5-flash-preview-04-17",
         contents: [
@@ -371,8 +483,8 @@ async function processAudio(state, userId, opusBuffer, opusFrames) {
             parts: [
               {
                 inlineData: {
-                  mimeType: "audio/ogg",
-                  data: opusBuffer.toString("base64"),
+                  mimeType: "audio/wav",
+                  data: wavBuffer.toString("base64"),
                 },
               },
               {
@@ -439,8 +551,8 @@ User said: "${userMessage}"`,
       }
     }
 
-    const { client } = await import("../index.js");
-    let guild = client.guilds.cache.get(state.guildId);
+    const { client: discordClient } = await import("../index.js");
+    let guild = discordClient.guilds.cache.get(state.guildId);
     let voiceChannel = guild?.channels.cache.get(state.channelId) || { id: state.channelId, guild: { id: state.guildId } };
     let textChannel = guild?.channels.cache.get(state.textChannelId) || { id: state.textChannelId };
 
@@ -448,10 +560,9 @@ User said: "${userMessage}"`,
 
   } catch (err) {
     if (err.message?.includes("Could not decode")) {
-      log(`[VoiceListen] Audio format not recognized by Gemini — trying WAV conversion`);
-      // Opus may not be directly supported; some Gemini models need WAV/PCM
-      // This is expected for raw Opus frames — the feature will work best
-      // when @discordjs/opus is installed to decode to PCM first
+      // We now send a real WAV container, so this should be rare. Log and bail
+      // for this utterance rather than tearing down the whole session.
+      log(`[VoiceListen] Gemini could not decode audio for ${userId} — skipping utterance`);
       return;
     }
     throw err;

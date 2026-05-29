@@ -19,6 +19,7 @@ import { updatePresence, startPresenceAPI } from "./presence.js";
 import { log, redact } from "./utils/logger.js";
 import { initDatabase } from "./database.js";
 import { initMusic } from "./music/player.js";
+import { sendAlert } from "@defnotean/shared/alert";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -329,7 +330,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("Failed to start bot:", err);
+  log(`Failed to start bot: ${err?.stack || err}`);
   process.exit(1);
 });
 
@@ -375,7 +376,7 @@ async function shutdown(signal) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
-// ─── Global safety nets — keep the bot alive no matter what ─────────────────
+// ─── Global safety nets — unhandledRejection stays alive, uncaughtException fails-fast+restarts ─
 // Unhandled promise rejections (e.g. a misbehaving event handler).
 // Stack lines can occasionally embed a failing URL (with query-string auth)
 // or an upstream provider's echoed error body — redact() scrubs token-shaped
@@ -383,9 +384,25 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 // past MAX_LOG_LINE_BYTES to prevent a runaway stack from filling bot.log.
 process.on("unhandledRejection", (reason) => {
   log(`[UNHANDLED REJECTION] ${redact(reason?.stack ?? reason)}`);
+  // Alert but stay alive — a rejected promise doesn't mean undefined process
+  // state the way a sync throw does. sendAlert de-dupes a flapping handler.
+  try { sendAlert("unhandled-rejection", redact(reason?.message ?? reason), { bot: "IRENE", log }); } catch {}
 });
 
-// Uncaught synchronous exceptions
+// Uncaught synchronous exceptions — a sync throw means we're in undefined
+// state, so log + alert, best-effort flush the dirty buckets via the same
+// drain SIGTERM uses, then exit(1) so Render restarts us cleanly.
 process.on("uncaughtException", (err) => {
   log(`[UNCAUGHT EXCEPTION] ${redact(err?.stack ?? err)}`);
+  try { sendAlert("uncaught-exception", redact(err?.message ?? err), { bot: "IRENE", log }); } catch {}
+  // Best-effort flush with a hard cap so a wedged write can't hang the exit.
+  Promise.race([
+    Promise.allSettled([
+      import("./music/player.js").then(m => m.saveAllQueues()),
+      import("./database.js").then(m => m.flushNow()),
+      import("./ai/personality.js").then(m => m.flush()),
+      import("./ai/longmemory.js").then(m => m.flush()),
+    ]),
+    new Promise(r => setTimeout(r, 5000)),
+  ]).finally(() => process.exit(1));
 });

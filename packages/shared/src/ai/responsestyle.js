@@ -54,6 +54,10 @@ export function pickResponseStyle(energy = 50, sentiment = 0, msgLength = 20, tr
 /**
  * Should the bot give a lazy low-effort response?
  * Returns "lazy" or "normal".
+ * @param {string} message
+ * @param {number} [energy]
+ * @param {number} [trust]
+ * @param {boolean} [isOwner]
  */
 export function shouldLaze(message, energy = 50, trust = 0, isOwner = false) {
   // Never laze for owner, high-trust users, questions, or longer messages

@@ -2,6 +2,7 @@ import { SlashCommandBuilder , MessageFlags } from "discord.js";
 import { tryDeductBalance, updateBalance, recordGameResult } from "../../database.js";
 import { coinflipEmbed } from "../../ai/gameVisuals.js";
 import { randomQuip } from "../../ai/gambling.js";
+import { log } from "../../utils/logger.js";
 
 export const data = new SlashCommandBuilder()
   .setName("coinflip")
@@ -37,7 +38,7 @@ export async function execute(interaction) {
     try {
       newBalance = await updateBalance(userId, amount * 2, "gamble_coinflip_win", `coinflip:${choice}`);
     } catch (err) {
-      console.error(`[Coinflip] win credit failed for ${userId} payout=${amount * 2}:`, err);
+      log(`[Coinflip] win credit failed for ${userId} payout=${amount * 2}: ${err?.message || err}`);
     }
   }
   await recordGameResult(userId, "coinflip", won, amount, won ? amount * 2 : 0);

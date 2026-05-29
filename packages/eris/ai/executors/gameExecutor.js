@@ -217,8 +217,10 @@ export async function execute(toolName, input, message, _context) {
       const winnerId = challengerWins ? resolved.challengerId : resolved.targetId;
       const loserId = challengerWins ? resolved.targetId : resolved.challengerId;
       if (resolved.stake > 0) {
-        await db.updateBalance(winnerId, resolved.stake, "duel_win", `duel`);
-        await db.updateBalance(loserId, -resolved.stake, "duel_loss", `duel`);
+        // Atomic stake transfer: move the stake from loser to winner in one
+        // locked operation instead of a credit-then-debit pair (which could
+        // mint coins if the loser's debit failed after the winner was paid).
+        await db.transferBalance(loserId, winnerId, resolved.stake, 0, "duel_loss", `duel`);
       }
       const guild = message.guild;
       const winnerName = guild?.members.cache.get(winnerId)?.displayName || "Winner";
@@ -245,6 +247,7 @@ export async function execute(toolName, input, message, _context) {
       if (targetId === message.author.id) return "you're the richest person \u2014 they'd be heisting YOU";
       const heist = await db.createHeist(message.guild.id, message.channel.id, message.author.id, targetId);
       if (!heist) return "couldn't create heist";
+      const { randomQuip } = await import("../gambling.js");
       return `heist organized targeting <@${targetId}> (${lb[0].balance} coins)! need 3+ people \u2014 say "join heist" to participate. ${await randomQuip()}`;
     }
 
@@ -272,10 +275,22 @@ export async function execute(toolName, input, message, _context) {
         return "heist called off \u2014 target only has ${targetBal.balance} coins, not worth the risk";
       }
       if (success) {
-        const stolen = Math.floor(targetBal.balance * (0.2 + Math.random() * 0.2));
+        const { randomQuip } = await import("../gambling.js");
+        const intended = Math.floor(targetBal.balance * (0.2 + Math.random() * 0.2));
+        // Debit the victim FIRST, atomically, for what they actually hold (clamp
+        // to their balance so a mid-flight drain can't make us steal more than
+        // exists). Only what's actually taken is distributed — coins are
+        // conserved. If the debit fails (victim drained below the amount), the
+        // heist resolves as failed and nobody is paid.
+        const debit = await db.tryDeductBalance(heist.target_user_id, intended, "heist_victim", "heisted");
+        if (!debit.ok) {
+          await db.resolveHeist(heist.id, "failed", 0);
+          return `heist fell apart — the target's vault was empty by the time you cracked it. nobody got paid`;
+        }
+        const stolen = intended;
         const share = Math.floor(stolen / parts.length);
+        // Pay each participant their share of the ALREADY-TAKEN loot.
         await Promise.all(parts.map(p => db.updateBalance(p, share, "heist_win", "heist")));
-        await db.updateBalance(heist.target_user_id, -stolen, "heist_victim", "heisted");
         await db.resolveHeist(heist.id, "complete", stolen);
         return `HEIST SUCCESS! stole ${stolen} coins from <@${heist.target_user_id}>. each participant gets ${share} coins! ${await randomQuip()}`;
       }
