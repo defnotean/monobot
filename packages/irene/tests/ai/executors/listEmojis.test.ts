@@ -13,8 +13,8 @@
 //      cache (keyed by guildId+toolName+args) doesn't bleed results
 //      between tests.
 //
-// See packages/irene/ai/tools.js:1902 for the schema this tests.
-// See packages/irene/ai/executor.js:1510 for the handler.
+// See packages/irene/ai/tools/everyoneTools.js for the schema this tests.
+// See packages/irene/ai/executors/emojiExecutor.js for the handler.
 
 import { describe, it, expect } from "vitest";
 // @ts-expect-error - importing JS module without types

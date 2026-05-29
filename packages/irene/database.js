@@ -113,6 +113,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import config from "./config.js";
+import { createCustomCommandsStore } from "./database/customCommands.js";
 import {
   GUILD_SETTINGS_DEFAULTS,
   STARBOARD_DEFAULTS,
@@ -1410,43 +1411,20 @@ export function setDmOptout(userId, optout) {
 
 // ─── Custom Commands ─────────────────────────────────────────────────────────
 
-export function getCustomCommands(guildId) {
-  if (!data.custom_commands) data.custom_commands = {};
-  return data.custom_commands[guildId] || {};
-}
+const _customCommandsStore = createCustomCommandsStore({
+  getData: () => data,
+  markEntity: _markEntity,
+  save,
+});
 
-export function getCustomCommand(guildId, trigger) {
-  return getCustomCommands(guildId)[trigger.toLowerCase()] || null;
-}
+export const getCustomCommands = _customCommandsStore.getCustomCommands;
 
-export function setCustomCommand(guildId, trigger, command) {
-  if (!data.custom_commands) data.custom_commands = {};
-  if (!data.custom_commands[guildId]) data.custom_commands[guildId] = {};
-  data.custom_commands[guildId][trigger.toLowerCase()] = {
-    ...command,
-    trigger: trigger.toLowerCase(),
-    // Preserve creation timestamp on edits — only set it if not already present
-    created_at: command.created_at ?? new Date().toISOString(),
-  };
-  _markEntity("custom_commands", guildId);
-  save("custom_commands");
-}
+export const getCustomCommand = _customCommandsStore.getCustomCommand;
 
-export function deleteCustomCommand(guildId, trigger) {
-  if (!data.custom_commands?.[guildId]) return false;
-  const key = trigger.toLowerCase();
-  if (data.custom_commands[guildId][key]) {
-    delete data.custom_commands[guildId][key];
-    _markEntity("custom_commands", guildId);
-    save("custom_commands");
-    return true;
-  }
-  return false;
-}
+export const setCustomCommand = _customCommandsStore.setCustomCommand;
 
-export function listCustomCommands(guildId) {
-  return Object.values(getCustomCommands(guildId));
-}
+export const deleteCustomCommand = _customCommandsStore.deleteCustomCommand;
+export const listCustomCommands = _customCommandsStore.listCustomCommands;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // WELCOME / DM-WELCOME / LEAVE — embed customization & message templates
