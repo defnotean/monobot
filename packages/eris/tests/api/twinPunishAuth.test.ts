@@ -89,7 +89,11 @@ function makeReq({
   body,
   headers = {},
   method = "POST",
-  ip = `127.0.0.${Math.floor(Math.random() * 200) + 1}`,
+  // Non-localhost (TEST-NET-3, RFC 5737) so requests never hit dashboard.js's
+  // localhost auth-bypass — these tests exercise the REMOTE token gate. Distinct
+  // per request keeps per-IP rate-limit buckets isolated. (127.0.0.x would
+  // occasionally roll 127.0.0.1 and silently bypass auth → flaky 200 vs 401.)
+  ip = `203.0.113.${Math.floor(Math.random() * 200) + 1}`,
 }: {
   path: string;
   body: string;

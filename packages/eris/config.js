@@ -276,9 +276,10 @@ const config = {
   geminiFallbackModel: env("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash"),
   geminiFastModel: env("GEMINI_FAST_MODEL", "gemini-3-flash-preview"),
   // Multimodal image model for edit_image (input photo + prompt -> edited photo).
-  // Override with GEMINI_IMAGE_MODEL if the default isn't available on your key;
-  // edit_image also tries a small fallback chain of known image-capable models.
-  geminiImageModel: env("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
+  // Default: Nano Banana 2 (gemini-3.1-flash-image-preview, the current flash
+  // image model as of 2026). Override with GEMINI_IMAGE_MODEL; edit_image also
+  // falls back through gemini-2.5-flash-image and gemini-3-pro-image-preview.
+  geminiImageModel: env("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview"),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // EXTERNAL INTEGRATIONS — Supabase persistence, music (Last.fm), GIFs (Klipy),

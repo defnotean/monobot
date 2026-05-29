@@ -205,14 +205,18 @@ export async function execute(toolName, input, message, _context) {
 
         const { GoogleGenAI } = await import("@google/genai");
         const genai = new GoogleGenAI({ apiKey: config.geminiKeys[0] });
-        const MODELS = [config.geminiImageModel, "gemini-2.5-flash-image", "gemini-2.0-flash-preview-image-generation"].filter(Boolean);
+        // Nano Banana family — multimodal image-out via generateContent. Newest
+        // flash first, then older flash, then Pro (higher quality, slower/costlier).
+        const MODELS = [config.geminiImageModel, "gemini-3.1-flash-image-preview", "gemini-2.5-flash-image", "gemini-3-pro-image-preview"].filter(Boolean);
+        const seen = new Set();
         let outImg = null, lastErr;
         for (const model of MODELS) {
+          if (seen.has(model)) continue; seen.add(model);
           try {
             const result = await genai.models.generateContent({
               model,
               contents: [{ role: "user", parts: [{ inlineData: { mimeType: inMime, data: inB64 } }, { text: instruction }] }],
-              config: { responseModalities: ["IMAGE", "TEXT"] },
+              config: { responseModalities: ["TEXT", "IMAGE"] },
             });
             const parts = result?.candidates?.[0]?.content?.parts || [];
             const imgPart = parts.find((p) => p.inlineData?.data);
