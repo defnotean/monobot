@@ -80,20 +80,29 @@ const DEFAULT_MAX_KEYS = 1000;
  * @param {number} opts.limit     Max allowed hits per window per key.
  * @param {number} opts.windowMs  Window length in ms.
  * @param {number} [opts.maxKeys=1000] Soft cap on tracked keys (memory guard).
- * @returns {{ allow: (key: string, now?: number) => boolean, reset: () => void, _size: () => number }}
+ * @param {number} [opts.globalLimit=0] Optional total accepted hits across all keys.
+ * @param {number} [opts.globalWindowMs=windowMs] Window length for the global cap.
+ * @returns {{ allow: (key: string, now?: number) => boolean, reset: () => void, _size: () => number, _globalSize: () => number }}
  */
-export function createRateLimiter({ limit, windowMs, maxKeys = DEFAULT_MAX_KEYS } = /** @type {any} */ ({})) {
+export function createRateLimiter({ limit, windowMs, maxKeys = DEFAULT_MAX_KEYS, globalLimit = 0, globalWindowMs = windowMs } = /** @type {any} */ ({})) {
   if (!Number.isFinite(limit) || limit < 1) throw new Error("rate limiter: limit must be a positive integer");
   if (!Number.isFinite(windowMs) || windowMs < 1) throw new Error("rate limiter: windowMs must be a positive integer");
+  if (!Number.isFinite(maxKeys) || maxKeys < 1) throw new Error("rate limiter: maxKeys must be a positive integer");
+  if (!Number.isFinite(globalLimit) || globalLimit < 0) throw new Error("rate limiter: globalLimit must be a non-negative integer");
+  if (globalLimit > 0 && (!Number.isFinite(globalWindowMs) || globalWindowMs < 1)) throw new Error("rate limiter: globalWindowMs must be a positive integer");
 
   // key → number[] of recent hit timestamps (ms), oldest first.
+  /** @type {Map<string, number[]>} */
   const hits = new Map();
+  /** @type {number[]} */
+  const globalHits = [];
+  const hasGlobalCap = globalLimit > 0;
 
   /** @param {number[]} arr @param {number} now */
-  function prune(arr, now) {
+  function prune(arr, now, winMs = windowMs) {
     // In-place trim of entries older than the window.
     let i = 0;
-    while (i < arr.length && now - arr[i] >= windowMs) i++;
+    while (i < arr.length && now - arr[i] >= winMs) i++;
     if (i > 0) arr.splice(0, i);
   }
 
@@ -121,6 +130,10 @@ export function createRateLimiter({ limit, windowMs, maxKeys = DEFAULT_MAX_KEYS 
      */
     allow(key, now = Date.now()) {
       if (typeof key !== "string" || !key) return true; // unkeyed traffic isn't rate-limited
+      if (hasGlobalCap) {
+        prune(globalHits, now, globalWindowMs);
+        if (globalHits.length >= globalLimit) return false;
+      }
       let arr = hits.get(key);
       if (!arr) {
         if (hits.size >= maxKeys) evictOldest();
@@ -131,15 +144,20 @@ export function createRateLimiter({ limit, windowMs, maxKeys = DEFAULT_MAX_KEYS 
       }
       if (arr.length >= limit) return false;
       arr.push(now);
+      if (hasGlobalCap) globalHits.push(now);
       return true;
     },
     /** Test helper — drop all state. */
     reset() {
       hits.clear();
+      globalHits.length = 0;
     },
     /** Test helper — current tracked-key count. */
     _size() {
       return hits.size;
+    },
+    _globalSize() {
+      return globalHits.length;
     },
   };
 }

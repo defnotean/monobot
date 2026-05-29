@@ -74,6 +74,19 @@ const DESTRUCTIVE_PATTERNS = [
   new RegExp(`\\bcmd(\\.exe)?\\b[^|]*${WS}\\/c\\b`, "iu"),
 ];
 
+// Opaque/elevation patterns are hard-blocked, not confirmable. They prevent
+// review of the actual command that will run or cross a privilege boundary.
+const HARD_BLOCK_PATTERNS = [
+  new RegExp(`\\bpowershell(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
+  new RegExp(`\\bpwsh(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
+  new RegExp(`\\bcmd(\\.exe)?\\b[^|]*${WS}\\/c\\b`, "iu"),
+  new RegExp(`\\b(?:bash|sh|zsh|fish)${WS}+-c\\b`, "iu"),
+  /\b(?:Invoke-Expression|iex)\b/iu,
+  /\bStart-Process\b[^|]*(?:^|\s)-Verb\s+RunAs\b/iu,
+  /\bSet-ExecutionPolicy\b/iu,
+  new RegExp(`\\b(?:curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\\b[^|]*(?:\\||;|&&)${WS}*(?:sh|bash|pwsh|powershell|iex|Invoke-Expression)\\b`, "iu"),
+];
+
 // Chain operators — if a destructive command sits after `;`, `&&`, `||`, `|`,
 // `&`, backtick, or `$()`, the leading clause shouldn't mask it. Split on
 // these and re-check each fragment.
@@ -100,6 +113,13 @@ function normalizeForMatch(command) {
 
 function matchDestructive(normalized) {
   for (const pat of DESTRUCTIVE_PATTERNS) {
+    if (pat.test(normalized)) return pat.source;
+  }
+  return null;
+}
+
+function matchHardBlocked(normalized) {
+  for (const pat of HARD_BLOCK_PATTERNS) {
     if (pat.test(normalized)) return pat.source;
   }
   return null;
@@ -133,6 +153,25 @@ export function looksDestructive(command) {
   return null;
 }
 
+export function looksHardBlocked(command) {
+  if (!command || typeof command !== "string") return null;
+  const normalized = normalizeForMatch(command);
+  if (!normalized) return null;
+
+  const whole = matchHardBlocked(normalized);
+  if (whole) return whole;
+
+  if (CHAIN_SPLIT.test(normalized)) {
+    for (const part of normalized.split(CHAIN_SPLIT)) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const hit = matchHardBlocked(trimmed);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 /**
  * Gate a shell command invocation. Returns either `{ ok: true }` or an error
  * string suitable for returning from a tool executor.
@@ -140,6 +179,13 @@ export function looksDestructive(command) {
 export function gateShellCommand(command, input) {
   if (!isPcAgentEnabled()) return { ok: false, error: pcAgentDisabledMessage() };
   if (!command) return { ok: false, error: "no command provided" };
+  const hardBlocked = looksHardBlocked(command);
+  if (hardBlocked) {
+    return {
+      ok: false,
+      error: `refusing - this shell form is not allowed even with confirm (matched /${hardBlocked}/). use a direct, reviewable command instead.`,
+    };
+  }
   const destructive = looksDestructive(command);
   if (destructive && !input?.confirm) {
     return {

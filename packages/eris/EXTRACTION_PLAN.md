@@ -94,7 +94,7 @@ After each file moves:
 ### Phase 4: Retire old repos
 
 - [ ] Archive `defnotean/Eris` + `defnotean/Irene` with a README pointing at the monorepo.
-- [ ] Update CLAUDE.md and FEATURES.md references.
+- [ ] Update FEATURES.md references.
 
 ## Risk register
 

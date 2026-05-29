@@ -19,7 +19,9 @@ import { getClientIp } from "@defnotean/shared/getClientIp";
 // replayed in a tight loop (or simply hammered) to scrape state at arbitrary
 // resolution. 10/min/IP is well above any healthy poll cadence; legit twin
 // awareness sync runs on much longer intervals.
-const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
+const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000, maxKeys: 128, globalLimit: 60 });
+const _presenceLimiter = createRateLimiter({ limit: 1, windowMs: 1_000, maxKeys: 1000, globalLimit: 300 });
+const _dashboardLimiter = createRateLimiter({ limit: 30, windowMs: 60_000, maxKeys: 500, globalLimit: 600 });
 
 // TTS audio cache — stores generated WAV buffers keyed by random ID, served via /tts/:id
 // Bounded to TTS_MAX_CACHE entries; oldest entries evicted on insert. Entries expire after 5 min.
@@ -111,8 +113,6 @@ export function updatePresence(presence) {
   log(`[Presence] ${presence.status} | ${activities.length} activities`);
 }
 
-const _apiRateLimit = new Map();
-
 // ─── Twin command vocabulary (Eris → Irene relay) ──────────────────────────
 // Map Eris's short command names → Irene's actual tool names.
 // Direction matters: the KEY is what arrives, the VALUE is the tool Irene
@@ -197,17 +197,7 @@ export function startPresenceAPI(client) {
       // peer is always the proxy, so keying on remoteAddress would lump every
       // visitor into one bucket and let one client lock everyone out.
       const clientIP = getClientIp(req);
-      const now = Date.now();
-      const last = _apiRateLimit.get(clientIP) ?? 0;
-      if (now - last < 1000) { res.writeHead(429); return res.end('{"error":"rate limited"}'); }
-      _apiRateLimit.set(clientIP, now);
-      // Clean old entries with sliding window instead of clearing all
-      if (_apiRateLimit.size > 1000) {
-        const cutoff = Date.now() - 60_000;
-        for (const [ip, ts] of _apiRateLimit) if (ts < cutoff) _apiRateLimit.delete(ip);
-        // Force-clear memory if attacked by 10k+ unique IPs in < 60s
-        if (_apiRateLimit.size > 10000) _apiRateLimit.clear();
-      }
+      if (!_presenceLimiter.allow(clientIP)) { res.writeHead(429); return res.end('{"error":"rate limited"}'); }
     }
 
     const origin = req.headers.origin;
@@ -284,19 +274,7 @@ export function startPresenceAPI(client) {
 
       // ── Rate limiting for API endpoints (per-IP, 30 req/min)
       const apiIP = getClientIp(req);
-      const apiNow = Date.now();
-      if (!globalThis._apiRateLimits) globalThis._apiRateLimits = new Map();
-      const apiHits = globalThis._apiRateLimits.get(apiIP) || [];
-      const recentHits = apiHits.filter(t => apiNow - t < 60_000);
-      if (recentHits.length >= 30) { j(429, { error: "rate limited" }); return; }
-      recentHits.push(apiNow);
-      globalThis._apiRateLimits.set(apiIP, recentHits);
-      // Prune old IPs every 100 requests
-      if (globalThis._apiRateLimits.size > 500) {
-        for (const [ip, hits] of globalThis._apiRateLimits) {
-          if (!hits.length || apiNow - hits[hits.length - 1] > 120_000) globalThis._apiRateLimits.delete(ip);
-        }
-      }
+      if (!_dashboardLimiter.allow(apiIP)) { j(429, { error: "rate limited" }); return; }
 
       // ── Auth check — accept DASHBOARD_API_KEY or TWIN_API_SECRET
       // Comparison goes through safeStringEqual so a network attacker can't

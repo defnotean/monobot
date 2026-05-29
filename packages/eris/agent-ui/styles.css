@@ -152,7 +152,7 @@ code { font-family: var(--mono); }
 .plan-approve-btn:hover { background: var(--red-dim); transform: translateY(-1px); box-shadow: 0 6px 16px rgba(255,51,102,0.4); }
 .plan-approve-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
 
-/* Collapsible tool call (Claude/Antigravity style) */
+/* Collapsible tool call */
 .tool-call { border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; margin: 8px 0; overflow: hidden; background: var(--s2); transition: border-color 0.2s; }
 .tool-call:hover { border-color: rgba(255,255,255,0.15); }
 .tool-call-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; transition: background .2s; font-size: 12.5px; color: var(--text2); font-weight: 500; }

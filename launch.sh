@@ -4,12 +4,12 @@
 # with live colored log output, and re-arms systemd when you Ctrl-C / close.
 #
 # Usage (local):     ./launch.sh
-# Usage (over SSH):  ssh -t defnotean@<host> /home/defnotean/Desktop/Claude/monobot/launch.sh
+# Usage (over SSH):  ssh -t defnotean@<host> /home/defnotean/Desktop/monobot/launch.sh
 # Usage (Windows):   launch.bat  (drives this script over SSH)
 
 set -uo pipefail
 
-REPO="/home/defnotean/Desktop/Claude/monobot"
+REPO="/home/defnotean/Desktop/monobot"
 ERIS_LOG="/tmp/monobot-launcher-eris.log"
 IRENE_LOG="/tmp/monobot-launcher-irene.log"
 ERIS_PID=""

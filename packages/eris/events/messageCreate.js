@@ -20,7 +20,7 @@
  *                             silencing, mention/name/awaited-reply
  *                             detection, channel mute list, rate-limit
  *                             short-circuit, anti-spam cooldown,
- *                             message-length guard, speculative firewall.
+ *                             message-length guard, firewall pre-dispatch.
  *                             → `messageCreate/gates.js`
  *     3. CONTEXT BUILDING   — relationship/mood/memory fetch, cross-channel
  *                             snippets, server persona, personality,
@@ -39,7 +39,7 @@
  *                             → `messageCreate/aiInvoke.js`
  *     6. RESPONSE RENDERING — strip leaked tool syntax (replyScrub.js),
  *                             resolve @username mentions, enforce char
- *                             budget, firewall gate on outbound,
+ *                             budget, cached firewall gate on outbound,
  *                             `sendHumanReply` with realistic typing,
  *                             awaited-reply bookkeeping, sleep trigger
  *                             detection, 1% afterthought.
@@ -93,19 +93,29 @@ export default async function messageCreate(message) {
 
   // firewallGate: memoized verdict check. Either runs `sendCallback` (safe) or
   // sends the block reason (unsafe) and logs. Returns true iff the safe path ran.
+  // It is called once before any context build / AI call / tool dispatch, then
+  // reused by later send sites as a no-op safe verdict cache.
   let _firewallVerdict = null;
+  let _firewallBlockSent = false;
   const firewallGate = async (sendCallback) => {
     if (!firewallPromise) { await sendCallback(); return true; }
     if (!_firewallVerdict) _firewallVerdict = await firewallPromise;
     if (!_firewallVerdict.safe) {
-      await message.reply(_firewallVerdict.reason).catch(() => {});
-      const sb = db.getSupabase();
-      if (sb) logBlockedAttempt(sb, message.author.id, message.guildId, message.channel.id, message.content, _firewallVerdict.matchedPattern, _firewallVerdict.similarity).catch(() => {});
+      if (!_firewallBlockSent) {
+        _firewallBlockSent = true;
+        await message.reply(_firewallVerdict.reason).catch(() => {});
+        const sb = db.getSupabase();
+        if (sb) logBlockedAttempt(sb, message.author.id, message.guildId, message.channel.id, message.content, _firewallVerdict.matchedPattern, _firewallVerdict.similarity).catch(() => {});
+      }
       return false;
     }
     await sendCallback();
     return true;
   };
+
+  // S-tier placement: block prompt-injection input before the LLM sees it and
+  // before the inline tool-dispatch callback can execute anything.
+  if (!(await firewallGate(async () => {}))) return;
 
   markActivity();
   log(`[MSG] ${isDM ? "DM" : `#${message.channel.name}`} from ${message.author.username}`);

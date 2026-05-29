@@ -14,7 +14,7 @@ setlocal
 
 set "LINUX_USER=defnotean"
 set "LINUX_HOST=192.168.1.117"
-set "REMOTE_SCRIPT=/home/defnotean/Desktop/Claude/monobot/launch.sh"
+set "REMOTE_SCRIPT=/home/defnotean/Desktop/monobot/launch.sh"
 
 title monobot launcher — %LINUX_USER%@%LINUX_HOST%
 

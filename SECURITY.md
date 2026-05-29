@@ -125,8 +125,10 @@ new requests) under pressure rather than evicting in-window entries.
 ### Rate limits (`packages/shared/src/rateLimit.js`)
 
 In-memory sliding-window limiter used on twin endpoints and a handful of
-per-user tool surfaces. Keys are typically `${identity}:${ip}`. Designed for
-small key cardinality; bounded-by-`maxKeys` memory.
+per-user tool surfaces. Keys are typically `${identity}:${ip}`. Each limiter
+can also set a process-wide `globalLimit`, so high-cardinality churn cannot
+turn forged keys into unlimited accepted throughput. State is still per
+process; multi-replica deployments should use a shared limiter.
 
 ### Owner gating (`BOT_OWNER_ID` env)
 
@@ -144,8 +146,28 @@ On top of the owner check, the PC-agent tool surface adds:
 - A pattern-based destructive-command detector (`rm -rf`, `format`, `dd
   of=/dev/`, fork bombs, `Remove-Item -Recurse -Force`, `shutdown`, etc.)
   that refuses unless the caller passes `confirm: true`.
+- A hard block for opaque/elevated shell forms (`-EncodedCommand`, `cmd /c`,
+  `bash -c`, download-to-shell pipes, `Invoke-Expression`, `RunAs`, execution
+  policy changes). These are not confirmable; the caller must send a direct,
+  reviewable command instead.
 - An append-only audit log to Supabase (`eris_pc_audit`) with a local
   file fallback when the DB is unreachable.
+
+## Security Scorecard
+
+| Category | Local score | Notes |
+| --- | --- | --- |
+| SSRF / outbound fetch | S | `safeFetch` validates protocol, DNS-resolved IP, redirect hops, body size, and timeout. |
+| Prompt-injection detection | S | Layered firewall runs before LLM/tool dispatch, with decoders, AC prefilter, regex worker timeout, sliding window, and optional classifier. |
+| Firewall enforcement placement | S | Unsafe input is blocked before context build, AI generation, or tool callbacks. |
+| Owner / identity authority | S | Discord-ID keyed owner gate remains the primary shell/tool authority. |
+| Destructive-command gate | S- | Destructive commands need explicit confirmation; opaque/elevated shell forms are hard-blocked. |
+| Secret hygiene | S | Environment-only secrets, gitignored `.env`, redacted logs, no hardcoded credentials. |
+| Twin HMAC channel | S | Body-bound HMAC, constant-time compare, timestamp skew window, replay cache pressure fail-closed. |
+| DB / authz | S locally | Parameterized local access behind owner/twin gates; service-role deployments must stay loopback/private. |
+| Rate limiting | S locally | Per-key plus process-wide caps; use shared state before horizontal scaling. |
+| Dependency freshness | S | `npm audit` currently reports zero vulnerabilities. |
+| Deployment containment | S locally | Current documented topology is outbound-only/loopback; public exposure needs TLS and auth in front. |
 
 ## Known Gaps / Areas Needing Hardening
 

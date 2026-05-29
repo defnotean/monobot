@@ -48,6 +48,24 @@ describe("createRateLimiter", () => {
     expect(rl.allow("oldest", 5_000)).toBe(true);
   });
 
+  it("can enforce a process-wide cap across high-cardinality keys", () => {
+    const rl = createRateLimiter({ limit: 100, windowMs: 60_000, maxKeys: 10, globalLimit: 3 });
+    const now = 1_000_000;
+    expect(rl.allow("a", now)).toBe(true);
+    expect(rl.allow("b", now + 1)).toBe(true);
+    expect(rl.allow("c", now + 2)).toBe(true);
+    expect(rl.allow("d", now + 3)).toBe(false);
+    expect(rl._globalSize()).toBe(3);
+  });
+
+  it("recovers the process-wide cap when the global window slides", () => {
+    const rl = createRateLimiter({ limit: 100, windowMs: 60_000, globalLimit: 2, globalWindowMs: 1_000 });
+    expect(rl.allow("a", 1_000)).toBe(true);
+    expect(rl.allow("b", 1_100)).toBe(true);
+    expect(rl.allow("c", 1_200)).toBe(false);
+    expect(rl.allow("c", 2_001)).toBe(true);
+  });
+
   it("treats empty / non-string keys as unkeyed (always-allow)", () => {
     const rl = createRateLimiter({ limit: 1, windowMs: 60_000 });
     expect(rl.allow("", 1)).toBe(true);
@@ -59,6 +77,8 @@ describe("createRateLimiter", () => {
   it("rejects bad constructor args (fail-loud on misconfiguration)", () => {
     expect(() => createRateLimiter({ limit: 0, windowMs: 60_000 })).toThrow();
     expect(() => createRateLimiter({ limit: 5, windowMs: 0 })).toThrow();
+    expect(() => createRateLimiter({ limit: 5, windowMs: 60_000, maxKeys: 0 })).toThrow();
+    expect(() => createRateLimiter({ limit: 5, windowMs: 60_000, globalLimit: -1 })).toThrow();
     expect(() => createRateLimiter({})).toThrow();
   });
 

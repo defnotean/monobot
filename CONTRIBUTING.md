@@ -71,7 +71,7 @@ Examples from history:
 
 **Body (optional):** explain *why*, not what. Reference the issue or incident that prompted it.
 
-**Important:** do NOT add Claude/AI attribution to commits, PR descriptions, or `Co-Authored-By` fields. All work is attributed to the contributor.
+**Important:** do NOT add AI-tool attribution to commits, PR descriptions, or `Co-Authored-By` fields. All work is attributed to the contributor.
 
 ## Pull requests
 

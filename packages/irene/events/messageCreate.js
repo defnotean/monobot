@@ -361,6 +361,10 @@ export async function execute(message) {
   }
 
   // Per-user queue — if already processing a message from this user, queue this one
+  // Block prompt-injection input after addressing/budget gates but before the
+  // LLM sees it or the inline tool dispatcher can execute any model-chosen tool.
+  if (!(await firewallGate(async () => {}))) return;
+
   const userKey = isDM ? `dm-${message.author.id}` : `${message.guild.id}-${message.author.id}`;
   if (_processingUsers.has(userKey)) {
     // Queue it — will be processed after current one finishes

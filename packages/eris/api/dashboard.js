@@ -11,7 +11,8 @@ import { getClientIp } from "@defnotean/shared/getClientIp";
 // replayed in a tight loop (or simply hammered) to scrape state at arbitrary
 // resolution. 10/min/IP is well above any healthy poll cadence; legit twin
 // awareness sync runs on much longer intervals.
-const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
+const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000, maxKeys: 128, globalLimit: 60 });
+const _dashboardLimiter = createRateLimiter({ limit: 30, windowMs: 60_000, maxKeys: 500, globalLimit: 600 });
 
 function moodLabel(score) {
   if (score >= 60) return "ecstatic";
@@ -73,19 +74,8 @@ export async function handleApiRequest(req, res) {
   // request shares one socket peer, so keying on remoteAddress would collapse
   // all visitors into a single bucket.
   const clientIP = getClientIp(req);
-  const now = Date.now();
-  if (!globalThis._dashRateLimits) globalThis._dashRateLimits = new Map();
-  const hits = globalThis._dashRateLimits.get(clientIP) || [];
-  const recentHits = hits.filter(t => now - t < 60_000);
-  if (recentHits.length >= 30) {
+  if (!_dashboardLimiter.allow(clientIP)) {
     json(res, 429, { error: "rate limited" }); return;
-  }
-  recentHits.push(now);
-  globalThis._dashRateLimits.set(clientIP, recentHits);
-  if (globalThis._dashRateLimits.size > 500) {
-    for (const [ip, h] of globalThis._dashRateLimits) {
-      if (!h.length || now - h[h.length - 1] > 120_000) globalThis._dashRateLimits.delete(ip);
-    }
   }
 
   const url0 = new URL(req.url, `http://localhost:${config.port}`);

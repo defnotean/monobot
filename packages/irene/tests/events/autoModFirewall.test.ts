@@ -83,6 +83,17 @@ describe("initFirewall — firewall runs without Supabase", () => {
     expect(verdict.category).toBe("pattern_match");
   });
 
+  it("firewallGate blocks before the AI/tool path can run", async () => {
+    const msg = makeDM();
+    const fw = await initFirewall(msg, { isTwinMsg: false });
+    const sendCallback = vi.fn(async () => {});
+    const allowed = await fw.firewallGate(sendCallback);
+
+    expect(allowed).toBe(false);
+    expect(sendCallback).not.toHaveBeenCalled();
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+  });
+
   it("does NOT build a firewallPromise for the owner (bypass preserved)", async () => {
     const fw = await initFirewall(
       makeDM({ author: { id: OWNER_ID, bot: false, username: "boss" } }),
