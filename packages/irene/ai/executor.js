@@ -1860,6 +1860,75 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
       }
     }
 
+    // Post long content (code/scripts/text) as a downloadable FILE so it's never
+    // truncated by the reply char-budget. Short caption in chat + the file attached.
+    case "send_file": {
+      const content = input.content;
+      if (!content) return "no file content provided";
+      const filename = (input.filename || "file.txt").replace(/[^\w.\- ]/g, "_").slice(0, 80) || "file.txt";
+      try {
+        const buffer = Buffer.from(String(content), "utf-8");
+        if (buffer.length > 7_000_000) return "that content is too large to attach (>7MB) — trim it down";
+        const { AttachmentBuilder } = await import("discord.js");
+        const attachment = new AttachmentBuilder(buffer, { name: filename });
+        const caption = (input.caption || "").trim();
+        await message.channel.send({
+          ...(caption ? { content: caption } : {}),
+          files: [attachment],
+          allowedMentions: { parse: ["users"] },
+        });
+        return `posted "${filename}" as a file attachment with your caption — done; do NOT also paste the contents inline`;
+      } catch (e) {
+        return `couldn't send the file: ${e.message}`;
+      }
+    }
+
+    // Edit a photo the user attached, following their instruction, via a Gemini
+    // multimodal image model (input image + text -> edited image), and post it.
+    case "edit_image": {
+      const instruction = input.instruction || input.prompt;
+      if (!instruction) return "tell me what to change about the image";
+      const attachment = message.attachments?.first();
+      const url = input.url || input.image_url || attachment?.url;
+      if (!url) return "no image attached — the user needs to attach the picture they want edited";
+      if (!config.geminiKeys?.length) return "image editing isn't set up (no Gemini key)";
+      try {
+        const imgRes = await safeFetch(url, { binary: true, maxBytes: 8_000_000, timeoutMs: 10_000 });
+        if (imgRes.status < 200 || imgRes.status >= 300) return `couldn't fetch the image: ${imgRes.status}`;
+        const inB64 = imgRes.bytes.toString("base64");
+        const inMime = imgRes.headers.get("content-type") || "image/png";
+
+        const { GoogleGenAI } = await import("@google/genai");
+        const genai = new GoogleGenAI({ apiKey: config.geminiKeys[0] });
+        // Nano Banana family — newest flash first, then older flash, then Pro.
+        const MODELS = [config.geminiImageModel, "gemini-3.1-flash-image-preview", "gemini-2.5-flash-image", "gemini-3-pro-image-preview"].filter(Boolean);
+        const seen = new Set();
+        let outImg = null, lastErr;
+        for (const model of MODELS) {
+          if (seen.has(model)) continue; seen.add(model);
+          try {
+            const result = await genai.models.generateContent({
+              model,
+              contents: [{ role: "user", parts: [{ inlineData: { mimeType: inMime, data: inB64 } }, { text: instruction }] }],
+              config: { responseModalities: ["TEXT", "IMAGE"] },
+            });
+            const parts = result?.candidates?.[0]?.content?.parts || [];
+            const imgPart = parts.find((p) => p.inlineData?.data);
+            if (imgPart) { outImg = imgPart.inlineData; break; }
+          } catch (err) { lastErr = err; if (!/NOT_FOUND|404|not found|not supported/i.test(err?.message || "")) break; }
+        }
+        if (!outImg) return `couldn't edit the image${lastErr ? ` (${lastErr.message})` : ""} — the image model may not be available on this key (set GEMINI_IMAGE_MODEL)`;
+        const { AttachmentBuilder } = await import("discord.js");
+        const ext = (outImg.mimeType || "image/png").split("/")[1] || "png";
+        const attachmentOut = new AttachmentBuilder(Buffer.from(outImg.data, "base64"), { name: `edited.${ext}` });
+        const caption = (input.caption || "").trim();
+        await message.channel.send({ ...(caption ? { content: caption } : {}), files: [attachmentOut], allowedMentions: { parse: ["users"] } });
+        return `edited the image (${instruction}) and posted the result — the user can see it`;
+      } catch (e) {
+        return `image edit failed: ${e.message}`;
+      }
+    }
+
     case "set_gif_style": {
       const mode = input.style?.toLowerCase();
       if (mode === "raw" || mode === "clean" || mode === "plain") {

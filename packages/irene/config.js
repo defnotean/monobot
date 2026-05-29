@@ -406,6 +406,9 @@ const config = {
   geminiModel: env("GEMINI_MODEL", "gemini-3.1-pro-preview"),
   geminiFallbackModel: env("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash"),
   geminiFastModel: env("GEMINI_FAST_MODEL", "gemini-3-flash-preview"),
+  // Multimodal image model for edit_image (input photo + prompt -> edited photo).
+  // Default: Nano Banana 2; falls back to 2.5-flash-image / 3-pro-image-preview.
+  geminiImageModel: env("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview"),
 
   // Tunable thresholds
   maxQueuedMessages: 3,

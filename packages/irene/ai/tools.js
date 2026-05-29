@@ -1883,6 +1883,33 @@ export const EVERYONE_TOOLS = [
     },
   },
   {
+    name: "send_file",
+    description:
+      "Post the full content as a downloadable FILE attachment. ALWAYS use this instead of pasting long code/scripts/text inline — inline replies are capped and get cut off mid-line. The right pattern: a SHORT message in your voice (1-2 sentences that finish the thought) PLUS the file attached. e.g. asked for a python script → caption + snake.py. The file holds the long stuff so it's never truncated.",
+    input_schema: {
+      type: "object",
+      properties: {
+        filename: { type: "string", description: "File name WITH extension (e.g. 'snake.py', 'notes.md', 'data.json')" },
+        content: { type: "string", description: "The FULL file contents (code/text). Goes in the file, not the chat — length is fine here." },
+        caption: { type: "string", description: "Short message to post alongside the file, in your own voice (1-2 sentences)" },
+      },
+      required: ["filename", "content"],
+    },
+  },
+  {
+    name: "edit_image",
+    description:
+      "Edit/alter an image the user ATTACHED to their current message, following their instruction, and post the result (e.g. 'make the sky blue', 'add sunglasses', 'turn this into a painting', 'remove the background'). Only works when the user actually attached an image. Pass `instruction` (what to change) and a short `caption` in your voice.",
+    input_schema: {
+      type: "object",
+      properties: {
+        instruction: { type: "string", description: "What to change about the attached image (e.g. 'make the sky blue', 'add a party hat')" },
+        caption: { type: "string", description: "Optional short message to post with the edited image, in your voice" },
+      },
+      required: ["instruction"],
+    },
+  },
+  {
     name: "set_gif_style",
     description: "Toggle how GIFs are displayed in this server. 'raw' = just the GIF, no embed border (clean look). 'embed' = GIF inside a colored embed (default). Use when someone asks to remove the GIF border, make GIFs clean/raw, or bring back the embed style.",
     input_schema: {
