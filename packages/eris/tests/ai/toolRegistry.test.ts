@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { EVERYONE_TOOLS, OWNER_TOOLS } from "../../ai/tools.js";
 import { registry } from "../../ai/toolRegistry.js";
 
+// Parse the tool names out of a Tier-2 catalog block. Lines are "- name: desc".
+function catalogNames(catalog: string): Set<string> {
+  const names = new Set<string>();
+  for (const line of catalog.split("\n")) {
+    const m = line.match(/^- ([a-z0-9_]+):/i);
+    if (m) names.add(m[1]);
+  }
+  return names;
+}
+
 describe("tool registry", () => {
   it("registers every declared Eris AI tool", () => {
     const declared = new Set([...EVERYONE_TOOLS, ...OWNER_TOOLS].map((tool) => tool.name));
@@ -21,5 +31,84 @@ describe("tool registry", () => {
     expect(tier1Names).toContain("remember_fact");
     expect(tier1Names).toContain("web_search");
     expect(tier1Names).toContain("ask_irene");
+  });
+});
+
+describe("two-tier selection (Eris)", () => {
+  // (a) COMPLETENESS — every accessible tool must appear in Tier 1 (schema)
+  // OR the Tier-2 catalog (by name). Nothing may be unreachable.
+  it("Tier-1 ∪ Tier-2-catalog covers the full accessible tool set (owner)", () => {
+    const { tier1, tier2Catalog } = registry.selectByMessage("hey what's up", {
+      isOwner: true,
+      everyoneTools: EVERYONE_TOOLS,
+      ownerTools: OWNER_TOOLS,
+    });
+    const reachable = new Set([
+      ...tier1.map((t) => t.name),
+      ...catalogNames(tier2Catalog),
+    ]);
+    const accessible = new Set([...EVERYONE_TOOLS, ...OWNER_TOOLS].map((t) => t.name));
+    expect(reachable).toEqual(accessible);
+  });
+
+  it("Tier-1 ∪ Tier-2-catalog covers the full accessible tool set (non-owner)", () => {
+    const { tier1, tier2Catalog } = registry.selectByMessage("hey what's up", {
+      isOwner: false,
+      everyoneTools: EVERYONE_TOOLS,
+      ownerTools: OWNER_TOOLS,
+    });
+    const reachable = new Set([
+      ...tier1.map((t) => t.name),
+      ...catalogNames(tier2Catalog),
+    ]);
+    // Non-owner should NOT see owner-only tools, but must reach every
+    // everyone-tool somewhere.
+    const everyoneNames = new Set(EVERYONE_TOOLS.map((t) => t.name));
+    for (const name of everyoneNames) expect(reachable).toContain(name);
+    const ownerOnly = OWNER_TOOLS.map((t) => t.name).filter((n) => !everyoneNames.has(n));
+    for (const name of ownerOnly) expect(reachable).not.toContain(name);
+  });
+
+  // (b) A message with a category keyword pulls that category into Tier 1.
+  it("routes a gambling-keyword message to the games category in Tier 1", () => {
+    const { tier1 } = registry.selectByMessage("eris slots spin pls", {
+      isOwner: false,
+      everyoneTools: EVERYONE_TOOLS,
+      ownerTools: OWNER_TOOLS,
+    });
+    const tier1Names = new Set(tier1.map((t) => t.name));
+    expect(tier1Names).toContain("slots_spin");
+    expect(tier1Names).toContain("blackjack_start");
+  });
+
+  // (c) Tier-1 is materially smaller than the full set — the token win.
+  it("Tier-1 schema count is far smaller than the full tool set", () => {
+    const full = new Set([...EVERYONE_TOOLS, ...OWNER_TOOLS].map((t) => t.name)).size;
+    const { tier1 } = registry.selectByMessage("hey", {
+      isOwner: true,
+      everyoneTools: EVERYONE_TOOLS,
+      ownerTools: OWNER_TOOLS,
+    });
+    expect(tier1.length).toBeLessThan(full * 0.6);
+  });
+
+  // (d) Always-include tools are ALWAYS Tier 1 (declarations), never demoted
+  // to the catalog — even for a message that matches an unrelated category.
+  it("always-include tools stay in Tier 1 regardless of message", () => {
+    const alwaysInclude = [
+      "remember_fact", "recall_memories", "send_gif", "web_search",
+      "save_note", "get_mood", "ask_irene",
+    ];
+    const { tier1, tier2Catalog } = registry.selectByMessage("rob someone for coins", {
+      isOwner: true,
+      everyoneTools: EVERYONE_TOOLS,
+      ownerTools: OWNER_TOOLS,
+    });
+    const tier1Names = new Set(tier1.map((t) => t.name));
+    const catalog = catalogNames(tier2Catalog);
+    for (const name of alwaysInclude) {
+      expect(tier1Names).toContain(name);
+      expect(catalog).not.toContain(name);
+    }
   });
 });

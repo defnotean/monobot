@@ -11,9 +11,10 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import http from "http";
 import config from "./config.js";
-import { initDatabase, flushAll } from "./database.js";
+import { initDatabase, flushAll, isPersistenceHealthy } from "./database.js";
 import { log } from "./utils/logger.js";
 import { maybeAutoDeploy } from "./utils/autoDeploy.js";
+import { sendAlert } from "@defnotean/shared/alert";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -197,11 +198,25 @@ const server = http.createServer(async (req, res) => {
   res.end("Eris is awake.");
 });
 
+// ─── Slowloris / slow-body hardening ───
+// Render fronts this server with a proxy, but the proxy doesn't shield us from
+// a client that opens a connection and dribbles bytes to pin a socket open.
+// Cap how long a request may take overall, how long headers may take to
+// arrive, and how long an idle keep-alive socket lingers. Tuned well above
+// legitimate twin/dashboard latency (sub-second) so real traffic is never cut.
+server.requestTimeout = 15000;   // 15s for the full request (headers + body)
+server.headersTimeout = 10000;   // 10s to finish sending headers
+server.keepAliveTimeout = 5000;  // 5s idle before closing keep-alive sockets
+// Per-socket inactivity timeout — closes a connection that goes silent
+// mid-stream (the classic slowloris dribble).
+server.setTimeout(20000);
+
 // ─── Startup ───
 async function main() {
   log("[SYS] Starting OpenClaw v3...");
 
   await initDatabase();
+  startPersistenceMonitor();
   await loadCommands();
   await loadEvents();
 
@@ -245,6 +260,34 @@ async function main() {
   }).catch(e => log(`[FIREWALL] seed failed: ${e?.message ?? e}`));
 }
 
+// ─── Persistence-health monitor ───
+// Polls isPersistenceHealthy() (flips false after N consecutive flush failures)
+// and fires an alert on the unhealthy edge + a recovery alert when it returns.
+// Edge-triggered so a sustained outage pages once, not every tick; sendAlert's
+// own per-kind dedupe is the second line of defense.
+const PERSISTENCE_POLL_MS = 30_000;
+let _persistenceHealthy = true;
+let _persistenceMonitor = null;
+
+function startPersistenceMonitor() {
+  if (_persistenceMonitor) return;
+  _persistenceMonitor = setInterval(() => {
+    let healthy;
+    try { healthy = isPersistenceHealthy(); }
+    catch { return; } // never let the monitor itself throw
+    if (healthy === _persistenceHealthy) return;
+    _persistenceHealthy = healthy;
+    if (!healthy) {
+      log("[SYS] Persistence unhealthy — durable store unreachable");
+      sendAlert("persistence-unhealthy", "Durable store unreachable — economy writes refusing", { bot: "ERIS", log });
+    } else {
+      log("[SYS] Persistence recovered");
+      sendAlert("persistence-recovered", "Durable store reachable again", { bot: "ERIS", log });
+    }
+  }, PERSISTENCE_POLL_MS);
+  _persistenceMonitor.unref?.();
+}
+
 // ─── Graceful Shutdown ───
 async function shutdown(signal) {
   log(`[SYS] ${signal} received — shutting down`);
@@ -261,7 +304,18 @@ async function shutdown(signal) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("unhandledRejection", (err) => log(`[SYS] Unhandled rejection: ${err?.message || err}`));
-process.on("uncaughtException", (err) => log(`[SYS] Uncaught exception: ${err?.message || err}`));
+// Fail-fast on uncaughtException: an uncaught throw means we're in undefined
+// state, so continuing to serve risks corrupting data. Log, best-effort
+// synchronous flush of in-memory buffers, then exit non-zero so Render
+// restarts us cleanly. (unhandledRejection stays log-and-continue above.)
+process.on("uncaughtException", (err) => {
+  log(`[SYS] Uncaught exception: ${err?.message || err}`);
+  // Fire-and-forget alert before we exit. We don't await — the process is in
+  // undefined state and Render restarts us; the POST is best-effort.
+  try { sendAlert("uncaught-exception", err?.message || String(err), { bot: "ERIS", log }); } catch {}
+  try { flushAll(); } catch {}
+  process.exit(1);
+});
 
 main().catch(err => {
   log(`[SYS] Fatal: ${err.message}`);

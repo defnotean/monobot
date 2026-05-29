@@ -99,6 +99,11 @@ export async function execute(toolName, input, message, _context) {
 
     case "system_info": {
       const cmd = `powershell -Command "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,FreePhysicalMemory,TotalVisibleMemorySize | ConvertTo-Json"`;
+      const gate = gateShellCommand(cmd, input);
+      if (!gate.ok) {
+        await audit(toolName, message, "system_info", `blocked: ${gate.error}`, !!input?.confirm);
+        return gate.error;
+      }
       const ok = await db.queueLocalCommand(cmd, message.channel.id, message.author.id);
       await audit(toolName, message, "system_info", ok ? "queued" : "queue failed", false);
       return ok ? "queued: system info request" : "failed to queue command";
@@ -112,6 +117,11 @@ export async function execute(toolName, input, message, _context) {
       const safeFilter = /^[A-Za-z0-9._-]{1,40}$/.test(rawFilter) ? rawFilter : "";
       const filterClause = safeFilter ? ` | Where-Object { $_.Name -like '*${safeFilter}*' }` : "";
       const cmd = `powershell -Command "Get-Process${filterClause} | Sort-Object -Property CPU -Descending | Select-Object -First 15 Name,Id,CPU,WorkingSet | ConvertTo-Json"`;
+      const gate = gateShellCommand(cmd, input);
+      if (!gate.ok) {
+        await audit(toolName, message, `list_processes${safeFilter ? ` filter=${safeFilter}` : ""}`, `blocked: ${gate.error}`, !!input?.confirm);
+        return gate.error;
+      }
       const ok = await db.queueLocalCommand(cmd, message.channel.id, message.author.id);
       await audit(toolName, message, `list_processes${safeFilter ? ` filter=${safeFilter}` : ""}`, ok ? "queued" : "queue failed", false);
       return ok ? `queued: process list request${safeFilter ? ` (filter: ${safeFilter})` : ""}` : "failed to queue command";
@@ -124,6 +134,14 @@ export async function execute(toolName, input, message, _context) {
       const script = args
         ? `Start-Process -FilePath ${psSingleQuote(app)} -ArgumentList ${psSingleQuote(args)}`
         : `Start-Process -FilePath ${psSingleQuote(app)}`;
+      // Gate the inner PowerShell script BEFORE encoding — gating the psEncoded
+      // wrapper would always trip the -EncodedCommand pattern. This catches e.g.
+      // launch_app app='powershell' args='-Command Stop-Computer'.
+      const gate = gateShellCommand(`${app} ${args}`.trim() + "\n" + script, input);
+      if (!gate.ok) {
+        await audit(toolName, message, `launch ${app} ${args}`.trim(), `blocked: ${gate.error}`, !!input?.confirm);
+        return gate.error;
+      }
       const cmd = psEncoded(script);
       const ok = await db.queueLocalCommand(cmd, message.channel.id, message.author.id);
       await audit(toolName, message, `launch ${app} ${args}`.trim(), ok ? "queued" : "queue failed", false);
@@ -133,6 +151,12 @@ export async function execute(toolName, input, message, _context) {
     case "browse_files": {
       const path = input.path || input.directory || input.dir || "~";
       const script = `Get-ChildItem -LiteralPath ${psSingleQuote(path)} | Select-Object Name,Length,LastWriteTime,Mode | ConvertTo-Json`;
+      // Gate the inner script + raw path BEFORE encoding (see launch_app note).
+      const gate = gateShellCommand(`${path}\n${script}`, input);
+      if (!gate.ok) {
+        await audit(toolName, message, `browse ${path}`, `blocked: ${gate.error}`, !!input?.confirm);
+        return gate.error;
+      }
       const cmd = psEncoded(script);
       const ok = await db.queueLocalCommand(cmd, message.channel.id, message.author.id);
       await audit(toolName, message, `browse ${path}`, ok ? "queued" : "queue failed", false);

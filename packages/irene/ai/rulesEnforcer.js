@@ -212,7 +212,7 @@ export async function enforceMessage(message) {
     return true;
   } catch (err) {
     log(`[Enforcer] unexpected error: ${err?.message ?? err}`);
-    if (err?.stack) console.error(err.stack);
+    if (err?.stack) log(err.stack);
     return false;
   }
 }

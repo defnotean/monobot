@@ -10,5 +10,6 @@ export {
   toGeminiTools,
   looksLikeTask,
   setRateLimitCallbacks,
+  setWorkPool,
   isRateLimited,
 } from "../dual.js";

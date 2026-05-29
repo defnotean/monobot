@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "tsx --watch index.ts",
+    "dev": "node --watch index.js",
     "agent": "node local_agent.cjs",
     "deploy": "node deploy-commands.js",
     "build": "tsc -p tsconfig.build.json --noEmit",

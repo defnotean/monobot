@@ -31,11 +31,12 @@ const _noop = () => {};
  *   Lazy getter for the twin's base URL (no trailing slash).
  * @param {(msg: string) => void} [deps.log]  Optional logger. Defaults to no-op.
  */
-export function createTwinState({ getSecret, getUrl, log } = {}) {
+export function createTwinState({ getSecret, getUrl, log } = /** @type {any} */ ({})) {
   if (typeof getSecret !== "function" || typeof getUrl !== "function") {
     throw new Error("createTwinState: getSecret and getUrl functions are required");
   }
   const _log = typeof log === "function" ? log : _noop;
+  /** @type {any} */
   let _cache = null; // { state, fetchedAt } | { error, fetchedAt }
 
   async function getTwinStateCached({ force = false } = {}) {
@@ -64,7 +65,7 @@ export function createTwinState({ getSecret, getUrl, log } = {}) {
       const data = await res.json();
       _cache = { state: data, fetchedAt: now };
       return _cache;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       _log(`[TwinState] Fetch failed: ${e.message}`);
       _cache = { error: e.message, fetchedAt: now };
       return _cache;
@@ -78,6 +79,7 @@ export function createTwinState({ getSecret, getUrl, log } = {}) {
    * content when the user's message actually mentions the twin — otherwise
    * there's no reason to spend prompt budget on it.
    */
+  /** @param {string} messageText @param {{ twinName?: string }} [opts] */
   async function buildTwinStateContext(messageText, { twinName = "irene" } = {}) {
     if (!messageText) return "";
     const lower = messageText.toLowerCase();

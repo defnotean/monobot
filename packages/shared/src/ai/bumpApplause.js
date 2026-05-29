@@ -190,6 +190,7 @@ const POOLS = {
 
 // ─── Picker ─────────────────────────────────────────────────────────────────
 
+/** @param {string[]} arr */
 function pickFrom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
@@ -222,8 +223,8 @@ export function pickApplauseLine({
   isFirstOfDay = false,
   userStreak = 0,
   rng = Math.random,
-} = {}) {
-  const pool = POOLS[botName] || POOLS.eris;
+} = /** @type {any} */ ({})) {
+  const pool = (/** @type {Record<string, typeof POOLS.eris>} */ (POOLS))[botName] || POOLS.eris;
   const safeName = name || "bumper";
 
   // 1. Good boy easter egg — trumps everything when it hits.
@@ -250,6 +251,7 @@ export function pickApplauseLine({
   return render(pickFrom(pool.default), { name: safeName, streak: userStreak });
 }
 
+/** @param {string} tpl @param {{ name: string, streak?: number }} vars */
 function render(tpl, vars) {
   return tpl
     .replace(/\{name\}/g, vars.name)
@@ -274,7 +276,7 @@ const _noop = () => {};
  *   Optional. If present, lets us flag top-3 bumpers for the topBumper flavor.
  * @param {(msg: string) => void} [deps.log]  Optional logger.
  */
-export function createBumpApplause(deps = {}) {
+export function createBumpApplause(deps = /** @type {any} */ ({})) {
   const {
     getGuildSettings,
     isQuietHoursActive,
@@ -299,6 +301,8 @@ export function createBumpApplause(deps = {}) {
    * The caller (handleBumpConfirm) should invoke this AFTER recordBump has
    * run and AFTER payFirstBumperBonus has been attempted, passing whether the
    * bonus actually paid so we can skip the applause in that case.
+   *
+   * @param {{ bumpMessage: any, guildId: string, bumperId: string, bumperName?: string, service: string, bumpsTable?: string, botName?: string, firstBumperBonusPaid?: boolean }} args
    */
   async function sendBumpApplause({
     bumpMessage,       // Discord message from the bump bot (we reply to this)
@@ -330,7 +334,7 @@ export function createBumpApplause(deps = {}) {
             : Promise.resolve([]),
         ]);
         userStreak = streak || 0;
-        isTopBumper = Array.isArray(lb) && lb.some(r => r.user_id === bumperId);
+        isTopBumper = Array.isArray(lb) && lb.some((/** @type {any} */ r) => r.user_id === bumperId);
       } catch {}
 
       // First-of-day detection — at most one row for this user today in this
@@ -365,7 +369,7 @@ export function createBumpApplause(deps = {}) {
         content: line,
         allowedMentions: { parse: [], users: [bumperId] },
       });
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       _log(`[BUMP] Applause send failed: ${e.message}`);
     }
   }

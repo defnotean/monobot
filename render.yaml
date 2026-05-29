@@ -8,7 +8,7 @@ services:
     name: eris-bot
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm run start:eris
     healthCheckPath: /
     envVars:
@@ -63,7 +63,7 @@ services:
     name: irene-bot
     runtime: node
     plan: standard
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm run start:irene
     healthCheckPath: /api/health
     envVars:

@@ -325,7 +325,7 @@ async function handleGameButton(interaction) {
       try {
         newBalance = await db.updateBalance(userId, amount * 2, "gamble_win", `coinflip:${choice}`);
       } catch (err) {
-        console.error(`[coinflip button] win credit failed for ${userId}:`, err);
+        log(`[coinflip button] win credit failed for ${userId}: ${err?.message || err}`);
       }
     }
     await db.recordGameResult(userId, "coinflip", won, amount, won ? amount * 2 : 0);
@@ -367,7 +367,7 @@ async function handleGameButton(interaction) {
       try {
         newBalance = await db.updateBalance(userId, credit, won ? "gamble_win" : "gamble_loss", `slots:${label}`);
       } catch (err) {
-        console.error(`[slots button] credit failed for ${userId}:`, err);
+        log(`[slots button] credit failed for ${userId}: ${err?.message || err}`);
       }
     }
     await db.recordGameResult(userId, "slots", won, amount, won ? amount * multiplier : 0);
@@ -413,7 +413,7 @@ async function handleGameButton(interaction) {
     try {
       newBal = await db.updateBalance(userId, stake + winnings, "gamble_win", "russian_roulette:survived");
     } catch (err) {
-      console.error(`[russian roulette button] win credit failed for ${userId}:`, err);
+      log(`[russian roulette button] win credit failed for ${userId}: ${err?.message || err}`);
     }
     await db.recordGameResult(userId, "russian_roulette", true, stake, stake + winnings);
     const { embed, row } = rouletteEmbed(true, stake, winnings, newBal);
@@ -502,7 +502,7 @@ async function handleGameButton(interaction) {
       try {
         newBalance = await db.updateBalance(userId, amount * 5, "gamble_win", `dice:${guess}`);
       } catch (err) {
-        console.error(`[dice button] win credit failed for ${userId}:`, err);
+        log(`[dice button] win credit failed for ${userId}: ${err?.message || err}`);
       }
     }
     await db.recordGameResult(userId, "dice", won, amount, won ? amount * 5 : 0);
@@ -551,7 +551,7 @@ async function handleGameButton(interaction) {
         try {
           newBalance = await db.updateBalance(userId, credit, result === "win" ? "gamble_win" : "gamble_push", `rps:${choice}`);
         } catch (err) {
-          console.error(`[rps button] credit failed for ${userId}:`, err);
+          log(`[rps button] credit failed for ${userId}: ${err?.message || err}`);
         }
       }
       if (result !== "tie") {
@@ -646,7 +646,14 @@ async function handleGameButton(interaction) {
   if (id === "boss_attack") {
     try {
       const { executeTool } = await import("../ai/executor.js");
-      const result = await executeTool("boss_attack", {}, interaction.message);
+      // Synthesize a message whose author/member/guild are the CLICKER, not the
+      // bot that posted the embed — otherwise every click is mis-credited and
+      // the bot's balance is debited. Sub-executors read author/member/guild
+      // off the passed message. `channel` is a prototype getter on Message and
+      // wouldn't survive the spread, so set it explicitly (the executors call
+      // message.channel.id / .send).
+      const ctx = { ...interaction.message, author: interaction.user, member: interaction.member, guild: interaction.guild, channel: interaction.channel };
+      const result = await executeTool("boss_attack", {}, ctx);
       return interaction.reply({ content: result, ephemeral: false });
     } catch {
       return interaction.reply({ content: "couldn't attack — try again", flags: MessageFlags.Ephemeral });
@@ -657,7 +664,9 @@ async function handleGameButton(interaction) {
   if (id === "heist_join") {
     try {
       const { executeTool } = await import("../ai/executor.js");
-      const result = await executeTool("heist_join", {}, interaction.message);
+      // Synthesize a message attributed to the clicker (see boss_attack above).
+      const ctx = { ...interaction.message, author: interaction.user, member: interaction.member, guild: interaction.guild, channel: interaction.channel };
+      const result = await executeTool("heist_join", {}, ctx);
       return interaction.reply({ content: result, ephemeral: false });
     } catch {
       return interaction.reply({ content: "couldn't join — try again", flags: MessageFlags.Ephemeral });

@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from "discord.js";
 import { tryDeductBalance, updateBalance, recordGameResult, getBalance } from "../../database.js";
 import { spin, colorOf, validateBet, resolveBet, describeBet, BET_TYPES } from "../../ai/gambling/roulette.js";
+import { log } from "../../utils/logger.js";
 
 const SPIN_DELAY_MS = 1500;
 const COLOR_RED = 0xe74c3c;
@@ -141,7 +142,7 @@ export async function execute(interaction) {
       // Credit failed — log it loudly so orphaned coins are diagnosable.
       // This is the kind of silent-loss bug the council audit flagged on
       // poker refunds; same defensive pattern here.
-      console.error(`[Roulette] win credit failed for ${userId} payout=${result.payout}:`, err);
+      log(`[Roulette] win credit failed for ${userId} payout=${result.payout}: ${err?.message || err}`);
     }
   }
 

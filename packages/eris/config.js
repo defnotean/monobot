@@ -369,6 +369,13 @@ const config = {
   // Override any of these via env vars like TIMEOUT_WORKER=45000.
   timeouts: {
     quickReply: parseInt(env("TIMEOUT_QUICK_REPLY", "15000")),
+    // runGeminiChat outer timeout, split by model path: the fast (conversational)
+    // path is snappier, the worker (tool/thinking) path needs headroom for at
+    // least one slow tool (web_search, scrape_url) plus a follow-up call.
+    workerFast: parseInt(env("TIMEOUT_WORKER_FAST", "45000")),
+    workerSlow: parseInt(env("TIMEOUT_WORKER_SLOW", "90000")),
+    // Generic worker timeout still consumed by the NVIDIA / OpenAI-compat
+    // providers (which don't split fast/slow). Kept for backward compat.
     worker:     parseInt(env("TIMEOUT_WORKER", "60000")),
     fetch:      parseInt(env("TIMEOUT_FETCH", "5000")),
   },

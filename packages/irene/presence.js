@@ -11,6 +11,7 @@ import config from "./config.js";
 import { log } from "./utils/logger.js";
 import { verifyTwinRequest, safeStringEqual } from "@defnotean/shared/twinSign";
 import { createRateLimiter } from "@defnotean/shared/rateLimit";
+import { getClientIp } from "@defnotean/shared/getClientIp";
 
 // Per-source rate limit for /api/twin/state. The endpoint is Bearer-gated, so
 // "identity" reduces to source IP — anyone holding TWIN_API_SECRET can read
@@ -112,6 +113,75 @@ export function updatePresence(presence) {
 
 const _apiRateLimit = new Map();
 
+// ─── Twin command vocabulary (Eris → Irene relay) ──────────────────────────
+// Map Eris's short command names → Irene's actual tool names.
+// Direction matters: the KEY is what arrives, the VALUE is the tool Irene
+// actually registers.
+export const TWIN_ALIASES = {
+  // Moderation — Eris sends short names, Irene's tools end in _user
+  "ban": "ban_user",
+  "kick": "kick_user",
+  "warn": "warn_user",
+  "timeout": "timeout_user",
+
+  // Member state
+  "nickname": "set_nickname",
+  "rename": "set_nickname",
+
+  // Channel management
+  "purge": "purge_messages",
+  "lock": "lock_channel",
+  "unlock": "unlock_channel",
+  "slowmode": "set_slowmode",
+  "set_topic": "set_channel_topic",
+
+  // Messaging
+  "announce": "send_message",
+  "say": "send_message",
+  "speak": "send_message",
+
+  // Generic create/delete shortcuts
+  "create": "create_channel",
+  "delete": "delete_channel",
+};
+
+// Server-side allowlist of the RESOLVED tool names the twin relay path is
+// actually meant to drive — defense in depth. Irene's executor exposes 150+
+// tools; the twin path is only ever supposed to relay the moderation / channel
+// / role / setup actions that Eris's `ask_irene` executor builds. Trusting only
+// Eris's own permission check meant a compromised or buggy Eris could POST any
+// signed command and drive arbitrary Irene tools. We reject anything outside
+// this set BEFORE executeTool.
+//
+// Contents = every value TWIN_ALIASES resolves to, PLUS the admin/staff
+// commands Eris sends 1:1 (passed through as `TWIN_ALIASES[cmd] || cmd`).
+// Keep in sync with eris/ai/executors/twinExecutor.js's command vocabulary.
+export const TWIN_COMMAND_ALLOWLIST = new Set([
+  ...Object.values(TWIN_ALIASES),
+  // Admin/staff commands Eris forwards under their real tool name (unaliased).
+  "create_role",
+  "delete_role",
+  "set_log_channel",
+  "set_welcome_channel",
+  "setup_starboard",
+  "setup_reaction_roles",
+  "nuke_channel",
+  "lockdown_server",
+  "give_role",
+  "remove_role",
+  "mass_role",
+  "rename_channel",
+  "move_channel",
+]);
+
+// Resolve an incoming twin command to Irene's real tool name and check it
+// against the allowlist. Returns the resolved tool name if permitted, or null
+// if the command is outside the relay vocabulary. Exported for unit testing.
+export function resolveTwinCommand(command) {
+  const resolved = TWIN_ALIASES[command] || command;
+  return TWIN_COMMAND_ALLOWLIST.has(resolved) ? resolved : null;
+}
+
 export function startPresenceAPI(client) {
   const server = http.createServer(async (req, res) => {
     // Aggressively normalize the incoming URL to collapse duplicate slashes 
@@ -123,7 +193,10 @@ export function startPresenceAPI(client) {
     // Only apply IP rate limiting to the public presence API.
     // We MUST exempt /tts/ because Lavalink makes a rapid HEAD request followed instantly by a GET request to play the audio.
     if (req.url === `/presence/${config.ownerId}` || req.url === "/presence") {
-      const clientIP = req.socket.remoteAddress;
+      // getClientIp (X-Forwarded-For aware): behind Render's proxy the socket
+      // peer is always the proxy, so keying on remoteAddress would lump every
+      // visitor into one bucket and let one client lock everyone out.
+      const clientIP = getClientIp(req);
       const now = Date.now();
       const last = _apiRateLimit.get(clientIP) ?? 0;
       if (now - last < 1000) { res.writeHead(429); return res.end('{"error":"rate limited"}'); }
@@ -210,7 +283,7 @@ export function startPresenceAPI(client) {
       const j = (code, data) => { res.writeHead(code); res.end(JSON.stringify(data)); };
 
       // ── Rate limiting for API endpoints (per-IP, 30 req/min)
-      const apiIP = req.socket.remoteAddress;
+      const apiIP = getClientIp(req);
       const apiNow = Date.now();
       if (!globalThis._apiRateLimits) globalThis._apiRateLimits = new Map();
       const apiHits = globalThis._apiRateLimits.get(apiIP) || [];
@@ -431,9 +504,19 @@ export function startPresenceAPI(client) {
         const custom = await db.getPersonality();
         j(200, { personality: custom || config.botPersonality });
       } else if (path === "/api/personality" && (req.method === "PUT" || req.method === "PATCH")) {
+        let personalityTooLarge = false;
         const body = await new Promise(resolve => {
-          let d = ""; req.on("data", c => d += c); req.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
+          let d = "";
+          req.on("data", c => {
+            d += c;
+            // Cap accumulation at ~1MB — a personality instructions payload is
+            // never this big, so anything past it is a memory-exhaustion
+            // attempt. Destroy the socket (mirrors the 10KB twin-command cap).
+            if (d.length > 1_048_576) { personalityTooLarge = true; req.destroy(); resolve(null); }
+          });
+          req.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
         });
+        if (personalityTooLarge) { j(413, { error: "payload too large" }); return; }
         if (!body?.instructions) { j(400, { error: "instructions required" }); return; }
         const ok = await db.updatePersonality(body.instructions);
         // Invalidate personality cache so next message picks up the new personality
@@ -488,7 +571,7 @@ export function startPresenceAPI(client) {
         if (!token || !safeStringEqual(token, config.twinApiSecret)) {
           return j(403, { error: "twin state requires Bearer TWIN_API_SECRET" });
         }
-        const ipKey = req.socket.remoteAddress || "unknown";
+        const ipKey = getClientIp(req);
         if (!_twinStateLimiter.allow(ipKey)) {
           res.setHeader("Retry-After", "60");
           return j(429, { error: "twin state rate limit (10/min)" });
@@ -551,8 +634,17 @@ export function startPresenceAPI(client) {
               return j(403, { success: false, error: "requester not authorized (must be owner or trusted)" });
             }
 
-            // 3. Pass command directly to Irene's tool executor (supports ALL 150+ tools)
-            // No allowlist — Eris already verified permissions on her side
+            // 3. Resolve Eris's command to Irene's real tool name and enforce a
+            // SERVER-SIDE allowlist of the relay vocabulary (defense in depth).
+            // Eris verifies permissions on her side, but trusting only that
+            // meant a compromised or buggy Eris could drive any of Irene's 150+
+            // tools with a valid HMAC. resolveTwinCommand returns null for
+            // anything outside the moderation/channel/role/setup relay set.
+            const resolvedCommand = resolveTwinCommand(command);
+            if (!resolvedCommand) {
+              log(`[Twin] Rejected command outside relay allowlist: ${command}`);
+              return j(403, { success: false, error: "command not permitted via twin relay" });
+            }
 
             // 4. Resolve guild and channel
             const guild = client.guilds.cache.get(guild_id);
@@ -584,38 +676,9 @@ export function startPresenceAPI(client) {
               reply: async (content) => channel.send(typeof content === "string" ? content : content.content).catch(() => {}),
             };
 
-            // 6. Map Eris's short command names → Irene's actual tool names.
-            // Direction matters: the KEY is what arrives, the VALUE is the
-            // tool Irene actually registers. Previous map was reversed AND
-            // pointed at non-existent targets (change_nickname, say, etc.).
-            const TWIN_ALIASES = {
-              // Moderation — Eris sends short names, Irene's tools end in _user
-              "ban": "ban_user",
-              "kick": "kick_user",
-              "warn": "warn_user",
-              "timeout": "timeout_user",
-
-              // Member state
-              "nickname": "set_nickname",
-              "rename": "set_nickname",
-
-              // Channel management
-              "purge": "purge_messages",
-              "lock": "lock_channel",
-              "unlock": "unlock_channel",
-              "slowmode": "set_slowmode",
-              "set_topic": "set_channel_topic",
-
-              // Messaging
-              "announce": "send_message",
-              "say": "send_message",
-              "speak": "send_message",
-
-              // Generic create/delete shortcuts
-              "create": "create_channel",
-              "delete": "delete_channel",
-            };
-            const resolvedCommand = TWIN_ALIASES[command] || command;
+            // 6. Command already resolved to Irene's real tool name and
+            // allowlist-checked in step 3 (resolveTwinCommand) — see the
+            // module-level TWIN_ALIASES / TWIN_COMMAND_ALLOWLIST.
 
             // 7. Execute the tool directly
             const { executeTool } = await import("./ai/executor.js");
@@ -664,6 +727,17 @@ export function startPresenceAPI(client) {
       res.end(JSON.stringify({ error: "Not found" }));
     }
   });
+
+  // ─── Slowloris / slow-body hardening ───
+  // The /tts and /presence endpoints take genuine but tiny request bodies and
+  // respond fast; nothing legitimate dribbles bytes for seconds. Cap the full
+  // request, the header phase, idle keep-alive, and per-socket inactivity so a
+  // client can't pin sockets open by sending data one byte at a time. Tuned
+  // well above real twin/presence latency (sub-second).
+  server.requestTimeout = 15000;   // 15s for the full request (headers + body)
+  server.headersTimeout = 10000;   // 10s to finish sending headers
+  server.keepAliveTimeout = 5000;  // 5s idle before closing keep-alive sockets
+  server.setTimeout(20000);        // per-socket inactivity timeout
 
   server.listen(config.port, () => {
     log(`Presence API running on port ${config.port}`);

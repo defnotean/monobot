@@ -82,13 +82,14 @@ const DEFAULT_MAX_KEYS = 1000;
  * @param {number} [opts.maxKeys=1000] Soft cap on tracked keys (memory guard).
  * @returns {{ allow: (key: string, now?: number) => boolean, reset: () => void, _size: () => number }}
  */
-export function createRateLimiter({ limit, windowMs, maxKeys = DEFAULT_MAX_KEYS } = {}) {
+export function createRateLimiter({ limit, windowMs, maxKeys = DEFAULT_MAX_KEYS } = /** @type {any} */ ({})) {
   if (!Number.isFinite(limit) || limit < 1) throw new Error("rate limiter: limit must be a positive integer");
   if (!Number.isFinite(windowMs) || windowMs < 1) throw new Error("rate limiter: windowMs must be a positive integer");
 
   // key → number[] of recent hit timestamps (ms), oldest first.
   const hits = new Map();
 
+  /** @param {number[]} arr @param {number} now */
   function prune(arr, now) {
     // In-place trim of entries older than the window.
     let i = 0;

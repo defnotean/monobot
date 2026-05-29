@@ -123,6 +123,7 @@ import {
   RELATIONSHIP_DEFAULTS,
   withDefaults,
 } from "./database/schemas.js";
+import { log } from "./utils/logger.js";
 // Dual-write target — only invoked when config.dualWritePersistence is true.
 // Imported lazily inside _flushSave to avoid a circular module load at boot
 // (perEntity.js imports getSupabase from this file).
@@ -182,7 +183,8 @@ export function updateScrimStats(guildId, game, stats) {
   if (!data.scrim_stats) data.scrim_stats = {};
   if (!data.scrim_stats[guildId]) data.scrim_stats[guildId] = {};
   data.scrim_stats[guildId][game] = stats;
-  save();
+  _markEntity("scrim_stats", guildId);
+  save("scrim_stats");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -197,18 +199,18 @@ export function getSupabase() { return supabase; }
 
 export async function initDatabase() {
   if (!config.supabaseEnabled) {
-    console.warn("[DB] ⚠️  IRENE WITHOUT PERSISTENCE — all moderation state, settings,");
-    console.warn("[DB] ⚠️  warns, tickets, reminders, giveaways will RESET on every restart.");
-    console.warn("[DB] ⚠️  Set SUPABASE_URL/SUPABASE_KEY (see docs/self-hosting.md for");
-    console.warn("[DB] ⚠️  local-Postgres or self-hosted-Supabase setup), or set");
-    console.warn("[DB] ⚠️  REQUIRE_PERSISTENCE=1 in .env to fail-fast instead.");
+    log("[DB] ⚠️  IRENE WITHOUT PERSISTENCE — all moderation state, settings,");
+    log("[DB] ⚠️  warns, tickets, reminders, giveaways will RESET on every restart.");
+    log("[DB] ⚠️  Set SUPABASE_URL/SUPABASE_KEY (see docs/self-hosting.md for");
+    log("[DB] ⚠️  local-Postgres or self-hosted-Supabase setup), or set");
+    log("[DB] ⚠️  REQUIRE_PERSISTENCE=1 in .env to fail-fast instead.");
     return;
   }
 
   try {
     supabase = createClient(config.supabaseUrl, config.supabaseKey);
   } catch (err) {
-    console.error("[DB] Invalid Supabase config:", err.message);
+    log(`[DB] Invalid Supabase config: ${err.message}`);
     return;
   }
 
@@ -251,34 +253,95 @@ export async function initDatabase() {
         }
         if (loaded.relationships) data.relationships = loaded.relationships;
         if (loaded.temp_vcs) data.temp_vcs = loaded.temp_vcs;
-        console.log("[DB] Loaded from Supabase");
+        log("[DB] Loaded from Supabase");
       } else {
-        console.log("[DB] No existing data in Supabase — starting fresh");
+        log("[DB] No existing data in Supabase — starting fresh");
       }
       return; // success
     } catch (err) {
-      console.error(`[DB] Supabase init attempt ${attempt}/3 failed: ${err.message}`);
+      log(`[DB] Supabase init attempt ${attempt}/3 failed: ${err.message}`);
       if (attempt < 3) await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
   }
 
-  console.error("[DB] All Supabase init attempts failed — running without persistence");
+  log("[DB] All Supabase init attempts failed — running without persistence");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SAVE PIPELINE — debounced writes, retry/backoff, immediate flush on shutdown
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ─── Save — debounced + retry ─────────────────────────────────────────────────
+// ─── Save — debounced + retry, DIRTY-SET keyed ────────────────────────────────
 // Coalesces rapid back-to-back writes into one Supabase call (2 s window).
 // Retries up to 3 times on failure, then reschedules after 30 s.
+//
+// Dirty-set: each top-level slice of `data` (guild_settings, warnings, mood, …)
+// is tracked independently. `save("guild_settings")` marks only that slice
+// dirty; on flush we re-serialize ONLY the dirty slices and merge them into the
+// persisted blob (read-modify-write), so write cost scales with what changed
+// rather than total install size. A bare `save()` (no bucket) conservatively
+// marks ALL slices dirty — the same full-blob behavior as before, kept as the
+// safe default for the many call sites that mutate small flat collections.
+//
+// The full set of top-level slices we persist. Used to expand a bare save()
+// into "everything dirty" and to bound the dirty-set key space. Kept in sync
+// with the `data` initializer and the initDatabase loader above.
+const _PERSISTED_SLICES = [
+  "scrim_stats", "warnings", "guild_settings", "custom_commands", "dm_optout",
+  "_nextWarningId", "conversations", "reminders", "_nextReminderId",
+  "scheduled_tasks", "_nextScheduledTaskId", "starboard_entries", "birthdays",
+  "birthday_announced", "server_whitelist", "saved_queues", "giveaways",
+  "highlights", "mood", "relationships", "temp_vcs",
+];
 
 let _saveTimer = null;
 let _saveRetryCount = 0;
 const MAX_SAVE_RETRIES = 10;
 
-function save() {
-  if (!supabase) { console.warn("[DB] Write discarded — Supabase not connected (data is in-memory only)"); return; }
+// Top-level slices changed since the last successful flush. Empty = nothing to
+// write. A bare save() fills this with every slice (full-blob fallback).
+const _dirty = new Set();
+
+// Per-entity dirty keys for the guild-keyed slices (guild_settings,
+// custom_commands, scrim_stats, starboard_entries, saved_queues). When a
+// slice's set here is non-empty the per-entity fanout writes ONLY those guild
+// rows instead of re-emitting every guild — so a single-guild edit costs one
+// per-entity row. An EMPTY set for a dirty slice means "key unknown" (a write
+// that bypassed the registration helper) → the fanout safely re-emits all rows.
+const _dirtyEntities = new Map(); // slice → Set<guildId>
+
+// Register a per-guild entity as dirty so the fanout can scope to it. Called
+// from ensureGuild (covers ~all guild_settings mutators) and from the handful
+// of per-guild mutators on other slices.
+function _markEntity(slice, key) {
+  // No persistence connected → nothing will ever flush, so don't accumulate
+  // dirty keys (mirrors save()'s in-memory-mode short-circuit, avoids a leak).
+  if (!supabase || key == null) return;
+  let set = _dirtyEntities.get(slice);
+  if (!set) { set = new Set(); _dirtyEntities.set(slice, set); }
+  set.add(String(key));
+}
+
+// Re-queue a flush's snapshot back onto the live dirty state after a failed
+// write so a retry re-serializes + re-fans exactly what we tried to persist.
+// Unions with anything written concurrently during the failed flush.
+function _requeueDirty(dirty, dirtyEntities) {
+  for (const s of dirty) _dirty.add(s);
+  for (const [slice, set] of dirtyEntities) {
+    for (const key of set) _markEntity(slice, key);
+  }
+}
+
+function save(bucket) {
+  if (!supabase) { log("[DB] Write discarded — Supabase not connected (data is in-memory only)"); return; }
+  // Mark the changed slice dirty. A known bucket name keys the slice; anything
+  // else (including a bare save()) conservatively marks every slice dirty so we
+  // never silently drop a write whose origin we can't attribute.
+  if (typeof bucket === "string" && _PERSISTED_SLICES.includes(bucket)) {
+    _dirty.add(bucket);
+  } else {
+    for (const s of _PERSISTED_SLICES) _dirty.add(s);
+  }
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = setTimeout(_flushSave, 2000);
 }
@@ -296,57 +359,111 @@ export async function flushNow() {
       const pe = await _getPerEntity();
       await pe.flushPerEntityNow();
     } catch (err) {
-      console.error(`[DB] Per-entity flush failed: ${err.message}`);
+      log(`[DB] Per-entity flush failed: ${err.message}`);
     }
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PER-KEY MUTEX — serialise read-modify-write sequences against the same key
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Reads are sync; the event loop is the only writer. But an `await` inside a
+// read-modify-write (e.g. updateRelationship doing a getRelationship → compute
+// → write while another interaction interleaves) can lose an update. This is a
+// per-key promise chain mirroring Eris's withEconLock/withUserLock: each new
+// call links onto the previous op for the same key, so two concurrent mutations
+// of the same key run strictly one-after-another instead of racing the cache.
+//
+// Keyed loosely (userId, guildId, or any string) — different keys never block
+// each other. The map entry is deleted once the chain drains so it doesn't grow
+// unbounded across the unique-key space.
+const _userLocks = new Map(); // key → Promise (tail of the per-key op chain)
+
+export async function withUserLock(key, fn) {
+  // Wait for any previous op on this key to finish (success OR failure — a
+  // crashed predecessor must not deadlock its successors), then run fn().
+  const prev = _userLocks.get(key) ?? Promise.resolve();
+  const current = prev.catch(() => {}).then(fn);
+  _userLocks.set(key, current);
+  try {
+    return await current;
+  } finally {
+    // Only clear if we're still the tail — a later caller may have chained on.
+    if (_userLocks.get(key) === current) _userLocks.delete(key);
+  }
+}
+
+// The catch-all slices that collapse into the single per-bot irene_global_state
+// row. A write touching ANY of these re-emits the whole global-state row (it's
+// one Supabase row regardless), but we only emit it when one is actually dirty.
+const _GLOBAL_STATE_SLICES = [
+  "_nextWarningId", "_nextReminderId", "_nextScheduledTaskId", "dm_optout",
+  "warnings", "reminders", "scheduled_tasks", "birthdays", "birthday_announced",
+  "server_whitelist", "giveaways", "highlights", "temp_vcs", "conversations",
+];
 
 // Dual-write fanout — splits the sanitized blob into per-entity writes when
 // config.dualWritePersistence is on. Iterates per-guild keyed objects so each
 // guild gets its own row in the per-entity tables; global state collapses
 // into a single row keyed on bot_name.
-async function _dualWriteFanout(snapshot) {
+//
+// `dirty` is the set of top-level slices changed this flush; `dirtyEntities`
+// maps each per-guild slice to the specific guild ids that changed. We only
+// fan out (a) the slices that changed and (b) within a per-guild slice, only
+// the guilds that changed — so a single-guild edit writes ONE per-entity row
+// rather than re-upserting every guild's row (the head-of-line stall the blob
+// path had). When a slice is dirty but its entity set is empty (a write that
+// bypassed _markEntity), we safely re-emit every guild for that slice.
+async function _dualWriteFanout(snapshot, dirty, dirtyEntities) {
   const pe = await _getPerEntity();
   const writes = [];
 
-  // Per-guild fanout — one row per guild for tables keyed on guild_id.
-  for (const [gid, gs] of Object.entries(snapshot.guild_settings || {})) {
-    writes.push(pe.writeGuildSettings(gid, gs));
-  }
-  for (const [gid, cmds] of Object.entries(snapshot.custom_commands || {})) {
-    writes.push(pe.writeCustomCommands(gid, cmds));
-  }
-  for (const [gid, stats] of Object.entries(snapshot.scrim_stats || {})) {
-    writes.push(pe.writeScrimStats(gid, stats));
-  }
-  for (const [gid, entries] of Object.entries(snapshot.starboard_entries || {})) {
-    writes.push(pe.writeStarboardEntries(gid, entries));
-  }
-  for (const [gid, q] of Object.entries(snapshot.saved_queues || {})) {
-    writes.push(pe.writeSavedQueue(gid, q));
-  }
+  // Fan out one per-guild slice: write only the dirty guild rows, or all rows
+  // if the dirty-entity set is empty/unknown (safe fallback — never drop a row).
+  const fanGuilds = (slice, source, writer) => {
+    if (!dirty.has(slice)) return;
+    const obj = source || {};
+    const keys = dirtyEntities.get(slice);
+    if (keys && keys.size > 0) {
+      for (const gid of keys) {
+        if (Object.prototype.hasOwnProperty.call(obj, gid)) writes.push(writer(gid, obj[gid]));
+      }
+    } else {
+      for (const [gid, val] of Object.entries(obj)) writes.push(writer(gid, val));
+    }
+  };
+
+  fanGuilds("guild_settings", snapshot.guild_settings, pe.writeGuildSettings);
+  fanGuilds("custom_commands", snapshot.custom_commands, pe.writeCustomCommands);
+  fanGuilds("scrim_stats", snapshot.scrim_stats, pe.writeScrimStats);
+  fanGuilds("starboard_entries", snapshot.starboard_entries, pe.writeStarboardEntries);
+  fanGuilds("saved_queues", snapshot.saved_queues, pe.writeSavedQueue);
 
   // Global state — single row each.
-  if (snapshot.mood) writes.push(pe.writeMoodState(snapshot.mood));
-  if (snapshot.relationships) writes.push(pe.writeRelationships(snapshot.relationships));
+  if (dirty.has("mood") && snapshot.mood) writes.push(pe.writeMoodState(snapshot.mood));
+  if (dirty.has("relationships") && snapshot.relationships) writes.push(pe.writeRelationships(snapshot.relationships));
 
-  // Catch-all — counters and cross-guild flat collections in one row.
-  writes.push(pe.writeGlobalState({
-    _nextWarningId: snapshot._nextWarningId,
-    _nextReminderId: snapshot._nextReminderId,
-    _nextScheduledTaskId: snapshot._nextScheduledTaskId,
-    dm_optout: snapshot.dm_optout,
-    warnings: snapshot.warnings,
-    reminders: snapshot.reminders,
-    scheduled_tasks: snapshot.scheduled_tasks,
-    birthdays: snapshot.birthdays,
-    birthday_announced: snapshot.birthday_announced,
-    server_whitelist: snapshot.server_whitelist,
-    giveaways: snapshot.giveaways,
-    highlights: snapshot.highlights,
-    temp_vcs: snapshot.temp_vcs,
-    conversations: snapshot.conversations,
-  }));
+  // Catch-all — counters and cross-guild flat collections in one row. Only
+  // re-emit when one of its constituent slices changed.
+  if (_GLOBAL_STATE_SLICES.some((s) => dirty.has(s))) {
+    writes.push(pe.writeGlobalState({
+      _nextWarningId: snapshot._nextWarningId,
+      _nextReminderId: snapshot._nextReminderId,
+      _nextScheduledTaskId: snapshot._nextScheduledTaskId,
+      dm_optout: snapshot.dm_optout,
+      warnings: snapshot.warnings,
+      reminders: snapshot.reminders,
+      scheduled_tasks: snapshot.scheduled_tasks,
+      birthdays: snapshot.birthdays,
+      birthday_announced: snapshot.birthday_announced,
+      server_whitelist: snapshot.server_whitelist,
+      giveaways: snapshot.giveaways,
+      highlights: snapshot.highlights,
+      temp_vcs: snapshot.temp_vcs,
+      conversations: snapshot.conversations,
+    }));
+  }
 
   await Promise.all(writes);
 }
@@ -355,11 +472,30 @@ async function _flushSave() {
   _saveTimer = null;
   if (!supabase) return;
 
-  // Sanitize before save — strip non-serializable or oversized fields
+  // Snapshot + clear the dirty set up front. Writes that arrive DURING this
+  // flush re-mark their slice and re-arm a fresh debounce — they're not lost.
+  // Nothing dirty means an earlier flush already drained the changes, so we
+  // skip both the blob upsert and the saga/fanout entirely (no-op flush).
+  const dirty = new Set(_dirty);
+  _dirty.clear();
+  if (dirty.size === 0) return;
+  // Snapshot + clear the per-guild dirty-entity keys alongside the slice set so
+  // the fanout below scopes to exactly the guilds that changed this flush.
+  const dirtyEntities = new Map();
+  for (const [slice, set] of _dirtyEntities) dirtyEntities.set(slice, new Set(set));
+  _dirtyEntities.clear();
+
+  // The legacy single-row blob is the system of record for cold boot
+  // (initDatabase reads it), and a jsonb row inherently carries every slice,
+  // so the blob payload stays whole. The bounded-write win lives in the
+  // per-entity fanout below, which only re-emits the slices in `dirty` — a
+  // single-guild edit writes ONE guild_settings row instead of all of them.
+  // Sanitize before save — strip non-serializable or oversized fields.
   let saveData;
   try {
-    // Trim conversations to last 10 per channel to prevent payload bloat
-    if (data.conversations && typeof data.conversations === "object") {
+    // Trim conversations to last 10 per channel to prevent payload bloat —
+    // only walk them when conversations actually changed this flush.
+    if (dirty.has("conversations") && data.conversations && typeof data.conversations === "object") {
       for (const [ch, msgs] of Object.entries(data.conversations)) {
         if (Array.isArray(msgs) && msgs.length > 10) {
           data.conversations[ch] = msgs.slice(-10);
@@ -368,12 +504,15 @@ async function _flushSave() {
     }
     const json = JSON.stringify(data);
     if (!json || json === "null" || json === "undefined" || json.length < 5) {
-      console.error(`[DB] Save aborted — data serialized to empty/invalid (${json?.length ?? 0} chars)`);
+      log(`[DB] Save aborted — data serialized to empty/invalid (${json?.length ?? 0} chars)`);
+      // Re-mark so the changes aren't silently lost on the next flush.
+      _requeueDirty(dirty, dirtyEntities);
       return;
     }
     saveData = JSON.parse(json); // round-trip to strip non-serializable values
   } catch (serErr) {
-    console.error(`[DB] Save aborted — serialization failed: ${serErr.message}`);
+    log(`[DB] Save aborted — serialization failed: ${serErr.message}`);
+    _requeueDirty(dirty, dirtyEntities);
     return;
   }
 
@@ -387,7 +526,7 @@ async function _flushSave() {
       const saga = await _getSaga();
       sagaId = await saga.createSaga("fanout-snapshot", "snapshot", saveData);
     } catch (sErr) {
-      console.error(`[DB] saga create failed (non-fatal): ${sErr.message}`);
+      log(`[DB] saga create failed (non-fatal): ${sErr.message}`);
     }
   }
 
@@ -402,7 +541,7 @@ async function _flushSave() {
             const saga = await _getSaga();
             await saga.markSagaLeg(sagaId, "primary", "applied");
           } catch (sErr) {
-            console.error(`[DB] saga primary-mark failed (non-fatal): ${sErr.message}`);
+            log(`[DB] saga primary-mark failed (non-fatal): ${sErr.message}`);
           }
         }
         // Dual-write fanout: when the flag is on, also write each entity to
@@ -413,11 +552,11 @@ async function _flushSave() {
         if (config.dualWritePersistence) {
           let secondaryOk = true;
           let secondaryErrMsg = null;
-          try { await _dualWriteFanout(saveData); }
+          try { await _dualWriteFanout(saveData, dirty, dirtyEntities); }
           catch (dwErr) {
             secondaryOk = false;
             secondaryErrMsg = dwErr?.message ?? String(dwErr);
-            console.error(`[DB] Dual-write fanout failed: ${secondaryErrMsg}`);
+            log(`[DB] Dual-write fanout failed: ${secondaryErrMsg}`);
           }
           if (sagaId) {
             try {
@@ -429,7 +568,7 @@ async function _flushSave() {
                 secondaryOk ? undefined : secondaryErrMsg,
               );
             } catch (sErr) {
-              console.error(`[DB] saga secondary-mark failed (non-fatal): ${sErr.message}`);
+              log(`[DB] saga secondary-mark failed (non-fatal): ${sErr.message}`);
             }
           }
         }
@@ -437,7 +576,7 @@ async function _flushSave() {
       }
       throw new Error(error.message);
     } catch (err) {
-      console.error(`[DB] Save attempt ${attempt}/3 failed: ${err.message}`);
+      log(`[DB] Save attempt ${attempt}/3 failed: ${err.message}`);
       if (attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
     }
   }
@@ -449,17 +588,22 @@ async function _flushSave() {
       const saga = await _getSaga();
       await saga.markSagaLeg(sagaId, "primary", "failed", "primary upsert failed after 3 attempts");
     } catch (sErr) {
-      console.error(`[DB] saga primary-failure mark failed (non-fatal): ${sErr.message}`);
+      log(`[DB] saga primary-failure mark failed (non-fatal): ${sErr.message}`);
     }
   }
+  // Re-mark the slices (and their dirty guild keys) we tried (and failed) to
+  // write so the rescheduled flush below actually re-serializes + re-fans them
+  // — we cleared the dirty state at the top of this flush. A merge with any
+  // concurrent writes is automatic (Set union).
+  _requeueDirty(dirty, dirtyEntities);
   if (_saveRetryCount >= MAX_SAVE_RETRIES) {
-    console.error("[DB] Max retries reached — will try again in 5 min");
+    log("[DB] Max retries reached — will try again in 5 min");
     _saveRetryCount = 0;
     _saveTimer = setTimeout(_flushSave, 5 * 60_000);
     return;
   }
   _saveRetryCount++;
-  console.error("[DB] All save attempts failed — retrying in 30 s");
+  log("[DB] All save attempts failed — retrying in 30 s");
   _saveTimer = setTimeout(_flushSave, 30_000);
 }
 
@@ -479,7 +623,7 @@ export function addWarning(guildId, userId, moderatorId, reason) {
     created_at: new Date().toISOString(),
   };
   data.warnings.push(warning);
-  save();
+  save("warnings");
   return warning;
 }
 
@@ -493,7 +637,7 @@ export function deleteWarning(id, guildId) {
   const idx = data.warnings.findIndex((w) => w.id === id && w.guild_id === guildId);
   if (idx !== -1) {
     data.warnings.splice(idx, 1);
-    save();
+    save("warnings");
     return { changes: 1 };
   }
   return { changes: 0 };
@@ -502,7 +646,7 @@ export function deleteWarning(id, guildId) {
 export function clearWarnings(guildId, userId) {
   const before = data.warnings.length;
   data.warnings = data.warnings.filter((w) => !(w.guild_id === guildId && w.user_id === userId));
-  save();
+  save("warnings");
   return { changes: before - data.warnings.length };
 }
 
@@ -514,6 +658,10 @@ export function clearWarnings(guildId, userId) {
 
 function ensureGuild(guildId) {
   if (!data.guild_settings[guildId]) data.guild_settings[guildId] = {};
+  // Register the guild as dirty so a subsequent save("guild_settings") fans out
+  // only this guild's per-entity row. ensureGuild is called by (almost) every
+  // guild_settings mutator immediately before it mutates + saves.
+  _markEntity("guild_settings", guildId);
   return data.guild_settings[guildId];
 }
 
@@ -544,7 +692,7 @@ export function addDirective(guildId, text, channelId = null, addedBy = null) {
   const lower = text.toLowerCase().trim();
   if (g.directives.some(d => d.text.toLowerCase().trim() === lower)) return { success: false, reason: "duplicate directive" };
   g.directives.push({ text: text.substring(0, 300), channel: channelId || null, addedBy, addedAt: Date.now() });
-  save();
+  save("guild_settings");
   return { success: true, index: g.directives.length - 1 };
 }
 export function removeDirective(guildId, indexOrKeyword) {
@@ -553,7 +701,7 @@ export function removeDirective(guildId, indexOrKeyword) {
   const idx = typeof indexOrKeyword === "number" ? indexOrKeyword : g.directives.findIndex(d => d.text.toLowerCase().includes(String(indexOrKeyword).toLowerCase()));
   if (idx < 0 || idx >= g.directives.length) return { success: false, reason: "directive not found" };
   const removed = g.directives.splice(idx, 1)[0];
-  save();
+  save("guild_settings");
   return { success: true, removed: removed.text };
 }
 
@@ -611,7 +759,7 @@ export function addRule(guildId, text, severity, addedBy) {
     addedAt: Date.now(),
   };
   g.rules.push(rule);
-  save();
+  save("guild_settings");
   return { success: true, rule };
 }
 
@@ -621,7 +769,7 @@ export function removeRule(guildId, ruleNumber) {
   const idx = g.rules.findIndex(r => r.number === Number(ruleNumber));
   if (idx < 0) return { success: false, reason: `no rule numbered ${ruleNumber}` };
   const removed = g.rules.splice(idx, 1)[0];
-  save();
+  save("guild_settings");
   return { success: true, removed };
 }
 
@@ -629,14 +777,14 @@ export function clearRules(guildId) {
   const g = ensureGuild(guildId);
   const count = g.rules?.length ?? 0;
   g.rules = [];
-  save();
+  save("guild_settings");
   return { success: true, count };
 }
 
 export function setAutoModEnabled(guildId, enabled) {
   const g = ensureGuild(guildId);
   g.auto_mod_enabled = !!enabled;
-  save();
+  save("guild_settings");
   return g.auto_mod_enabled;
 }
 
@@ -670,7 +818,7 @@ export function addExemption(guildId, userId, ruleNumber, reason, addedBy, expir
     expiresAt: expiresAt || null,
   };
   g.rule_exemptions.push(ex);
-  save();
+  save("guild_settings");
   return { success: true, exemption: ex };
 }
 
@@ -681,7 +829,7 @@ export function removeExemption(guildId, userId, ruleNumber) {
   const idx = g.rule_exemptions.findIndex(e => e.userId === userId && e.ruleNumber === ruleNum);
   if (idx < 0) return { success: false, reason: "exemption not found" };
   const removed = g.rule_exemptions.splice(idx, 1)[0];
-  save();
+  save("guild_settings");
   return { success: true, removed };
 }
 
@@ -698,7 +846,8 @@ export function isUserExempt(guildId, userId, ruleNumber, now = Date.now()) {
   if (live.length !== list.length) {
     // Mutate in place + persist (cheap — exemptions are small)
     data.guild_settings[guildId].rule_exemptions = live;
-    save();
+    _markEntity("guild_settings", guildId);
+    save("guild_settings");
   }
   for (const e of live) {
     if (e.userId !== userId) continue;
@@ -725,7 +874,7 @@ export function recordViolation(guildId, userId, ruleNumber, messageId, severity
   if (g.rule_violations.length > MAX_VIOLATIONS_RETAINED) {
     g.rule_violations = g.rule_violations.slice(-MAX_VIOLATIONS_RETAINED);
   }
-  save();
+  save("guild_settings");
 }
 
 export function getRecentViolations(guildId, userId, withinMs = 30 * 86_400_000, now = Date.now()) {
@@ -741,12 +890,12 @@ export function getRecentViolations(guildId, userId, withinMs = 30 * 86_400_000,
 
 export function setGifEmbed(guildId, enabled) {
   ensureGuild(guildId).gif_embed = enabled;
-  save();
+  save("guild_settings");
 }
 
 export function setDmResults(guildId, enabled) {
   ensureGuild(guildId).dm_results = enabled;
-  save();
+  save("guild_settings");
 }
 
 export function getDmResults(guildId) {
@@ -757,13 +906,13 @@ export function setWelcomeChannel(guildId, channelId, message) {
   const s = ensureGuild(guildId);
   s.welcome_channel = channelId;
   if (message) s.welcome_message = message;
-  save();
+  save("guild_settings");
 }
 
 // ─── Ghost-Ping on Join ──────────────────────────────────────────────────
 export function setGhostPingChannels(guildId, channelIds) {
   ensureGuild(guildId).ghost_ping_channels = channelIds;
-  save();
+  save("guild_settings");
 }
 
 export function getGhostPingChannels(guildId) {
@@ -772,17 +921,17 @@ export function getGhostPingChannels(guildId) {
 
 export function setLogChannel(guildId, channelId) {
   ensureGuild(guildId).log_channel = channelId;
-  save();
+  save("guild_settings");
 }
 
 export function setAutorole(guildId, roleId) {
   ensureGuild(guildId).autorole_id = roleId;
-  save();
+  save("guild_settings");
 }
 
 export function setTicketCategory(guildId, categoryId) {
   ensureGuild(guildId).ticket_category_id = categoryId;
-  save();
+  save("guild_settings");
 }
 
 function _cleanRoleIds(roleIds) {
@@ -803,7 +952,7 @@ export function setTicketModRoles(guildId, roleIds) {
   gs.ticket_mod_role_ids  = clean;
   gs.ticket_view_role_ids = clean;
   gs.ticket_ping_role_ids = clean;
-  save();
+  save("guild_settings");
 }
 
 // Roles granted ViewChannel + SendMessages on every new ticket. [] = nobody
@@ -817,7 +966,7 @@ export function setTicketViewRoles(guildId, roleIds) {
   gs.ticket_view_role_ids = _cleanRoleIds(roleIds);
   if (!Array.isArray(gs.ticket_ping_role_ids)) gs.ticket_ping_role_ids = [];
   delete gs.ticket_mod_role_ids;
-  save();
+  save("guild_settings");
 }
 
 // Roles mentioned in the welcome message when a ticket opens. [] = no ping.
@@ -828,7 +977,7 @@ export function setTicketPingRoles(guildId, roleIds) {
   gs.ticket_ping_role_ids = _cleanRoleIds(roleIds);
   if (!Array.isArray(gs.ticket_view_role_ids)) gs.ticket_view_role_ids = [];
   delete gs.ticket_mod_role_ids;
-  save();
+  save("guild_settings");
 }
 
 // Welcome embed (shown INSIDE each new ticket channel). null = default.
@@ -838,7 +987,7 @@ export function setTicketWelcome(guildId, { title, description, color } = {}) {
   if (title !== undefined) gs.ticket_welcome_title = title ? String(title).slice(0, 256) : null;
   if (description !== undefined) gs.ticket_welcome_description = description ? String(description).slice(0, 4000) : null;
   if (color !== undefined) gs.ticket_welcome_color = _parseColor(color);
-  save();
+  save("guild_settings");
 }
 
 // Panel embed (the "Support Tickets / click the button" message posted in a
@@ -852,7 +1001,7 @@ export function setTicketPanel(guildId, { title, description, color, button_labe
   if (color        !== undefined) gs.ticket_panel_color        = _parseColor(color);
   if (button_label !== undefined) gs.ticket_panel_button_label = button_label ? String(button_label).slice(0, 80) : null;
   if (button_emoji !== undefined) gs.ticket_panel_button_emoji = button_emoji ? String(button_emoji).slice(0, 64) : null;
-  save();
+  save("guild_settings");
 }
 
 // Remember where we last posted a panel so the next "Post Panel" click can
@@ -866,7 +1015,7 @@ export function setTicketPanelMessage(guildId, channelId, messageId) {
     delete gs.ticket_panel_channel_id;
     delete gs.ticket_panel_message_id;
   }
-  save();
+  save("guild_settings");
 }
 
 // Ticket TYPES — each type routes to its own category. Admins can define
@@ -914,7 +1063,7 @@ export function setTicketTypes(guildId, types) {
     }
   }
   gs.ticket_types = [...seen.values()];
-  save();
+  save("guild_settings");
   return gs.ticket_types;
 }
 
@@ -928,7 +1077,7 @@ export function addTicketType(guildId, type) {
   if (idx >= 0) list[idx] = clean;
   else list.push(clean);
   gs.ticket_types = list;
-  save();
+  save("guild_settings");
   return clean;
 }
 
@@ -939,7 +1088,7 @@ export function removeTicketType(guildId, key) {
   if (!Array.isArray(gs.ticket_types)) return false;
   const before = gs.ticket_types.length;
   gs.ticket_types = gs.ticket_types.filter((t) => t.key !== k);
-  if (gs.ticket_types.length !== before) { save(); return true; }
+  if (gs.ticket_types.length !== before) { save("guild_settings"); return true; }
   return false;
 }
 
@@ -957,7 +1106,7 @@ export function setTicketAutoCategory(guildId, kind, category) {
   const field = kind === "view" ? "ticket_view_auto_category" : "ticket_ping_auto_category";
   if (category) gs[field] = String(category).toLowerCase();
   else delete gs[field];
-  save();
+  save("guild_settings");
 }
 
 // Explicitly pin the panel to a specific channel (without a message yet).
@@ -977,7 +1126,7 @@ export function setTicketPanelChannel(guildId, channelId) {
     delete gs.ticket_panel_channel_id;
     delete gs.ticket_panel_message_id;
   }
-  save();
+  save("guild_settings");
 }
 
 // Accepts: number, "#RRGGBB", "RRGGBB", "0xRRGGBB". Returns int or null.
@@ -1042,17 +1191,17 @@ export function setAfkSettings(guildId, channelId, timeoutMinutes) {
   const s = ensureGuild(guildId);
   s.afk_channel_id = channelId;
   s.afk_timeout_minutes = timeoutMinutes;
-  save();
+  save("guild_settings");
 }
 
 export function setCreateVcChannel(guildId, channelId) {
   ensureGuild(guildId).create_vc_channel_id = channelId;
-  save();
+  save("guild_settings");
 }
 
 export function setVcTemplate(guildId, template) {
   ensureGuild(guildId).vc_template = template;
-  save();
+  save("guild_settings");
 }
 
 export function getVcTemplate(guildId) {
@@ -1061,7 +1210,7 @@ export function getVcTemplate(guildId) {
 
 export function setVcDefaultLimit(guildId, limit) {
   ensureGuild(guildId).vc_default_limit = limit ?? 0;
-  save();
+  save("guild_settings");
 }
 
 export function getVcDefaultLimit(guildId) {
@@ -1070,7 +1219,7 @@ export function getVcDefaultLimit(guildId) {
 
 export function setVcNamingMode(guildId, mode) {
   ensureGuild(guildId).vc_naming_mode = mode;
-  save();
+  save("guild_settings");
 }
 
 export function getVcNamingMode(guildId) {
@@ -1079,7 +1228,7 @@ export function getVcNamingMode(guildId) {
 
 export function setVcRichPresence(guildId, enabled) {
   ensureGuild(guildId).vc_rich_presence = enabled;
-  save();
+  save("guild_settings");
 }
 
 export function getVcRichPresence(guildId) {
@@ -1088,7 +1237,7 @@ export function getVcRichPresence(guildId) {
 
 export function setVcTextChannels(guildId, enabled) {
   ensureGuild(guildId).vc_text_channels = enabled;
-  save();
+  save("guild_settings");
 }
 
 export function getVcTextChannels(guildId) {
@@ -1097,7 +1246,7 @@ export function getVcTextChannels(guildId) {
 
 export function setColorRoles(guildId, roleIds) {
   ensureGuild(guildId).color_role_ids = roleIds;
-  save();
+  save("guild_settings");
 }
 
 export function getColorRoles(guildId) {
@@ -1106,7 +1255,7 @@ export function getColorRoles(guildId) {
 
 export function setSeasonalColors(guildId, enabled) {
   ensureGuild(guildId).seasonal_colors = enabled;
-  save();
+  save("guild_settings");
 }
 
 export function getSeasonalColors(guildId) {
@@ -1115,7 +1264,7 @@ export function getSeasonalColors(guildId) {
 
 export function setLastSeasonalPalette(guildId, paletteName) {
   ensureGuild(guildId).last_seasonal_palette = paletteName;
-  save();
+  save("guild_settings");
 }
 
 export function getLastSeasonalPalette(guildId) {
@@ -1131,7 +1280,7 @@ export function getLastSeasonalPalette(guildId) {
 
 export function setAccessRole(guildId, roleId) {
   ensureGuild(guildId).irene_access_role_id = roleId;
-  save();
+  save("guild_settings");
 }
 
 // ─── Verification Role ──────────────────────────────────────────────────────
@@ -1140,7 +1289,7 @@ export function setAccessRole(guildId, roleId) {
 
 export function setVerificationRole(guildId, roleId) {
   ensureGuild(guildId).verification_role_id = roleId;
-  save();
+  save("guild_settings");
 }
 
 export function getVerificationRole(guildId) {
@@ -1153,7 +1302,7 @@ export function getPublicChannels(guildId) {
 
 export function setPublicChannels(guildId, channelIds) {
   ensureGuild(guildId).public_channels = channelIds;
-  save();
+  save("guild_settings");
 }
 
 // ─── Trusted Users ───────────────────────────────────────────────────────────
@@ -1193,7 +1342,7 @@ async function _refreshTrustedUsers(guildId) {
       current.trusted_users = fresh;
       _trustedFetchedAt.set(guildId, Date.now());
     } catch (err) {
-      console.warn(`[DB] Trusted-user refresh failed for ${guildId}: ${err.message}`);
+      log(`[DB] Trusted-user refresh failed for ${guildId}: ${err.message}`);
     } finally {
       _trustedRefreshInFlight.delete(guildId);
     }
@@ -1220,9 +1369,9 @@ export function addTrustedUser(guildId, userId) {
   if (!list.includes(userId)) {
     s.trusted_users = [...list, userId];
     // Local write is authoritative — defer the next TTL refresh so we don't
-    // immediately race ourselves before the save() flush completes.
+    // immediately race ourselves before the save("guild_settings") flush completes.
     _trustedFetchedAt.set(guildId, Date.now());
-    save();
+    save("guild_settings");
   }
 }
 
@@ -1231,7 +1380,8 @@ export function removeTrustedUser(guildId, userId) {
   if (!s?.trusted_users) return;
   s.trusted_users = s.trusted_users.filter((id) => id !== userId);
   _trustedFetchedAt.set(guildId, Date.now());
-  save();
+  _markEntity("guild_settings", guildId);
+  save("guild_settings");
 }
 
 // ─── DM Opt-Out ──────────────────────────────────────────────────────────────
@@ -1246,11 +1396,11 @@ export function setDmOptout(userId, optout) {
   if (optout) {
     if (!data.dm_optout.includes(userId)) {
       data.dm_optout.push(userId);
-      save();
+      save("dm_optout");
     }
   } else {
     data.dm_optout = data.dm_optout.filter((id) => id !== userId);
-    save();
+    save("dm_optout");
   }
 }
 
@@ -1278,7 +1428,8 @@ export function setCustomCommand(guildId, trigger, command) {
     // Preserve creation timestamp on edits — only set it if not already present
     created_at: command.created_at ?? new Date().toISOString(),
   };
-  save();
+  _markEntity("custom_commands", guildId);
+  save("custom_commands");
 }
 
 export function deleteCustomCommand(guildId, trigger) {
@@ -1286,7 +1437,8 @@ export function deleteCustomCommand(guildId, trigger) {
   const key = trigger.toLowerCase();
   if (data.custom_commands[guildId][key]) {
     delete data.custom_commands[guildId][key];
-    save();
+    _markEntity("custom_commands", guildId);
+    save("custom_commands");
     return true;
   }
   return false;
@@ -1317,7 +1469,7 @@ export function setWelcomeEmbed(guildId, embedConfig) {
   } else {
     s.welcome_embed = { ...(s.welcome_embed ?? {}), ...embedConfig };
   }
-  save();
+  save("guild_settings");
 }
 
 // ─── DM Welcome ───────────────────────────────────────────────────────────────
@@ -1326,7 +1478,7 @@ export function setDmWelcome(guildId, enabled, message) {
   const s = ensureGuild(guildId);
   s.dm_welcome_enabled = enabled;
   if (message !== undefined) s.dm_welcome_message = message;
-  save();
+  save("guild_settings");
 }
 
 export function getDmWelcome(guildId) {
@@ -1346,7 +1498,7 @@ export function setLeaveChannel(guildId, channelId, message) {
   const s = ensureGuild(guildId);
   s.leave_channel = channelId;
   if (message !== undefined) s.leave_message = message;
-  save();
+  save("guild_settings");
 }
 
 export function getLeaveSettings(guildId) {
@@ -1380,7 +1532,7 @@ export function saveConversation(channelKey, history) {
     }
   }
 
-  save();
+  save("conversations");
 }
 
 export function loadConversations() {
@@ -1400,7 +1552,7 @@ export function deleteConversation(key) {
   if (!data.conversations) return false;
   if (data.conversations[key]) {
     delete data.conversations[key];
-    save();
+    save("conversations");
     return true;
   }
   // Partial match
@@ -1408,7 +1560,7 @@ export function deleteConversation(key) {
   for (const k of Object.keys(data.conversations)) {
     if (k.includes(key)) { delete data.conversations[k]; deleted = true; }
   }
-  if (deleted) save();
+  if (deleted) save("conversations");
   return deleted;
 }
 
@@ -1422,7 +1574,7 @@ export function setChannelPersonality(guildId, channelId, prompt) {
   } else {
     delete s.channel_personalities[channelId];
   }
-  save();
+  save("guild_settings");
 }
 
 export function getChannelPersonality(guildId, channelId) {
@@ -1440,7 +1592,7 @@ export function setServerPersona(guildId, persona) {
   } else {
     delete s.server_persona;
   }
-  save();
+  save("guild_settings");
 }
 
 export function getServerPersona(guildId) {
@@ -1451,7 +1603,7 @@ export function getServerPersona(guildId) {
 
 export function setBadWords(guildId, words) {
   ensureGuild(guildId).bad_words = words;
-  save();
+  save("guild_settings");
 }
 
 export function getBadWords(guildId) {
@@ -1462,7 +1614,7 @@ export function getBadWords(guildId) {
 
 export function setEscalation(guildId, config) {
   ensureGuild(guildId).escalation = config;
-  save();
+  save("guild_settings");
 }
 
 export function getEscalation(guildId) {
@@ -1476,7 +1628,7 @@ export function getEscalation(guildId) {
 
 export function setStatsChannels(guildId, config) {
   ensureGuild(guildId).stats_channels = config;
-  save();
+  save("guild_settings");
 }
 
 export function getStatsChannels(guildId) {
@@ -1496,7 +1648,7 @@ export function addReactionRole(guildId, messageId, emoji, roleId, exclusive = t
   // Remove existing entry for this emoji on this message
   s.reaction_roles[messageId] = s.reaction_roles[messageId].filter((r) => r.emoji !== emoji);
   s.reaction_roles[messageId].push({ emoji, roleId, exclusive });
-  save();
+  save("guild_settings");
 }
 
 export function isReactionRoleExclusive(guildId, messageId) {
@@ -1510,7 +1662,8 @@ export function removeReactionRole(guildId, messageId, emoji) {
   if (!s?.reaction_roles?.[messageId]) return;
   s.reaction_roles[messageId] = s.reaction_roles[messageId].filter((r) => r.emoji !== emoji);
   if (s.reaction_roles[messageId].length === 0) delete s.reaction_roles[messageId];
-  save();
+  _markEntity("guild_settings", guildId);
+  save("guild_settings");
 }
 
 export function getReactionRoles(guildId, messageId) {
@@ -1534,7 +1687,7 @@ export function addReminder(userId, guildId, channelId, message, fireAt) {
     fireAt: typeof fireAt === "number" ? fireAt : fireAt.getTime(),
   };
   data.reminders.push(reminder);
-  save();
+  save("reminders");
   return reminder;
 }
 
@@ -1545,7 +1698,7 @@ export function getReminders() {
 export function removeReminder(id) {
   if (!data.reminders) return;
   data.reminders = data.reminders.filter((r) => r.id !== id);
-  save();
+  save("reminders");
 }
 
 // ─── Scheduled Tasks ──────────────────────────────────────────────────────────
@@ -1565,7 +1718,7 @@ export function addScheduledTask(guildId, channelId, authorId, toolName, toolInp
     createdAt: Date.now(),
   };
   data.scheduled_tasks.push(task);
-  save();
+  save("scheduled_tasks");
   return task;
 }
 
@@ -1582,7 +1735,7 @@ export function removeScheduledTask(id) {
   if (!data.scheduled_tasks) return { changes: 0 };
   const before = data.scheduled_tasks.length;
   data.scheduled_tasks = data.scheduled_tasks.filter((t) => t.id !== id);
-  save();
+  save("scheduled_tasks");
   return { changes: before - data.scheduled_tasks.length };
 }
 
@@ -1592,7 +1745,7 @@ export function setStarboard(guildId, channelId, threshold) {
   const s = ensureGuild(guildId);
   s.starboard_channel = channelId;
   s.starboard_threshold = threshold ?? 3;
-  save();
+  save("guild_settings");
 }
 
 export function getStarboard(guildId) {
@@ -1611,7 +1764,8 @@ export function addStarboardEntry(guildId, messageId, starboardMessageId) {
   if (!data.starboard_entries) data.starboard_entries = {};
   if (!data.starboard_entries[guildId]) data.starboard_entries[guildId] = {};
   data.starboard_entries[guildId][messageId] = starboardMessageId;
-  save();
+  _markEntity("starboard_entries", guildId);
+  save("starboard_entries");
 }
 
 export function getStarboardEntry(guildId, messageId) {
@@ -1630,14 +1784,14 @@ export function setBirthday(userId, guildId, month, day, year) {
   const entry = { userId, guildId, month, day };
   if (year) entry.year = year;
   data.birthdays.push(entry);
-  save();
+  save("birthdays");
 }
 
 export function removeBirthday(userId, guildId) {
   if (!data.birthdays) return false;
   const before = data.birthdays.length;
   data.birthdays = data.birthdays.filter((b) => !(b.userId === userId && b.guildId === guildId));
-  if (data.birthdays.length !== before) { save(); return true; }
+  if (data.birthdays.length !== before) { save("birthdays"); return true; }
   return false;
 }
 
@@ -1658,19 +1812,19 @@ export function getTodaysBirthdays(guildId) {
 
 export function setBirthdayChannel(guildId, channelId) {
   ensureGuild(guildId).birthday_channel_id = channelId;
-  save();
+  save("guild_settings");
 }
 
 export function setBirthdayRole(guildId, roleId) {
   ensureGuild(guildId).birthday_role_id = roleId;
-  save();
+  save("guild_settings");
 }
 
 export function setBirthdayMessage(guildId, message) {
   const s = ensureGuild(guildId);
   if (message) s.birthday_message = message;
   else delete s.birthday_message;
-  save();
+  save("guild_settings");
 }
 
 export function getBirthdayConfig(guildId) {
@@ -1697,9 +1851,9 @@ export function markBirthdayAnnounced(userId, guildId) {
       pruned++;
     }
   }
-  if (pruned > 0) console.log(`[DB] Pruned ${pruned} old birthday-announced entries`);
+  if (pruned > 0) log(`[DB] Pruned ${pruned} old birthday-announced entries`);
 
-  save();
+  save("birthday_announced");
 }
 
 export function wasBirthdayAnnounced(userId, guildId) {
@@ -1726,7 +1880,7 @@ export function addToWhitelist(guildId, info) {
     invited_by: info.invited_by ?? null,
     added_at:   new Date().toISOString(),
   };
-  save();
+  save("server_whitelist");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1744,7 +1898,7 @@ export function getMood() {
 export function updateMood(score, energy) {
   data.mood.mood_score = Math.max(-100, Math.min(100, score));
   data.mood.energy = Math.max(0, Math.min(100, energy));
-  save();
+  save("mood");
 }
 
 export function shiftMood(delta, energyDelta = 0) {
@@ -1769,13 +1923,30 @@ export function getRelationship(userId) {
   return withDefaults(RELATIONSHIP_DEFAULTS, data.relationships[userId]);
 }
 
+// Synchronous read-modify-write. Safe to call directly when no `await` sits
+// between a caller's read of the relationship and this mutation — JS is
+// single-threaded so a purely-sync RMW can't interleave. Use
+// updateRelationshipLocked when the caller's sequence spans an await.
 export function updateRelationship(userId, affinityDelta) {
   const current = getRelationship(userId);
   data.relationships[userId] = {
     affinity_score: Math.max(-100, Math.min(100, current.affinity_score + affinityDelta)),
     interactions_count: current.interactions_count + 1,
   };
-  save();
+  save("relationships");
+}
+
+// Lock-serialised affinity bump. Routes the read-modify-write through the
+// per-user mutex so two concurrent interactions adjusting the SAME user's
+// affinity can't both read the old score and clobber each other's increment —
+// the documented atomicity guarantee for "affinity bumps". Returns the new
+// relationship row. Prefer this over updateRelationship in async tool/event
+// paths that may run concurrently for one user.
+export function updateRelationshipLocked(userId, affinityDelta) {
+  return withUserLock(`rel:${userId}`, () => {
+    updateRelationship(userId, affinityDelta);
+    return getRelationship(userId);
+  });
 }
 
 export function getAllRelationships() {
@@ -1809,7 +1980,8 @@ export async function updatePersonality(instructions) {
 export function saveQueue(guildId, queueData) {
   if (!data.saved_queues) data.saved_queues = {};
   data.saved_queues[guildId] = { ...queueData, savedAt: Date.now() };
-  save();
+  _markEntity("saved_queues", guildId);
+  save("saved_queues");
 }
 
 export function getSavedQueues() {
@@ -1819,13 +1991,14 @@ export function getSavedQueues() {
 export function clearSavedQueue(guildId) {
   if (data.saved_queues?.[guildId]) {
     delete data.saved_queues[guildId];
-    save();
+    _markEntity("saved_queues", guildId);
+    save("saved_queues");
   }
 }
 
 export function clearAllSavedQueues() {
   data.saved_queues = {};
-  save();
+  save("saved_queues");
 }
 
 // ─── Temp VC State (persist across restarts) ─────────────────────────────────
@@ -1836,13 +2009,13 @@ export function saveTempVc(channelId, vcData) {
   if (!vcData) vcData = {};
   if (!data.temp_vcs) data.temp_vcs = {};
   data.temp_vcs[channelId] = vcData;
-  save();
+  save("temp_vcs");
 }
 
 export function deleteTempVc(channelId) {
   if (data.temp_vcs?.[channelId]) {
     delete data.temp_vcs[channelId];
-    save();
+    save("temp_vcs");
   }
 }
 
@@ -1852,19 +2025,19 @@ export function getAllTempVcs() {
 
 export function clearAllTempVcs() {
   data.temp_vcs = {};
-  save();
+  save("temp_vcs");
 }
 
 // ─── Lockdown State ──────────────────────────────────────────────────────────
 
 export function saveLockdown(guildId, expiresAt) {
   ensureGuild(guildId).lockdown_expires = expiresAt;
-  save();
+  save("guild_settings");
 }
 
 export function clearLockdown(guildId) {
   const s = data.guild_settings[guildId];
-  if (s) { delete s.lockdown_expires; save(); }
+  if (s) { delete s.lockdown_expires; _markEntity("guild_settings", guildId); save("guild_settings"); }
 }
 
 export function getLockdown(guildId) {
@@ -1876,12 +2049,12 @@ export function getLockdown(guildId) {
 export function saveSlowmode(channelId, guildId, expiresAt) {
   ensureGuild(guildId).auto_slowmode = ensureGuild(guildId).auto_slowmode ?? {};
   ensureGuild(guildId).auto_slowmode[channelId] = expiresAt;
-  save();
+  save("guild_settings");
 }
 
 export function clearSlowmode(channelId, guildId) {
   const s = data.guild_settings[guildId];
-  if (s?.auto_slowmode?.[channelId]) { delete s.auto_slowmode[channelId]; save(); }
+  if (s?.auto_slowmode?.[channelId]) { delete s.auto_slowmode[channelId]; _markEntity("guild_settings", guildId); save("guild_settings"); }
 }
 
 export function getAutoSlowmodes(guildId) {
@@ -1900,7 +2073,7 @@ export function getPatchFeeds(guildId) {
 
 export function setPatchFeeds(guildId, config) {
   ensureGuild(guildId).patch_feeds = config;
-  save();
+  save("guild_settings");
 }
 
 export function getPatchLastSeen(guildId) {
@@ -1911,7 +2084,7 @@ export function setPatchLastSeen(guildId, key, value) {
   const s = ensureGuild(guildId);
   if (!s.patch_last_seen) s.patch_last_seen = {};
   s.patch_last_seen[key] = value;
-  save();
+  save("guild_settings");
 }
 
 // ─── Twitch Live Notifications ───────────────────────────────────────────────
@@ -1922,7 +2095,7 @@ export function getTwitchConfig(guildId) {
 
 export function setTwitchConfig(guildId, config) {
   ensureGuild(guildId).twitch = config;
-  save();
+  save("guild_settings");
 }
 
 // ─── TTS Channels ────────────────────────────────────────────────────────────
@@ -1933,7 +2106,7 @@ export function getTtsChannels(guildId) {
 
 export function setTtsChannels(guildId, channels) {
   ensureGuild(guildId).tts_channels = channels;
-  save();
+  save("guild_settings");
 }
 
 export function getTtsVoice(guildId) {
@@ -1942,13 +2115,13 @@ export function getTtsVoice(guildId) {
 
 export function setTtsVoice(guildId, voice) {
   ensureGuild(guildId).tts_voice = voice;
-  save();
+  save("guild_settings");
 }
 
 export function removeFromWhitelist(guildId) {
   if (!data.server_whitelist?.[guildId]) return false;
   delete data.server_whitelist[guildId];
-  save();
+  save("server_whitelist");
   return true;
 }
 
@@ -1960,7 +2133,7 @@ export function getYoutubeConfig(guildId) {
 
 export function setYoutubeConfig(guildId, config) {
   ensureGuild(guildId).youtube = config;
-  save();
+  save("guild_settings");
 }
 
 // ─── GitHub Feeds ───────────────────────────────────────────────────────────
@@ -1971,7 +2144,7 @@ export function getGithubConfig(guildId) {
 
 export function setGithubConfig(guildId, config) {
   ensureGuild(guildId).github = config;
-  save();
+  save("guild_settings");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1988,7 +2161,7 @@ export function getGiveawayDb() {
 
 export function saveGiveawayDb(giveawayArray) {
   data.giveaways = giveawayArray;
-  save();
+  save("giveaways");
 }
 
 export function getGiveawayPingRoles(guildId) {
@@ -1997,7 +2170,7 @@ export function getGiveawayPingRoles(guildId) {
 
 export function setGiveawayPingRoles(guildId, roleIds) {
   ensureGuild(guildId).giveaway_ping_role_ids = roleIds;
-  save();
+  save("guild_settings");
 }
 
 // ─── Highlight Persistence ──────────────────────────────────────────────────
@@ -2008,7 +2181,7 @@ export function getHighlightDb() {
 
 export function saveHighlightDb(highlightObj) {
   data.highlights = highlightObj;
-  save();
+  save("highlights");
 }
 
 // ─── Audit Log ──────────────────────────────────────────────────────────────
@@ -2025,7 +2198,7 @@ export function addVoiceTime(guildId, userId, minutes) {
   if (!s.voice_stats[userId]) s.voice_stats[userId] = { total_minutes: 0, sessions: 0 };
   s.voice_stats[userId].total_minutes += minutes;
   s.voice_stats[userId].sessions += 1;
-  save();
+  save("guild_settings");
 }
 
 // ─── Auto-Responders ──────────────────────────────────────────────────────
@@ -2042,7 +2215,7 @@ export function addAutoResponder(guildId, trigger, response, createdBy) {
   const s = ensureGuild(guildId);
   if (!s.auto_responders) s.auto_responders = [];
   s.auto_responders.push({ trigger: trigger.toLowerCase(), response, created_by: createdBy, uses: 0 });
-  save();
+  save("guild_settings");
   return true;
 }
 
@@ -2051,7 +2224,7 @@ export function removeAutoResponder(guildId, trigger) {
   if (!s.auto_responders) return false;
   const before = s.auto_responders.length;
   s.auto_responders = s.auto_responders.filter(a => a.trigger !== trigger.toLowerCase());
-  save();
+  save("guild_settings");
   return s.auto_responders.length < before;
 }
 
@@ -2070,7 +2243,7 @@ export function isFeatureEnabled(guildId, feature) {
 export function setFeatureToggle(guildId, feature, enabled) {
   const s = ensureGuild(guildId);
   s[`${feature}_enabled`] = enabled;
-  save();
+  save("guild_settings");
 }
 
 // ─── Audit Log ──────────────────────────────────────────────────────────────
@@ -2086,7 +2259,7 @@ export function logAudit(guildId, action, userId, details) {
   });
   // Keep only last 100 entries per guild
   if (s.audit_log.length > 100) s.audit_log = s.audit_log.slice(-100);
-  save();
+  save("guild_settings");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2108,7 +2281,7 @@ export function recordInviteJoin(guildId, userId, username, inviteCode, inviterI
     leftAt: null,
   });
   if (s.invite_history.length > 500) s.invite_history = s.invite_history.slice(-500);
-  save();
+  save("guild_settings");
 }
 
 /** Mark a member as having left the server */
@@ -2120,7 +2293,7 @@ export function markInviteLeave(guildId, userId) {
     if (s.invite_history[i].userId === userId && !s.invite_history[i].left) {
       s.invite_history[i].left = true;
       s.invite_history[i].leftAt = new Date().toISOString();
-      save();
+      save("guild_settings");
       return;
     }
   }
@@ -2166,7 +2339,7 @@ export function addTempBan(guildId, userId, username, duration, reason, moderato
     bannedAt: new Date().toISOString(),
     unbanAt: new Date(Date.now() + duration).toISOString(),
   });
-  save();
+  save("guild_settings");
 }
 
 export function getExpiredTempBans() {
@@ -2179,7 +2352,8 @@ export function getExpiredTempBans() {
     if (due.length) {
       expired.push(...due.map(b => ({ ...b, guildId })));
       settings.temp_bans = remaining;
-      save();
+      _markEntity("guild_settings", guildId);
+      save("guild_settings");
     }
   }
   return expired;
@@ -2189,20 +2363,20 @@ export function removeTempBan(guildId, userId) {
   const s = ensureGuild(guildId);
   if (!s.temp_bans) return;
   s.temp_bans = s.temp_bans.filter(b => b.userId !== userId);
-  save();
+  save("guild_settings");
 }
 
 // ─── INVITE FILTER ─────────────────────────────────────────────────────────
 export function setInviteFilter(guildId, enabled) {
   const s = ensureGuild(guildId);
   s.invite_filter = enabled;
-  save();
+  save("guild_settings");
 }
 
 export function setInviteFilterWhitelist(guildId, roleIds) {
   const s = ensureGuild(guildId);
   s.invite_filter_whitelist = roleIds;
-  save();
+  save("guild_settings");
 }
 
 // ─── STICKY MESSAGES ───────────────────────────────────────────────────────
@@ -2210,7 +2384,7 @@ export function setStickyMessage(guildId, channelId, content, embedData) {
   const s = ensureGuild(guildId);
   if (!s.sticky_messages) s.sticky_messages = {};
   s.sticky_messages[channelId] = { content, embedData, lastMessageId: null };
-  save();
+  save("guild_settings");
 }
 
 export function getStickyMessage(guildId, channelId) {
@@ -2222,7 +2396,7 @@ export function updateStickyMessageId(guildId, channelId, messageId) {
   const s = ensureGuild(guildId);
   if (s.sticky_messages?.[channelId]) {
     s.sticky_messages[channelId].lastMessageId = messageId;
-    save();
+    save("guild_settings");
   }
 }
 
@@ -2230,6 +2404,37 @@ export function removeStickyMessage(guildId, channelId) {
   const s = ensureGuild(guildId);
   if (s.sticky_messages) {
     delete s.sticky_messages[channelId];
-    save();
+    save("guild_settings");
   }
 }
+
+// ─── Test-only internals ─────────────────────────────────────────────────────
+// Exposed so tests can drive the dirty-set flush pipeline and the per-key mutex
+// without a live Supabase. Not part of the public API — do not use at runtime.
+export const _internal = {
+  get data() { return data; },
+  get dirty() { return _dirty; },
+  get dirtyEntities() { return _dirtyEntities; },
+  get userLocks() { return _userLocks; },
+  save,
+  flushSave: _flushSave,
+  withUserLock,
+  /** Inject a (fake) Supabase client so save()/_flushSave engage. */
+  __setSupabaseForTest(client) { supabase = client; },
+  /** Reset cache + flush state between tests. */
+  __resetForTest() {
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    _saveRetryCount = 0;
+    _dirty.clear();
+    _dirtyEntities.clear();
+    _userLocks.clear();
+    data = {
+      scrim_stats: {}, warnings: [], guild_settings: {}, custom_commands: {},
+      dm_optout: [], _nextWarningId: 1, conversations: {}, reminders: [],
+      _nextReminderId: 1, scheduled_tasks: [], _nextScheduledTaskId: 1,
+      starboard_entries: {}, birthdays: [], birthday_announced: {},
+      server_whitelist: {}, saved_queues: {}, giveaways: [], highlights: {},
+      mood: { mood_score: 0, energy: 50 }, relationships: {}, temp_vcs: {},
+    };
+  },
+};

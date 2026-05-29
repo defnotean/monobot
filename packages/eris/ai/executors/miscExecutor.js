@@ -374,7 +374,10 @@ export async function execute(toolName, input, message, _context) {
 
     case "daily_reward": {
       const result = await db.claimDaily(message.author.id);
-      if (!result.success) return `you already claimed your daily, come back in ~${result.hoursLeft}h`;
+      if (!result.success) {
+        if (result.error === "claim_failed") return "something went wrong saving your claim — try again in a moment.";
+        return `you already claimed your daily, come back in ~${result.hoursLeft}h`;
+      }
       const { randomQuip } = await import("../gambling.js");
       const { dailyEmbed } = await import("../gameVisuals.js");
       await message.channel.send({ embeds: [dailyEmbed(result.coins, result.streak, result.bonus, result.newBalance)] });

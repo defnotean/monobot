@@ -189,11 +189,15 @@ export async function initFirewall(message, { isTwinMsg }) {
   if (!isTwinMsg && message.author.id !== config.ownerId) {
     try {
       const { getSupabase } = await import("../../database.js");
+      // Always run the firewall — firewallSupabase may be null (no-Supabase
+      // mode). The L3 semantic layer self-guards on supabase && voyageApiKey, so
+      // L1/L1.5/L2/L2.5 run regardless and only the semantic layer is skipped
+      // when Supabase/Voyage are absent. Previously this only ran inside
+      // `if (firewallSupabase)`, so in the supported no-Supabase mode every
+      // message passed unchecked.
       firewallSupabase = getSupabase();
-      if (firewallSupabase) {
-        firewallPromise = checkInjection(message.content, firewallSupabase, message.author.id)
-          .catch((e) => { log(`[FIREWALL] Error: ${e.message}`); return { safe: true, _error: e }; });
-      }
+      firewallPromise = checkInjection(message.content, firewallSupabase, message.author.id)
+        .catch((e) => { log(`[FIREWALL] Error: ${e.message}`); return { safe: true, _error: e }; });
     } catch (e) {
       log(`[FIREWALL] Error: ${e.message}`);
     }

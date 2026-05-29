@@ -4,6 +4,7 @@
 // Called from main executor.js via delegation.
 
 import * as db from "../../database.js";
+import { addMemory } from "../memory.js";
 
 const HANDLED = new Set([
   "remember_fact", "forget_fact", "forget_all", "recall_memories",
@@ -41,7 +42,16 @@ export async function execute(toolName, input, message, _context) {
         }
       }
 
-      await db.saveFact(message.author.id, fact, sensitivity);
+      // Route the write through addMemory so the 20-fact cap + dedup in
+      // memory.js are actually enforced (direct db.saveFact bypassed them and
+      // let facts grow unbounded). The executor's richer overlap dedup above
+      // still runs first for nicer "i already know that" messaging.
+      // Side-effect of routing here: addMemory also rejects facts over its
+      // MAX_FACT_LENGTH (200 chars) — the prior db.saveFact path had no such
+      // limit, so facts longer than 200 chars now return addMemory's
+      // "fact must be under 200 chars" instead of persisting.
+      const stored = await addMemory(message.author.id, fact, sensitivity);
+      if (!stored.success) return stored.message;
       if (sensitivity === "secret") return `remembered (locked away as a secret — i'll never tell anyone): ${fact}`;
       if (sensitivity === "sensitive") return `remembered (keeping this between us): ${fact}`;
       return `remembered: ${fact}`;
@@ -56,8 +66,33 @@ export async function execute(toolName, input, message, _context) {
     }
 
     case "forget_all": {
-      const ok = await db.clearAllFacts(message.author.id);
-      return ok ? "done — wiped all memories about you. clean slate" : "couldn't clear memories";
+      // RIGHT TO BE FORGOTTEN — a real "forget everything about me" must clear
+      // BOTH the access-gated facts table AND the searchable episodic/semantic
+      // store. Clearing only facts left every emotional disclosure recoverable
+      // in the vector store forever. Run both; if either leg fails, report a
+      // PARTIAL erasure rather than falsely claiming a clean slate.
+      const userId = message.author.id;
+      const { deleteEpisodicMemoriesForUser } = await import("../semantic.js");
+      const { default: cfg } = await import("../../config.js");
+      const botId = cfg.botName || "eris";
+
+      const [factsOk, episodic] = await Promise.all([
+        db.clearAllFacts(userId),
+        deleteEpisodicMemoriesForUser(botId, userId),
+      ]);
+      const episodicOk = episodic?.ok !== false;
+
+      if (factsOk && episodicOk) {
+        return "done — wiped all memories about you, facts and everything we talked about. clean slate";
+      }
+      // Partial failure: name exactly what survived so we never overclaim a wipe.
+      if (factsOk && !episodicOk) {
+        return "partly done — cleared your facts, but couldn't fully clear our conversation memories. some of it may still be there. try again in a bit";
+      }
+      if (!factsOk && episodicOk) {
+        return "partly done — cleared our conversation memories, but couldn't clear your saved facts. some of it may still be there. try again in a bit";
+      }
+      return "couldn't clear memories";
     }
 
     case "recall_memories": {

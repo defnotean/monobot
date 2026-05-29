@@ -129,8 +129,14 @@ vi.mock("../../config.js", () => ({
     dualWritePersistence: false,
   },
 }));
+// perEntity.js now logs the "giving up after N attempts" failure through the
+// redacting logger. Mock `log` so the give-up assertion can observe it.
+vi.mock("../../utils/logger.js", () => ({
+  log: vi.fn(),
+}));
 
 import * as pe from "../../database/perEntity.js";
+import { log as mockLog } from "../../utils/logger.js";
 
 // ─── Test lifecycle ──────────────────────────────────────────────────────────
 
@@ -269,13 +275,14 @@ describe("perEntity helpers — optimistic concurrency", () => {
         return b;
       },
     };
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    (mockLog as any).mockClear();
     counters.updates = 0;
     pe.writeGuildSettings("g-fail", { v: "y" });
     await waitForWrite();
     expect(counters.updates).toBe(pe._internal.MAX_RETRIES);
-    expect(errSpy).toHaveBeenCalled();
-    errSpy.mockRestore();
+    expect(mockLog).toHaveBeenCalledWith(
+      expect.stringContaining("[perEntity] giving up after"),
+    );
   });
 
   it("falls through unique-violation insert to retry as update", async () => {

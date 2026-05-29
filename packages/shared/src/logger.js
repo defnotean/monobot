@@ -116,15 +116,16 @@ const _OK_RE    = /\b(online|ready|success(?:fully)?|connected|started|loaded|ca
 /**
  * Build a logger instance bound to a single bot's `bot.log` file.
  *
- * @param {object} opts
- * @param {string} [opts.botPrefix] — informational tag for the bot (e.g.
+ * @param {object} [opts]
+ * @param {string} [opts.botPrefix] - informational tag for the bot (e.g.
  *   `"ERIS"` / `"IRENE"`); not embedded in lines (callers already prefix
  *   with `[CATEGORY]`), but reserved for future structured-log adapters.
- * @param {string} opts.logFile — absolute path to the bot.log file.
- * @param {boolean} [opts.redact=true] — set to `false` only in tests that
+ * @param {string} [opts.logFile] - absolute path to the bot.log file. Omit
+ *   for console-only mode (the file transport short-circuits when unset).
+ * @param {boolean} [opts.redact=true] - set to `false` only in tests that
  *   need to assert on the raw input. Production callers should never disable.
- * @param {number} [opts.maxBytes] — file-rotation threshold; default 5 MB.
- * @param {Record<string,string>} [opts.extraCategoryColors] — per-bot
+ * @param {number} [opts.maxBytes] - file-rotation threshold; default 5 MB.
+ * @param {Record<string,string>} [opts.extraCategoryColors] - per-bot
  *   overrides / additions to the default category color map.
  *
  * @returns {{ log: (m: any) => void, warn: (m: any) => void,
@@ -142,11 +143,13 @@ export function createLogger({
 
   const categoryColors = { ...DEFAULT_CATEGORY_COLORS, ...extraCategoryColors };
 
+  /** @param {string} cat */
   function _categoryColor(cat) {
     const key = cat.toLowerCase().replace(/[^a-z]/g, "");
-    return categoryColors[key] || "";
+    return (/** @type {Record<string, string>} */ (categoryColors))[key] || "";
   }
 
+  /** @param {string} message */
   function _formatForConsole(message) {
     const shortTs = new Date().toISOString().slice(11, 19); // HH:MM:SS
     const tsPart = `${C.dim}${shortTs}${C.reset}`;
@@ -177,7 +180,9 @@ export function createLogger({
 
   // Async write queue — batches lines on FLUSH_INTERVAL_MS so file I/O never
   // blocks the event loop and bursty logs coalesce into a single appendFile.
+  /** @type {string[]} */
   let _buffer = [];
+  /** @type {ReturnType<typeof setTimeout> | null} */
   let _timer = null;
 
   function _scheduleFlush() {
@@ -195,7 +200,7 @@ export function createLogger({
           await writeFile(logFile, "").catch(() => {});
         }
         await appendFile(logFile, lines);
-      } catch (err) {
+      } catch (/** @type {any} */ err) {
         // Don't recurse through `log()` — that would re-enter the queue.
         // eslint-disable-next-line no-console
         console.error(`[Logger] File write failed: ${err.message}`);
@@ -203,6 +208,7 @@ export function createLogger({
     }, FLUSH_INTERVAL_MS);
   }
 
+  /** @param {any} message */
   function log(message) {
     // Last-mile redaction. If a caller passed a non-string (e.g. a raw Error),
     // stringify first; otherwise scan-and-replace for env-var values + token-

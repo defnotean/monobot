@@ -5,7 +5,7 @@ services:
     name: eris-bot
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm run start:eris
     healthCheckPath: /
     envVars:

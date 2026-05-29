@@ -11,18 +11,21 @@
 // last 5 messages, 30s TTL, soft cap of 500 users with stale-first eviction.
 
 export class InMemoryWindowStore {
+  /** @param {{ winSize?: number, winTtlMs?: number, maxUsers?: number }} [opts] */
   constructor({ winSize = 5, winTtlMs = 30000, maxUsers = 500 } = {}) {
     this._winSize = winSize;
     this._winTtlMs = winTtlMs;
     this._maxUsers = maxUsers;
+    /** @type {Map<string, { text: string, ts: number }[]>} */
     this._map = new Map();
   }
 
+  /** @param {string} userId @param {string} text */
   async add(userId, text) {
     if (!userId) return;
     const now = Date.now();
     if (!this._map.has(userId)) this._map.set(userId, []);
-    const win = this._map.get(userId);
+    const win = /** @type {{ text: string, ts: number }[]} */ (this._map.get(userId));
     while (win.length && now - win[0].ts > this._winTtlMs) win.shift();
     win.push({ text, ts: now });
     while (win.length > this._winSize) win.shift();
@@ -42,12 +45,14 @@ export class InMemoryWindowStore {
     }
   }
 
+  /** @param {string} userId */
   async concat(userId) {
     if (!userId) return null;
     const win = this._map.get(userId);
     return (win && win.length >= 2) ? win.map(w => w.text).join(" ") : null;
   }
 
+  /** @param {string} [userId] */
   async clear(userId) {
     if (userId) this._map.delete(userId);
     else this._map.clear();
@@ -74,14 +79,17 @@ export class InMemoryWindowStore {
  * bypass.
  */
 export class RedisWindowStore {
+  /** @param {any} redisClient @param {{ winSize?: number, winTtlMs?: number, prefix?: string }} [opts] */
   constructor(redisClient, { winSize = 5, winTtlMs = 30000, prefix = "firewall:win:" } = {}) {
     this._r = redisClient;
     this._winSize = winSize;
     this._winTtlMs = winTtlMs;
     this._prefix = prefix;
   }
+  /** @param {string} userId */
   _key(userId) { return this._prefix + userId; }
 
+  /** @param {string} userId @param {string} text */
   async add(userId, text) {
     if (!userId) return;
     const k = this._key(userId);
@@ -92,17 +100,19 @@ export class RedisWindowStore {
     await this._r.pExpire(k, this._winTtlMs);
   }
 
+  /** @param {string} userId */
   async concat(userId) {
     if (!userId) return null;
     const items = await this._r.lRange(this._key(userId), 0, -1);
     if (!items || items.length < 2) return null;
     const now = Date.now();
     const fresh = items
-      .map(s => { try { return JSON.parse(s); } catch { return null; } })
-      .filter(e => e && now - e.ts <= this._winTtlMs);
-    return (fresh.length >= 2) ? fresh.map(e => e.text).join(" ") : null;
+      .map((/** @type {string} */ s) => { try { return JSON.parse(s); } catch { return null; } })
+      .filter((/** @type {any} */ e) => e && now - e.ts <= this._winTtlMs);
+    return (fresh.length >= 2) ? fresh.map((/** @type {any} */ e) => e.text).join(" ") : null;
   }
 
+  /** @param {string} [userId] */
   async clear(userId) {
     if (userId) await this._r.del(this._key(userId));
   }

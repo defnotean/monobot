@@ -5,7 +5,7 @@
   "description": "Irene — Discord AI bot with moderation, server setup, AI chat, games, music, and presence API. Twin of Eris.",
   "scripts": {
     "start": "node index.js",
-    "dev": "tsx --watch index.ts",
+    "dev": "node --watch index.js",
     "deploy": "node deploy-commands.js",
     "build": "tsc -p tsconfig.build.json --noEmit",
     "test": "vitest run",

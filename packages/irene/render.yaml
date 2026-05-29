@@ -5,7 +5,7 @@ services:
     name: irene-bot
     runtime: node
     plan: standard
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm run start:irene
     healthCheckPath: /api/health
     envVars:

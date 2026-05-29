@@ -9,9 +9,12 @@ vi.mock("../../ai/dual.js", () => ({
 }));
 
 // executor.js is imported by nvidia.js — stub the global executor so the
-// test doesn't pull the entire tool surface into the process.
+// test doesn't pull the entire tool surface into the process. postDeferralIfNeeded
+// is the destructive-action confirm render bridge nvidia.js now calls on every
+// tool result; stub it as a passthrough so string results flow through unchanged.
 vi.mock("../../ai/executor.js", () => ({
   executeTool: vi.fn(async () => "stubbed"),
+  postDeferralIfNeeded: vi.fn(async (result: unknown) => result),
 }));
 
 // @ts-expect-error — JS module without types

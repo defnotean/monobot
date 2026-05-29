@@ -7,6 +7,7 @@
 // patterns at construction and the input at search time.
 
 class AhoCorasick {
+  /** @param {string[]} patterns */
   constructor(patterns) {
     this._goto = [new Map()];
     this._fail = [0];
@@ -15,6 +16,7 @@ class AhoCorasick {
     this._buildFailLinks();
   }
 
+  /** @param {string} pattern */
   _add(pattern) {
     let node = 0;
     for (const ch of pattern) {
@@ -52,7 +54,10 @@ class AhoCorasick {
     }
   }
 
-  /** Returns true on first match — short-circuit search. */
+  /**
+   * Returns true on first match — short-circuit search.
+   * @param {string} text
+   */
   hasMatch(text) {
     const lower = text.toLowerCase();
     let state = 0;

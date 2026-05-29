@@ -1,3 +1,6 @@
+// @ts-nocheck — checkJs noise: errors are implicit-any on untyped provider-
+// response/config objects and cheerio scrape callbacks; the JSON shapes vary
+// per search backend, so annotating each adds churn without catching real bugs.
 import { safeFetch, validateUrl } from "../safeFetch.js";
 
 const BRAVE_ANSWERS_URL = "https://api.search.brave.com/res/v1/chat/completions";

@@ -1,3 +1,88 @@
+// ─── DESTRUCTIVE-COMMAND GATE (renderer copy) ──────────────────────────────────
+// SOURCE OF TRUTH: packages/eris/utils/pcAgent.js (~40-134). Duplicated here
+// because the renderer is a sandboxed browser context with no `require`. Used to
+// force a hard confirm on destructive plan steps even when auto-approve is on —
+// LLM-authored plans are NOT trusted to be non-destructive.
+const _WS = "[\\s\\u00A0\\u2000-\\u200B\\u202F\\u205F\\u3000\\uFEFF]";
+const _DESTRUCTIVE_PATTERNS = [
+    new RegExp(`\\brm${_WS}+(-[a-z]*[rfRF][a-z]*${_WS}+)?[\\/~]`, "iu"),
+    new RegExp(`\\brm${_WS}+-[a-z]*[rfRF]`, "iu"),
+    new RegExp(`\\b(del|erase)${_WS}+\\/[sfq]`, "iu"),
+    new RegExp(`\\b(rmdir|rd)${_WS}+\\/s`, "iu"),
+    new RegExp(`\\brd${_WS}+(-[a-z]*[rfRF][a-z]*${_WS}+)?[\\/~]`, "iu"),
+    new RegExp(`\\bformat${_WS}+[a-z]:`, "iu"),
+    /\bdiskpart\b/iu,
+    new RegExp(`\\bmkfs(\\.|${_WS})`, "iu"),
+    new RegExp(`\\bdd${_WS}+[^|]*\\bof=\\/dev\\/`, "iu"),
+    /\b:(?:\(\s*\)\s*\{\s*:\|:&\s*\}\s*;\s*:|\s*\(\)\s*\{\s*:\|:)/iu,
+    new RegExp(`\\breg${_WS}+delete\\b`, "iu"),
+    new RegExp(`\\bsc${_WS}+delete\\b`, "iu"),
+    /\bshutdown\b/iu,
+    new RegExp(`\\bnet${_WS}+user\\b.*\\/(add|delete)`, "iu"),
+    new RegExp(`\\btakeown${_WS}+\\/f`, "iu"),
+    /\bicacls\b.*\/deny/iu,
+    /\bRemove-Item\b[^|]*-Recurse[^|]*-Force/iu,
+    new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Recurse[^|]*-Force`, "iu"),
+    new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Force[^|]*-Recurse`, "iu"),
+    /\bStop-Computer\b/iu,
+    /\bRestart-Computer\b/iu,
+    /\bClear-EventLog\b/iu,
+    new RegExp(`\\bpowershell(\\.exe)?\\b[^|]*${_WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
+    new RegExp(`\\bpwsh(\\.exe)?\\b[^|]*${_WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
+    new RegExp(`\\bcmd(\\.exe)?\\b[^|]*${_WS}\\/c\\b`, "iu"),
+];
+const _CHAIN_SPLIT = /(?:&&|\|\||;|\||&|`|\$\()/u;
+function _normalizeForMatch(command) {
+    if (typeof command !== 'string') return '';
+    let s;
+    try { s = command.normalize('NFKC'); } catch { s = command; }
+    return s.replace(/[​-‍⁠﻿­]/g, '');
+}
+function _matchDestructive(normalized) {
+    for (const pat of _DESTRUCTIVE_PATTERNS) { if (pat.test(normalized)) return pat.source; }
+    return null;
+}
+function looksDestructive(command) {
+    if (!command || typeof command !== 'string') return null;
+    const normalized = _normalizeForMatch(command);
+    if (!normalized) return null;
+    const whole = _matchDestructive(normalized);
+    if (whole) return whole;
+    if (_CHAIN_SPLIT.test(normalized)) {
+        for (const part of normalized.split(_CHAIN_SPLIT)) {
+            const trimmed = part.trim();
+            if (!trimmed) continue;
+            const hit = _matchDestructive(trimmed);
+            if (hit) return hit;
+        }
+    }
+    return null;
+}
+
+// Resolve a model-authored relative file path inside currentFolder, rejecting
+// `..` traversal and absolute-path escapes. Returns the contained absolute path,
+// or null if the path would escape the selected folder. Handles both `/` and
+// `\\` separators so Windows hosts are covered too.
+function resolveInFolder(folder, rel) {
+    if (!folder) return null;
+    const r = String(rel || '');
+    // Reject absolute paths (POSIX `/...`, Windows `C:\\...` / `\\\\unc`).
+    if (/^([a-zA-Z]:[\\/]|[\\/])/.test(r)) return null;
+    const sep = folder.includes('\\') ? '\\' : '/';
+    const baseParts = folder.replace(/[\\/]+$/, '').split(/[\\/]/);
+    const parts = baseParts.slice();
+    for (const seg of r.split(/[\\/]/)) {
+        if (seg === '' || seg === '.') continue;
+        if (seg === '..') return null; // never allow climbing out
+        parts.push(seg);
+    }
+    const resolved = parts.join(sep);
+    // Final containment guard: resolved must start with the base + separator.
+    const baseNorm = baseParts.join(sep);
+    if (resolved !== baseNorm && !resolved.startsWith(baseNorm + sep)) return null;
+    return resolved;
+}
+
 // ─── STATE ────────────────────────────────────────────────────────────────────
 let editor = null, monacoReady = false;
 let openTabs = [], activeTab = null;
@@ -10,6 +95,10 @@ let allRepos = [];
 let termHistory = [], termIdx = -1;
 
 // ─── MONACO ────────────────────────────────────────────────────────────────────
+// Only bootstrap Monaco in a real browser. When this file is loaded under a
+// CommonJS test runner (to unit-test the pure guard helpers above) there is no
+// DOM and no AMD `require`, so skip the editor init entirely.
+if (typeof document !== 'undefined' && typeof require !== 'undefined' && require.config) {
 require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } });
 require(['vs/editor/editor.main'], () => {
     monaco.editor.defineTheme('irene', {
@@ -45,6 +134,13 @@ require(['vs/editor/editor.main'], () => {
         if (t && !t.dirty) { t.dirty = true; renderTabs(); }
     });
 });
+}
+
+// Exported for unit tests when loaded under CommonJS (no DOM). In the browser
+// `module` is undefined so this is a no-op.
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { looksDestructive, resolveInFolder };
+}
 
 // ─── MODE ─────────────────────────────────────────────────────────────────────
 function setMode(mode) {
@@ -245,9 +341,23 @@ async function executePlan(planWrap, plan, originalMsg, history) {
             output = r.ok ? r.reply : `Error: ${r.error}`;
             if (r.ok) stepLogs.push(`Searched the web for: ${step.title}`);
         } else if (step.type === 'terminal') {
-            const r = await agent.runTerminal({ command: step.desc, cwd: currentFolder });
-            output = r.output || '(done)';
-            stepLogs.push(`Executed: ${step.desc}`);
+            // LLM-authored plan steps are NOT trusted. Force a hard confirm on
+            // destructive commands even when auto-approve is on; pass confirm
+            // through to the host gate only if the owner accepts.
+            const destructive = looksDestructive(step.desc);
+            let confirmed = false;
+            if (destructive) {
+                confirmed = window.confirm(`This plan step looks DESTRUCTIVE (matched /${destructive}/):\n\n${step.desc}\n\nRun it anyway?`);
+                if (!confirmed) {
+                    output = `(blocked: destructive command, not confirmed)`;
+                    stepLogs.push(`⛔ Blocked destructive step: ${step.desc}`);
+                }
+            }
+            if (!destructive || confirmed) {
+                const r = await agent.runTerminal({ command: step.desc, cwd: currentFolder, confirm: confirmed });
+                output = r.output || '(done)';
+                stepLogs.push(`Executed: ${step.desc}`);
+            }
         } else {
             // Code/analysis step
             const workspacePrompt = `You have full autonomous capability. Your working directory is ${currentFolder || 'unknown'}. 
@@ -270,13 +380,24 @@ the code content inside
                 const regex = /\[WRITE_FILE_START:\s*(.+?)\]([\s\S]*?)\[WRITE_FILE_END\]/g;
                 let match;
                 while ((match = regex.exec(output)) !== null) {
-                    const filePath = currentFolder ? `${currentFolder}\\${match[1].trim()}` : match[1].trim();
+                    const rel = match[1].trim();
                     const content = match[2].trim();
+                    // Constrain LLM-authored writes to the selected folder subtree:
+                    // reject `..` traversal and absolute-path escapes.
+                    if (!currentFolder) {
+                        stepLogs.push(`❌ Refused to write ${rel}: no working folder selected`);
+                        continue;
+                    }
+                    const filePath = resolveInFolder(currentFolder, rel);
+                    if (!filePath) {
+                        stepLogs.push(`⛔ Refused to write outside working folder: ${rel}`);
+                        continue;
+                    }
                     const wr = await agent.writeFile({ filePath, content });
                     if (wr.ok) {
-                        stepLogs.push(`✅ Edited file: ${match[1].trim()}`);
+                        stepLogs.push(`✅ Edited file: ${rel}`);
                     } else {
-                        stepLogs.push(`❌ Failed to edit: ${match[1].trim()} (${wr.error})`);
+                        stepLogs.push(`❌ Failed to edit: ${rel} (${wr.error})`);
                     }
                 }
                 output = output.replace(regex, '*(Automatically edited files)*');
@@ -640,7 +761,19 @@ async function termKey(e) {
     const cmd = inp.value.trim(); if (!cmd) return;
     inp.value = ''; termHistory.unshift(cmd); termIdx = -1;
     termLog(`PS › ${cmd}`, 'var(--red)');
-    const r = await agent.runTerminal({ command: cmd, cwd: currentFolder });
+    // The host run-terminal gate blocks destructive matches unless confirm is
+    // passed. The owner typed this command directly, so offer a hard confirm
+    // override (mirrors the plan-step path) instead of silently refusing.
+    const destructive = looksDestructive(cmd);
+    let confirmed = false;
+    if (destructive) {
+        confirmed = window.confirm(`This command looks DESTRUCTIVE (matched /${destructive}/):\n\n${cmd}\n\nRun it anyway?`);
+        if (!confirmed) {
+            termLog(`⛔ Blocked destructive command (not confirmed)`, 'var(--red)');
+            return;
+        }
+    }
+    const r = await agent.runTerminal({ command: cmd, cwd: currentFolder, confirm: confirmed });
     termLog(r.output || '(no output)');
 }
 
@@ -685,12 +818,16 @@ async function saveKey(key) {
 }
 
 // ─── AGENT EVENTS ─────────────────────────────────────────────────────────────
+// Browser-only bootstrap: `agent` is injected by preload and is absent under a
+// CommonJS test runner, so register listeners only when running in the page.
+if (typeof agent !== 'undefined') {
 agent.onCommandStart(d => {
     addToolCall('⚡', `PC command: ${String(d.command||d).slice(0,60)}`, d.command || d, false);
 });
 agent.onCommandDone(d => {
     termLog(`[agent] ${d.count} command(s) run`, 'var(--text3)');
 });
+}
 
 async function githubCliConnect() {
     addToolCall('🐙', 'Connecting via GitHub CLI…', 'Running `gh auth token`', false);
@@ -709,13 +846,14 @@ async function githubCliConnect() {
 }
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
-(async () => {
+// Browser-only bootstrap (see note above) — skip when there is no `agent`.
+if (typeof agent !== 'undefined') (async () => {
     // Restore GitHub session if saved
     const gh = await agent.githubLoadSaved();
     if (gh.ok) {
         setGitHubUser(gh);
     }
-    
+
     // Auto-connect to database if we have tokens saved
     const conf = await agent.getConfig();
     if (conf.ok && conf.config.SUPABASE_URL && conf.config.SUPABASE_KEY) {

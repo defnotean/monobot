@@ -5,6 +5,7 @@
 
 import * as db from "../../database.js";
 import { resolveMember } from "../../utils/discord.js";
+import { log } from "../../utils/logger.js";
 
 const HANDLED = new Set([
   "coinflip_bet", "dice_roll_bet", "slots_spin", "blackjack_start",
@@ -84,7 +85,7 @@ export async function execute(toolName, input, message, _context) {
         try {
           newBalance = await db.updateBalance(message.author.id, amount * 2, "gamble_win", `coinflip:${choice}`);
         } catch (err) {
-          console.error(`[coinflip_bet] win credit failed for ${message.author.id}:`, err);
+          log(`[coinflip_bet] win credit failed for ${message.author.id}: ${err?.message || err}`);
         }
       }
       await db.recordGameResult(message.author.id, "coinflip", won, amount, won ? amount * 2 : 0);
@@ -134,7 +135,7 @@ export async function execute(toolName, input, message, _context) {
         try {
           newBalance = await db.updateBalance(message.author.id, amount * 5, "gamble_win", `dice:${guess}`);
         } catch (err) {
-          console.error(`[dice_roll_bet] win credit failed for ${message.author.id}:`, err);
+          log(`[dice_roll_bet] win credit failed for ${message.author.id}: ${err?.message || err}`);
         }
       }
       await db.recordGameResult(message.author.id, "dice", won, amount, won ? amount * 5 : 0);
@@ -179,7 +180,7 @@ export async function execute(toolName, input, message, _context) {
         try {
           newBalance = await db.updateBalance(message.author.id, credit, won ? "gamble_win" : "gamble_loss", `slots:${label}`);
         } catch (err) {
-          console.error(`[slots_spin] credit failed for ${message.author.id}:`, err);
+          log(`[slots_spin] credit failed for ${message.author.id}: ${err?.message || err}`);
         }
       }
       await db.recordGameResult(message.author.id, "slots", won, amount, won ? amount * multiplier : 0);
@@ -195,10 +196,13 @@ export async function execute(toolName, input, message, _context) {
       const parsed = parseBet(input.amount);
       if (parsed.error) return parsed.error;
       const amount = parsed.amount;
-      const econ = await db.getBalance(message.author.id);
-      if (econ.balance < amount) return `you only have ${econ.balance} coins`;
       const existing = db.getActiveGame(message.channel.id, message.author.id, "blackjack");
       if (existing) return "you already have an active blackjack game \u2014 say 'hit' or 'stand'";
+      // Escrow the stake at hand start so a player can't drain their wallet
+      // mid-hand to dodge the loss. Settlement (win/push/double) credits back
+      // the appropriate amount; on loss the stake is already gone.
+      const debit = await db.tryDeductBalance(message.author.id, amount, "gamble_blackjack_stake", "blackjack");
+      if (!debit.ok) return `you only have ${debit.balance ?? 0} coins`;
       const { createDeck, handValue, isBlackjack, randomQuip } = await import("../gambling.js");
       const { blackjackDealEmbed, blackjackResultEmbed } = await import("../gameVisuals.js");
       const deck = createDeck();
@@ -207,7 +211,8 @@ export async function execute(toolName, input, message, _context) {
       // Check for natural blackjack
       if (isBlackjack(playerHand)) {
         const payout = Math.floor(amount * 1.5);
-        const newBalance = await db.updateBalance(message.author.id, payout, "gamble_win", "blackjack:natural");
+        // Stake already escrowed \u2014 refund it AND add the 1.5x winnings.
+        const newBalance = await db.updateBalance(message.author.id, amount + payout, "gamble_win", "blackjack:natural");
         await db.recordGameResult(message.author.id, "blackjack", true, amount, amount + payout);
         const { animateEmbed } = await import("../gameVisuals.js");
         const { EmbedBuilder } = await import("discord.js");
@@ -237,8 +242,10 @@ export async function execute(toolName, input, message, _context) {
         const { deck, playerHand, dealerHand } = game.gameState;
         let stake = game.stake;
         if (action === "double") {
-          const econ = await db.getBalance(message.author.id);
-          if (econ.balance < stake) return `can't double \u2014 you only have ${econ.balance} coins`;
+          // Escrow the additional stake for the double-down. If the player
+          // can't cover it, reject the double (the original game stays open).
+          const extra = await db.tryDeductBalance(message.author.id, game.stake, "gamble_blackjack_stake", "blackjack:double");
+          if (!extra.ok) return `can't double \u2014 you only have ${extra.balance ?? 0} coins`;
           stake *= 2;
           playerHand.push(deck.pop());
         } else if (action === "hit") {
@@ -253,9 +260,10 @@ export async function execute(toolName, input, message, _context) {
         db.deleteActiveGame(message.channel.id, message.author.id, "blackjack");
         const playerValue = handValue(playerHand);
         if (playerValue > 21) {
-          const newBalance = await db.updateBalance(message.author.id, -stake, "gamble_loss", "blackjack:bust");
+          // Stake already escrowed at start/double — nothing more to debit.
+          const econ = await db.getBalance(message.author.id);
           await db.recordGameResult(message.author.id, "blackjack", false, stake, 0);
-          await message.channel.send({ embeds: [blackjackResultEmbed(playerHand, dealerHand, playerValue, handValue(dealerHand), "BUST!", -stake, stake, newBalance)] });
+          await message.channel.send({ embeds: [blackjackResultEmbed(playerHand, dealerHand, playerValue, handValue(dealerHand), "BUST!", -stake, stake, econ.balance)] });
           return await randomQuip({ won: false, game: "blackjack", amount: stake });
         }
         while (handValue(dealerHand) < 17) dealerHand.push(deck.pop());
@@ -265,9 +273,14 @@ export async function execute(toolName, input, message, _context) {
         else if (playerValue > dealerValue) { resultText = "You Win!"; won = true; }
         else if (playerValue < dealerValue) { resultText = "Dealer Wins"; won = false; }
         else { resultText = "Push (Tie)"; won = null; }
-        const payout = won === true ? stake : won === false ? -stake : 0;
-        const newBalance = await db.updateBalance(message.author.id, payout, won ? "gamble_win" : won === false ? "gamble_loss" : "gamble_push", `blackjack:${resultText}`);
+        // Stake already escrowed: on win credit 2× (refund + winnings), on push
+        // refund the stake, on loss the stake stays gone (no further debit).
+        const credit = won === true ? stake * 2 : won === null ? stake : 0;
+        const newBalance = credit > 0
+          ? await db.updateBalance(message.author.id, credit, won ? "gamble_win" : "gamble_push", `blackjack:${resultText}`)
+          : (await db.getBalance(message.author.id)).balance;
         if (won !== null) await db.recordGameResult(message.author.id, "blackjack", won, stake, won ? stake * 2 : 0);
+        const payout = won === true ? stake : won === false ? -stake : 0;
         await message.channel.send({ embeds: [blackjackResultEmbed(playerHand, dealerHand, playerValue, dealerValue, resultText, payout, stake, newBalance)] });
         return await randomQuip({ won: !!won, game: "blackjack", amount: stake });
       });
@@ -352,7 +365,7 @@ export async function execute(toolName, input, message, _context) {
         try {
           newBalance = await db.updateBalance(message.author.id, stake + winnings, "gamble_win", "russian_roulette:survived");
         } catch (err) {
-          console.error(`[russian_roulette] win credit failed for ${message.author.id}:`, err);
+          log(`[russian_roulette] win credit failed for ${message.author.id}: ${err?.message || err}`);
         }
         await db.recordGameResult(message.author.id, "russian_roulette", true, stake, stake + winnings);
         const { embed: rrLiveEmbed, row: rrLiveRow } = rouletteEmbed(true, stake, winnings, newBalance);
@@ -411,7 +424,7 @@ export async function execute(toolName, input, message, _context) {
           try {
             newBalance = await db.updateBalance(message.author.id, credit, result === "win" ? "gamble_win" : "gamble_push", `rps:${choice}`);
           } catch (err) {
-            console.error(`[rps_play] credit failed for ${message.author.id}:`, err);
+            log(`[rps_play] credit failed for ${message.author.id}: ${err?.message || err}`);
           }
         }
         if (result !== "tie") {

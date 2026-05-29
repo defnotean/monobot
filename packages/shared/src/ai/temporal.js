@@ -16,6 +16,7 @@ function dayKey(d = new Date()) {
 
 // ─── Time of day ────────────────────────────────────────────────────────────
 
+/** @param {number} hour */
 export function getTimeOfDay(hour) {
   if (hour < 5)  return { label: "very late / early morning", vibe: "tired, chill, maybe a bit loopy. shorter responses, sleepy energy" };
   if (hour < 10) return { label: "morning", vibe: "waking up, slowly getting energy" };
@@ -38,12 +39,14 @@ const DAY_VIBES = [
   { name: "Saturday",  vibe: "saturday vibes — relaxed, no obligations, chat is usually more casual and meandering" },
 ];
 
+/** @param {number} dayIndex */
 export function getDayVibe(dayIndex) {
   return DAY_VIBES[dayIndex] ?? DAY_VIBES[0];
 }
 
 // ─── Season (northern hemisphere — matches most user base) ──────────────────
 
+/** @param {number} month */
 export function getSeason(month) {
   // month is 0-indexed (Jan = 0)
   if (month === 11 || month <= 1) return { name: "winter", vibe: "cold months — cozy indoor energy, holidays close by if december" };
@@ -54,6 +57,7 @@ export function getSeason(month) {
 
 // ─── Notable dates (keep the list short — too many ruins the effect) ────────
 
+/** @param {Date} d */
 function getNotableDate(d) {
   const m = d.getMonth();
   const day = d.getDate();
@@ -71,6 +75,7 @@ function getNotableDate(d) {
 /**
  * Update the last-seen-day tracking for a user and return true if this is
  * their first message today (across any server).
+ * @param {string} userId
  */
 export function markDailyGreeting(userId) {
   const today = dayKey();
@@ -96,7 +101,7 @@ export function markDailyGreeting(userId) {
  * @param {string} [opts.userId]      If provided, includes first-message-today hint.
  * @param {Date}   [opts.now]         Override current time (for tests).
  * @param {string} [opts.displayName] Optional username to make the greeting hint specific.
- * @param {Array}  [opts.dreams]      Optional [{content}] from overnight; first item is surfaced once.
+ * @param {Array<any>}  [opts.dreams]      Optional [{content}] from overnight; first item is surfaced once.
  */
 export function buildTemporalContext(opts = {}) {
   const { userId, now, displayName } = opts;

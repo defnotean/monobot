@@ -25,6 +25,7 @@ import {
 import { LRUCache } from "@defnotean/shared/LRUCache";
 import { enforceMessage } from "../ai/rulesEnforcer.js";
 import { recordMessage as recordEvidenceMessage } from "../utils/messageEvidence.js";
+import { checkBudget, incrementBudget, shouldNotify } from "../utils/aiBudget.js";
 
 import {
   processing, _repliedMessages, _twinExchanges,
@@ -336,6 +337,29 @@ export async function execute(message) {
     isAdmin = memberIsAdmin(message.member);
   }
 
+  // ─── AI daily budget ceiling — OPT-IN, default-OFF ────────────────────
+  // Placed AFTER the addressing + cross-instance-dedup checks above (and the
+  // DM-context resolution) so it only ever fires on a message actually
+  // directed at us — mirrors where Eris sits its budget gate (after its own
+  // addressing return). If an operator set a per-user or per-guild daily cap
+  // (AI_DAILY_USER_CAP / AI_DAILY_GUILD_CAP) and it's been hit, drop the
+  // message so a chatty user or small raid can't run up unbounded
+  // Gemini/Voyage spend. When no cap is configured this is a pure
+  // pass-through (early return inside checkBudget) — the green baseline is
+  // unchanged. Owner is exempt. The counter is bumped only just before the AI
+  // call actually fires (see incrementBudget below), so dropped messages
+  // never count against the cap. The one-time-per-scope-per-UTC-day notice now
+  // only lands as a reply to a message that was genuinely addressed to us.
+  if (message.author.id !== config.ownerId) {
+    const budget = checkBudget({ userId: message.author.id, guildId: message.guild?.id });
+    if (budget.exceeded) {
+      if (shouldNotify(budget.scope, budget.scope === "guild" ? message.guild?.id : message.author.id)) {
+        await message.reply("i've hit my daily chat limit, talk to me again tomorrow 😴").catch(() => {});
+      }
+      return;
+    }
+  }
+
   // Per-user queue — if already processing a message from this user, queue this one
   const userKey = isDM ? `dm-${message.author.id}` : `${message.guild.id}-${message.author.id}`;
   if (_processingUsers.has(userKey)) {
@@ -523,8 +547,18 @@ export async function execute(message) {
 
     // Smart prompt budget — trim core personality to make room for runtime context
     systemPromptWithMemory = applyPromptBudget(systemPromptWithMemory);
+    // Append the Tier-2 tool catalog AFTER budgeting so the full catalog (often
+    // ~15k chars, larger than the budget itself) survives intact — the model
+    // dispatches Tier-2 tools by name, so it must see every tool's name here.
+    if (ctxResult.tier2Catalog) systemPromptWithMemory += ctxResult.tier2Catalog;
 
     // ─── 4. AI CALL (dual.js → runGeminiChat — also stage 5 tool dispatch) ─
+    // Count this message against the daily AI budget — we're committed to an
+    // AI call now (passed gating, queue, empty-content, and client checks).
+    // No-op when no cap is configured. Owner exempt, matching the gate above.
+    if (message.author.id !== config.ownerId) {
+      incrementBudget({ userId: message.author.id, guildId: message.guild?.id });
+    }
     const { runGeminiChat } = await import("../ai/providers/index.js");
     let geminiResult;
     const t0Ai = Date.now();

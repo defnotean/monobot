@@ -1,12 +1,104 @@
 // ─── Moderation Executor ────────────────────────────────────────────────────
 
-import { EmbedBuilder, PermissionFlagsBits } from "discord.js";
-import { addWarning, getWarnings, deleteWarning, clearWarnings, logAudit, removeTempBan, getGuildSettings } from "../../database.js";
+import { EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { addWarning, getWarnings, deleteWarning, clearWarnings, logAudit, removeTempBan, getGuildSettings, getSupabase } from "../../database.js";
 import { sendModLog } from "../../utils/logger.js";
 import { modEmbed, logEvent, buildUndoRow } from "../../utils/embeds.js";
 import { log } from "../../utils/logger.js";
 import { getEscalation } from "../../database.js";
 import { firePunishSignal } from "../../utils/twinPunish.js";
+
+// ─── Durable moderation audit trail ─────────────────────────────────────────
+//
+// In addition to the existing in-memory ring (database.js#logAudit, 100 entries
+// per guild, lost on restart) and the sendModLog channel embed, every mod
+// action is appended to a durable `irene_mod_audit` Supabase table so it
+// survives restarts and is queryable by (guild_id, ts). The original
+// natural-language instruction is recorded for AI-initiated actions so
+// "ban the spammer" is auditable against who it resolved to.
+//
+// Best-effort, fire-and-forget: the in-memory ring write (logAudit) still runs
+// inline as before; the Supabase append is a SECOND sink that never blocks or
+// fails a moderation action. If Supabase is unconfigured or the table is
+// missing we degrade to the ring (already written) and log once.
+const AUDIT_TABLE = "irene_mod_audit";
+let _auditDegraded = false; // table/columns missing → stop hammering, ring only
+
+// Schema-missing detection mirrors music/settingsStore.js: 42P01 undefined_table,
+// 42703 undefined_column, PGRST205 relation-not-in-schema-cache.
+function _auditSchemaMissing(error) {
+  if (!error) return false;
+  const code = error.code || "";
+  if (code === "42P01" || code === "42703" || code === "PGRST205") return true;
+  const msg = (error.message || "").toLowerCase();
+  return msg.includes("does not exist") || msg.includes("could not find the table");
+}
+
+// Append one audit row. Never throws — all failures are caught and logged so
+// the caller's moderation action is never blocked by an audit-write problem.
+// `entry` = { guildId, actorId, targetId, action, reason, source, instruction }.
+export function writeModAudit(entry) {
+  let supabase;
+  try {
+    // try/catch also guards test mocks that omit the getSupabase export —
+    // calling an undefined import throws a TypeError, which we swallow to a no-op.
+    supabase = getSupabase();
+  } catch {
+    return;
+  }
+  if (!supabase || _auditDegraded || !entry?.guildId) return;
+
+  const row = {
+    guild_id: String(entry.guildId),
+    actor_id: entry.actorId != null ? String(entry.actorId) : null,
+    target_id: entry.targetId != null ? String(entry.targetId) : null,
+    action: String(entry.action || "unknown"),
+    reason: entry.reason != null ? String(entry.reason).slice(0, 1024) : null,
+    source: String(entry.source || "ai-tool"),
+    instruction: entry.instruction != null ? String(entry.instruction).slice(0, 2000) : null,
+    ts: new Date().toISOString(),
+  };
+
+  Promise.resolve()
+    .then(() => supabase.from(AUDIT_TABLE).insert(row))
+    .then(({ error } = {}) => {
+      if (error) {
+        if (_auditSchemaMissing(error)) {
+          if (!_auditDegraded) {
+            _auditDegraded = true;
+            log(`[ModAudit] Table "${AUDIT_TABLE}" missing — durable audit disabled, using in-memory ring only`);
+          }
+        } else {
+          log(`[ModAudit] Write failed for ${row.guild_id}/${row.action}: ${error.message}`);
+        }
+      }
+    })
+    .catch((err) => log(`[ModAudit] Write error for ${row.guild_id}/${row.action}: ${err?.message || err}`));
+}
+
+// Reset degraded state — used by tests to isolate cases.
+export function _resetAuditForTest() {
+  _auditDegraded = false;
+}
+
+// Resolve the durable-audit `source` from the executor ctx. Slash commands and
+// scheduled/presence-triggered calls don't set aiInitiated, so they're treated
+// as the slash-equivalent path ('slash'). The AI tool loop sets aiInitiated;
+// a confirmed replay also sets confirmedAction.
+function _auditSource(ctx) {
+  if (ctx?.confirmedAction) return "ai-tool-confirmed";
+  if (ctx?.aiInitiated) return "ai-tool";
+  return "slash";
+}
+
+// The original natural-language instruction lives on message.content when the
+// action came from the AI tool loop. Slash commands have no meaningful content
+// (or it's the raw command text), so only surface it for AI-initiated paths.
+function _auditInstruction(message, ctx) {
+  if (!ctx?.aiInitiated && !ctx?.confirmedAction) return null;
+  const c = message?.content;
+  return typeof c === "string" && c.trim() ? c : null;
+}
 
 // Prefix audit-log reason with the invoking moderator's tag so Discord's
 // own audit log attributes the action to the right person (otherwise it
@@ -34,6 +126,188 @@ const DURATION_MS = {
   "1d": 86_400_000, "3d": 259_200_000, "7d": 604_800_000,
 };
 
+// ─── Destructive-action confirmation store ──────────────────────────────────
+//
+// AI-initiated (LLM tool-call) destructive actions — ban / kick / tempban, and
+// purges affecting more than PURGE_CONFIRM_THRESHOLD messages — are NOT
+// executed inline. A single hallucinated tool call shouldn't be able to ban a
+// member or wipe a channel. Instead we stash the resolved action under a short
+// random token and post a Confirm/Cancel button row; a permitted human must
+// click Confirm (perms + hierarchy are re-verified at click time) before it
+// commits. Cancel or TTL-expiry discards it.
+//
+// Slash mod commands (explicit human intent) bypass this entirely — they run
+// their own handlers in commands/moderation/*.js and never reach this
+// executor. The gate keys off `ctx.aiInitiated`; see execute() below.
+export const PENDING_TTL_MS = 120_000; // 2 min — long enough to read + click
+export const PENDING_MAX = 100;        // hard cap so a token flood can't grow unbounded
+export const PURGE_CONFIRM_THRESHOLD = 50; // purges over this need confirmation
+
+const _pendingActions = new Map(); // token → { action, input, guildId, channelId, requestedBy, requiredPerm, targetId, summary, createdAt }
+
+function _newToken() {
+  // 8 hex chars — collision-safe enough for a 100-entry map and keeps the
+  // modconfirm:<token> customId well under Discord's 100-char limit.
+  return Math.random().toString(16).slice(2, 10) + Math.random().toString(16).slice(2, 6);
+}
+
+function _sweepPending(now = Date.now()) {
+  for (const [token, p] of _pendingActions) {
+    if (now - p.createdAt > PENDING_TTL_MS) _pendingActions.delete(token);
+  }
+}
+
+// Stash a resolved destructive action and return its token. Sweeps expired
+// entries first, then evicts the oldest if still at cap.
+export function createPendingAction(pending) {
+  _sweepPending();
+  if (_pendingActions.size >= PENDING_MAX) {
+    const oldest = _pendingActions.keys().next().value;
+    if (oldest !== undefined) _pendingActions.delete(oldest);
+  }
+  const token = _newToken();
+  _pendingActions.set(token, { ...pending, createdAt: Date.now() });
+  return token;
+}
+
+// Read without consuming — returns null if missing or TTL-expired.
+export function getPendingAction(token) {
+  const p = _pendingActions.get(token);
+  if (!p) return null;
+  if (Date.now() - p.createdAt > PENDING_TTL_MS) {
+    _pendingActions.delete(token);
+    return null;
+  }
+  return p;
+}
+
+// Read + delete atomically — used by Confirm/Cancel so a double-click can't
+// commit twice.
+export function consumePendingAction(token) {
+  const p = getPendingAction(token);
+  if (p) _pendingActions.delete(token);
+  return p;
+}
+
+// Build the Confirm/Cancel button row for a pending token. Mirrors the
+// modundo:<...> customId convention (handled in events/interactionCreate.js).
+export function buildConfirmRow(token) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`modconfirm:${token}`).setLabel("Confirm").setEmoji("✅").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`modcancel:${token}`).setLabel("Cancel").setEmoji("✖️").setStyle(ButtonStyle.Secondary),
+  );
+}
+
+// Commit a previously-confirmed action. `member` is the human who clicked
+// Confirm; their perms + hierarchy are re-verified here (NOT trusting the
+// original requester). `guild` / `clickedBy` come from the interaction.
+// Returns a human-readable result string. Pure-ish: all Discord/DB effects go
+// through the passed-in `deps` so it's unit-testable.
+export async function commitPendingAction(pending, { guild, member, clickedBy, deps }) {
+  const { findMember, checkHierarchy } = deps;
+  if (!_memberHasPerm(member, pending.requiredPerm, guild)) {
+    return { ok: false, message: "you don't have permission to confirm this action" };
+  }
+
+  const reason = pending.input?.reason || "No reason";
+
+  if (pending.action === "ban_user" || pending.action === "tempban") {
+    const target = findMember(guild, pending.input.username);
+    if (!target) return { ok: false, message: `Couldn't find user "${pending.input.username}" anymore` };
+    if (target.id === guild.client?.user?.id) return { ok: false, message: "I can't ban myself lol" };
+    const hierErr = checkHierarchy(member, target, guild);
+    if (hierErr) return { ok: false, message: hierErr };
+
+    if (pending.action === "tempban") {
+      deps.addTempBan(guild.id, target.id, target.user.tag, pending.durationMs, reason, clickedBy.id);
+      await target.ban({ reason: _attributedReason(clickedBy, `[TEMP ${pending.durationStr}] ${reason}`) });
+      deps.firePunishSignal?.({ guildId: guild.id, userId: target.id, action: "ban", reason }).catch(() => {});
+      // Durable audit: actor is the human who CLICKED Confirm; record the
+      // original AI instruction stashed at defer time.
+      writeModAudit({
+        guildId: guild.id, actorId: clickedBy.id, targetId: target.id,
+        action: "tempban", reason: `[${pending.durationStr}] ${reason}`,
+        source: "ai-tool-confirmed", instruction: pending.instruction || null,
+      });
+      return { ok: true, message: `Temp-banned ${target.user.tag} for ${pending.durationStr} — reason: ${reason}.` };
+    }
+
+    await target.ban({ deleteMessageDays: pending.input.delete_messages || 0, reason: _attributedReason(clickedBy, reason) });
+    deps.firePunishSignal?.({ guildId: guild.id, userId: target.id, action: "ban", reason }).catch(() => {});
+    // Mirror the inline ban_user mod-log + undo row so a button-confirmed ban
+    // is indistinguishable from any other ban (actor is the human who clicked).
+    await sendModLog(guild, {
+      embed: logEvent({
+        kind: "ban",
+        target: target.user,
+        actor: clickedBy,
+        reason,
+        meta: {
+          "Nickname": target.nickname,
+          "Joined": target.joinedTimestamp ? `<t:${Math.floor(target.joinedTimestamp / 1000)}:R>` : null,
+          "Account Created": target.user.createdTimestamp ? `<t:${Math.floor(target.user.createdTimestamp / 1000)}:R>` : null,
+          "Delete Messages": pending.input.delete_messages ? `${pending.input.delete_messages}d` : null,
+          "Prior Warnings": String(getWarnings(guild.id, target.id).length),
+          "Invoked Via": "AI tool (confirmed)",
+        },
+      }),
+      components: [buildUndoRow("ban", target.id)].filter(Boolean),
+    });
+    deps.logAudit(guild.id, "ban", clickedBy.id, pending.input.username);
+    // Durable audit: actor is the confirming human; include the original
+    // natural-language instruction so "ban the spammer" is traceable.
+    writeModAudit({
+      guildId: guild.id, actorId: clickedBy.id, targetId: target.id,
+      action: "ban", reason, source: "ai-tool-confirmed", instruction: pending.instruction || null,
+    });
+    return { ok: true, message: `Banned ${target.user.tag}. Reason: ${reason}` };
+  }
+
+  if (pending.action === "kick_user") {
+    const target = findMember(guild, pending.input.username);
+    if (!target) return { ok: false, message: `Couldn't find user "${pending.input.username}" anymore` };
+    const hierErr = checkHierarchy(member, target, guild);
+    if (hierErr) return { ok: false, message: hierErr };
+    await target.kick(_attributedReason(clickedBy, reason));
+    deps.firePunishSignal?.({ guildId: guild.id, userId: target.id, action: "kick", reason }).catch(() => {});
+    // Mirror the inline kick_user mod-log so a button-confirmed kick is logged
+    // identically (kick uses a bare embed payload, no undo row — same as inline).
+    await sendModLog(guild, logEvent({
+      kind: "kick",
+      target: target.user,
+      actor: clickedBy,
+      reason,
+      meta: {
+        "Nickname": target.nickname,
+        "Joined": target.joinedTimestamp ? `<t:${Math.floor(target.joinedTimestamp / 1000)}:R>` : null,
+        "Account Created": target.user.createdTimestamp ? `<t:${Math.floor(target.user.createdTimestamp / 1000)}:R>` : null,
+        "Prior Warnings": String(getWarnings(guild.id, target.id).length),
+        "Invoked Via": "AI tool (confirmed)",
+      },
+    }));
+    deps.logAudit(guild.id, "kick", clickedBy.id, pending.input.username);
+    writeModAudit({
+      guildId: guild.id, actorId: clickedBy.id, targetId: target.id,
+      action: "kick", reason, source: "ai-tool-confirmed", instruction: pending.instruction || null,
+    });
+    return { ok: true, message: `Kicked ${target.user.tag}. Reason: ${reason}` };
+  }
+
+  if (pending.action === "purge_messages") {
+    // Replay the purge through the normal executor case now that a human has
+    // confirmed. We rebuild a minimal message from the click context and set
+    // `confirmedAction` so the purge case skips the confirm gate. The stored
+    // `message` is reused for its channel/client; author becomes the clicker
+    // so audit attribution is correct.
+    const replayMsg = { ...pending.message, member, author: clickedBy };
+    const replayCtx = { ...pending.ctx, confirmedAction: true };
+    const result = await execute("purge_messages", pending.input, replayMsg, replayCtx);
+    return { ok: true, message: String(result) };
+  }
+
+  return { ok: false, message: `unknown pending action: ${pending.action}` };
+}
+
 const HANDLED = new Set([
   "ban_user", "kick_user", "warn_user", "timeout_user",
   "untimeout_user", "unban_user", "unmute_user",
@@ -41,6 +315,46 @@ const HANDLED = new Set([
   "lockdown_server", "unlock_server", "purge_messages",
   "find_message", "snipe", "editsnipe", "tempban",
 ]);
+
+// A destructive AI-initiated action that should be deferred to a human
+// Confirm click. Returns the pending-confirm result object, or null if this
+// call should execute immediately (not AI-initiated, already confirmed, or a
+// purge under the threshold).
+function _maybeDeferToConfirm(toolName, input, message, ctx, opts = {}) {
+  // Slash mod commands never reach this executor; only the AI tool path sets
+  // ctx.aiInitiated. If the dispatch hasn't been wired to set the flag yet
+  // (see openConcerns), the gate stays off and behavior is unchanged.
+  if (!ctx?.aiInitiated) return null;
+  // A confirmed replay (human already clicked Confirm) must not re-defer.
+  if (ctx?.confirmedAction) return null;
+
+  const requiredPerm = opts.requiredPerm;
+  const summary = opts.summary;
+  const token = createPendingAction({
+    action: toolName,
+    input,
+    guildId: ctx.guild?.id,
+    channelId: message?.channel?.id,
+    requestedBy: message?.author?.id,
+    requiredPerm,
+    durationStr: opts.durationStr,
+    durationMs: opts.durationMs,
+    targetId: opts.targetId,
+    summary,
+    // Capture the original natural-language instruction NOW (e.g. "ban the
+    // spammer") so the durable audit on confirm can record what was asked
+    // against who it resolved to and who confirmed it.
+    instruction: _auditInstruction(message, ctx),
+    // Stash the live message/ctx so a confirmed purge can be replayed.
+    message,
+    ctx,
+  });
+  return {
+    content: `⚠️ ${summary} — this was requested by the AI. A moderator must confirm.`,
+    components: [buildConfirmRow(token)],
+    _pendingToken: token, // surfaced for tests / callers; harmless in a Discord payload
+  };
+}
 
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
@@ -59,6 +373,13 @@ export async function execute(toolName, input, message, ctx) {
       if (member.id === message.client.user.id) return "I can't ban myself lol";
       const banHierErr = checkHierarchy(message.member, member, guild);
       if (banHierErr) return banHierErr;
+      // AI-initiated bans defer to a human Confirm click (see store above).
+      const banDefer = _maybeDeferToConfirm("ban_user", input, message, ctx, {
+        requiredPerm: PermissionFlagsBits.BanMembers,
+        targetId: member.id,
+        summary: `Ban **${member.user.tag}** (reason: ${input.reason || "No reason"})`,
+      });
+      if (banDefer) return banDefer;
       const reason = input.reason || "No reason";
       await member.ban({ deleteMessageDays: input.delete_messages || 0, reason: _attributedReason(message.author, reason) });
       // Fire cross-bot punish signal — Eris will apply economy consequences
@@ -82,6 +403,10 @@ export async function execute(toolName, input, message, ctx) {
         components: [buildUndoRow("ban", member.id)].filter(Boolean),
       });
       logAudit(guild.id, "ban", message.author.id, input.username);
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId: member.id,
+        action: "ban", reason, source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+      });
       return `Banned ${member.user.tag}. Reason: ${reason}`;
     }
 
@@ -92,6 +417,13 @@ export async function execute(toolName, input, message, ctx) {
       if (!member) return `Couldn't find user "${input.username}"`;
       const kickHierErr = checkHierarchy(message.member, member, guild);
       if (kickHierErr) return kickHierErr;
+      // AI-initiated kicks defer to a human Confirm click.
+      const kickDefer = _maybeDeferToConfirm("kick_user", input, message, ctx, {
+        requiredPerm: PermissionFlagsBits.KickMembers,
+        targetId: member.id,
+        summary: `Kick **${member.user.tag}** (reason: ${input.reason || "No reason"})`,
+      });
+      if (kickDefer) return kickDefer;
       const reason = input.reason || "No reason";
       await member.kick(_attributedReason(message.author, reason));
       firePunishSignal({ guildId: guild.id, userId: member.id, action: "kick", reason }).catch(() => {});
@@ -109,6 +441,10 @@ export async function execute(toolName, input, message, ctx) {
         },
       }));
       logAudit(guild.id, "kick", message.author.id, input.username);
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId: member.id,
+        action: "kick", reason, source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+      });
       return `Kicked ${member.user.tag}. Reason: ${reason}`;
     }
 
@@ -225,6 +561,10 @@ export async function execute(toolName, input, message, ctx) {
         } catch {}
       }
 
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId: member.id,
+        action: "warn", reason: input.reason, source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+      });
       return `Warned ${member.user.tag} (${warnings.length} total). Reason: ${input.reason}${escalationNote}`;
     }
 
@@ -252,6 +592,11 @@ export async function execute(toolName, input, message, ctx) {
           },
         }),
         components: [buildUndoRow("timeout", member.id)].filter(Boolean),
+      });
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId: member.id,
+        action: "timeout", reason: input.reason || "No reason provided",
+        source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
       });
       return `Timed out ${member.user.tag} for ${input.duration}`;
     }
@@ -281,6 +626,10 @@ export async function execute(toolName, input, message, ctx) {
         },
       }));
       logAudit(guild.id, "untimeout", message.author.id, input.username);
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId: member.id,
+        action: "untimeout", reason, source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+      });
       return `Removed timeout from ${member.user.tag}. Reason: ${reason}`;
     }
 
@@ -339,6 +688,10 @@ export async function execute(toolName, input, message, ctx) {
         },
       }));
       logAudit(guild.id, "unban", message.author.id, ban.user.tag);
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId,
+        action: "unban", reason, source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+      });
       return `Unbanned ${ban.user.tag}. Reason: ${reason}`;
     }
 
@@ -374,6 +727,10 @@ export async function execute(toolName, input, message, ctx) {
         },
       }));
       logAudit(guild.id, "unmute", message.author.id, input.username);
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId: member.id,
+        action: "unmute", reason, source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+      });
       return `Unmuted ${member.user.tag}. Reason: ${reason}`;
     }
 
@@ -393,6 +750,10 @@ export async function execute(toolName, input, message, ctx) {
         },
       }));
       logAudit(guild.id, "remove_warning", message.author.id, String(id));
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId: String(id),
+        action: "remove_warning", reason, source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+      });
       return `Removed warning #${id}.`;
     }
 
@@ -416,22 +777,52 @@ export async function execute(toolName, input, message, ctx) {
         },
       }));
       logAudit(guild.id, "clear_warnings", message.author.id, input.username);
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId: member.id,
+        action: "clear_warnings", reason, source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+      });
       return `Cleared ${result.changes} warning${result.changes === 1 ? "" : "s"} from ${member.user.tag}.`;
     }
 
     case "lockdown_server": {
+      // Mirror ban/kick: re-check the invoking member's Discord perm at point
+      // of effect. Without this, a stale trusted_users entry could lock the
+      // whole server via the AI path. ManageChannels matches the safety helper.
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.ManageChannels, guild))
+        return "You can't lock down the server.";
       const { activateLockdown } = await import("../../utils/safety.js");
-      const ok = await activateLockdown(guild, input.reason || "manual lockdown by admin");
+      const lockReason = input.reason || "manual lockdown by admin";
+      const ok = await activateLockdown(guild, lockReason);
+      if (ok) {
+        writeModAudit({
+          guildId: guild.id, actorId: message.author.id, targetId: guild.id,
+          action: "lockdown", reason: lockReason, source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+        });
+      }
       return ok ? "server locked down — all text channels restricted to admins only" : "server is already in lockdown";
     }
 
     case "unlock_server": {
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.ManageChannels, guild))
+        return "You can't unlock the server.";
       const { deactivateLockdown } = await import("../../utils/safety.js");
-      const ok = await deactivateLockdown(guild, input.reason || "manual unlock by admin");
+      const unlockReason = input.reason || "manual unlock by admin";
+      const ok = await deactivateLockdown(guild, unlockReason);
+      if (ok) {
+        writeModAudit({
+          guildId: guild.id, actorId: message.author.id, targetId: guild.id,
+          action: "unlock", reason: unlockReason, source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+        });
+      }
       return ok ? "lockdown lifted — channels restored to normal" : "server wasn't in lockdown";
     }
 
     case "find_message": {
+      // find_message scans channel history for a moderator — gate it like the
+      // other read-into-mod tools. Without this re-check a stale trusted_users
+      // entry could let a non-mod search arbitrary channels via the AI path.
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.ManageMessages, guild))
+        return "You can't search messages.";
       const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
 
@@ -490,6 +881,16 @@ export async function execute(toolName, input, message, ctx) {
       // delete with no per-perm re-check.
       if (!_memberHasPerm(message.member, PermissionFlagsBits.ManageMessages, guild))
         return "You can't purge messages.";
+      // Large AI-initiated purges defer to a human Confirm click. Sub-threshold
+      // purges (and all confirmed replays / slash-equivalent paths) run inline.
+      const requestedCount = Math.min(Math.max(input.count || 100, 1), 500);
+      if (requestedCount > PURGE_CONFIRM_THRESHOLD) {
+        const purgeDefer = _maybeDeferToConfirm("purge_messages", input, message, ctx, {
+          requiredPerm: PermissionFlagsBits.ManageMessages,
+          summary: `Purge up to **${requestedCount}** messages`,
+        });
+        if (purgeDefer) return purgeDefer;
+      }
       const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
 
@@ -607,6 +1008,11 @@ export async function execute(toolName, input, message, ctx) {
       totalDeleted += oldDeleted;
 
       logAudit(guild.id, "purge", message.author.id, `${totalDeleted} messages`);
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId: ch.id,
+        action: "purge", reason: `${totalDeleted} messages from #${ch.name}`,
+        source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+      });
       const parts = [`Deleted ${totalDeleted} messages from #${ch.name}`];
       if (recent.length > 0) parts.push(`${recent.length} bulk-deleted (recent)`);
       if (oldDeleted > 0)    parts.push(`${oldDeleted} individually deleted (older than 14 days)`);
@@ -615,6 +1021,11 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "snipe": {
+      // snipe is an EVERYONE_TOOL, so the upstream ADMIN_TOOLS gate doesn't
+      // cover it — re-check here so a non-mod can't exfiltrate deleted message
+      // content via the AI. ManageMessages mirrors the deleted-message scope.
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.ManageMessages, guild))
+        return "You can't snipe deleted messages.";
       const { getSnipedMessage, getSnipeCount } = await import("../../utils/snipe.js");
       const index = Math.max(0, (input.index || 1) - 1); // 1-based to 0-based
       const sniped = getSnipedMessage(message.channel.id, index);
@@ -635,6 +1046,10 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "editsnipe": {
+      // Same exfil concern as snipe — gate it so a non-mod can't pull edited
+      // message before/after content via the AI.
+      if (!_memberHasPerm(message.member, PermissionFlagsBits.ManageMessages, guild))
+        return "You can't snipe edited messages.";
       const { getEditSnipe, getSnipeCount } = await import("../../utils/snipe.js");
       const index = Math.max(0, (input.index || 1) - 1);
       const edit = getEditSnipe(message.channel.id, index);
@@ -675,6 +1090,16 @@ export async function execute(toolName, input, message, ctx) {
       const multipliers = { m: 60000, min: 60000, h: 3600000, hr: 3600000, hour: 3600000, d: 86400000, day: 86400000, w: 604800000, week: 604800000 };
       const durationMs = num * (multipliers[unit] || 3600000);
 
+      // AI-initiated tempbans defer to a human Confirm click (same as ban_user).
+      const tempbanDefer = _maybeDeferToConfirm("tempban", input, message, ctx, {
+        requiredPerm: PermissionFlagsBits.BanMembers,
+        targetId: target.id,
+        durationStr,
+        durationMs,
+        summary: `Temp-ban **${target.user.tag}** for ${durationStr} (reason: ${input.reason || "No reason provided"})`,
+      });
+      if (tempbanDefer) return tempbanDefer;
+
       const reason = input.reason || "No reason provided";
 
       const { addTempBan } = await import("../../database.js");
@@ -686,6 +1111,11 @@ export async function execute(toolName, input, message, ctx) {
       // banned. Keeping tempban as a separate signal would silently no-op on
       // Eris's side. See dashboard.js for the punish action vocabulary.
       firePunishSignal({ guildId: guild.id, userId: target.id, action: "ban", reason }).catch(() => {});
+      writeModAudit({
+        guildId: guild.id, actorId: message.author.id, targetId: target.id,
+        action: "tempban", reason: `[${durationStr}] ${reason}`,
+        source: _auditSource(ctx), instruction: _auditInstruction(message, ctx),
+      });
       return `Temp-banned ${target.user.tag} for ${durationStr} — reason: ${reason}. They'll be automatically unbanned.`;
     }
   }

@@ -125,6 +125,7 @@ import { createClient } from "@supabase/supabase-js";
 import { LRUCache } from "@defnotean/shared/LRUCache";
 import config from "./config.js";
 import { log } from "./utils/logger.js";
+import { createHmac } from "node:crypto";
 
 let supabase = null;
 let _saveTimer = null;
@@ -241,12 +242,54 @@ function save(bucket) {
   _saveTimer = setTimeout(() => _flushSave(), _DEBOUNCE_MS);
 }
 
+// ─── FLUSH-FAILURE DURABILITY SIGNAL ───
+// Count consecutive flush cycles where the durable store was unreachable
+// (every attempted bucket upsert threw). Once the durable store has been
+// unreachable for `_FLUSH_FAILURE_THRESHOLD` cycles in a row, economy-mutating
+// writes flip to REFUSE — mirroring the offline / in-memory guard — so
+// mutations don't silently pile up in cache only to vanish on the next
+// restart. A single successful flush resets the counter and re-enables writes.
+// Reads keep working from cache the whole time.
+//
+// SCOPE / CAVEAT: this signal is derived ONLY from the debounced flush of the
+// mood / relationships / guild_settings buckets (see _flushSave). Economy rows
+// (eris_economy) are written synchronously and never flow through _flushSave,
+// so their own write failures do NOT increment this counter. The signal is
+// therefore a coarse "is Supabase reachable at all" proxy rather than a direct
+// measure of economy-table durability — it works because an outage that drops
+// the bucket upserts almost always drops the economy writes too. If finer
+// granularity is ever needed, count a direct eris_economy write failure toward
+// _consecutiveFlushFailures (and reset it on a successful economy write) so the
+// refuse threshold reflects the table that actually matters.
+const _FLUSH_FAILURE_THRESHOLD = 5;
+let _consecutiveFlushFailures = 0;
+
+/**
+ * True while the durable store is reachable enough to trust new economy
+ * writes. Flips false after `_FLUSH_FAILURE_THRESHOLD` consecutive flush
+ * cycles all failed; flips back true on the next successful flush.
+ */
+export function isPersistenceHealthy() {
+  return _consecutiveFlushFailures < _FLUSH_FAILURE_THRESHOLD;
+}
+
+// Throw the same shaped error as the offline guard when persistence has gone
+// dark, so economy-mutating callers refuse rather than drift cache out of sync
+// with a store that can't be flushed.
+function _assertPersistenceHealthy() {
+  if (!isPersistenceHealthy()) {
+    throw new Error("economy_unavailable: persistence temporarily unavailable");
+  }
+}
+
 async function _flushSave() {
   _saveTimer = null;
   if (!supabase) return;
   const buckets = [..._dirty];
   _dirty.clear();
+  if (!buckets.length) return;
 
+  let anyFailed = false;
   for (const bucket of buckets) {
     try {
       if (bucket === "mood") {
@@ -262,9 +305,26 @@ async function _flushSave() {
         await supabase.from("bot_data").upsert({ id: "eris_guild_settings", data: data.guild_settings });
       }
     } catch (e) {
+      anyFailed = true;
       log(`[DB] Flush ${bucket} failed: ${e.message} — will retry`);
       _dirty.add(bucket); // re-queue failed bucket for next save cycle
     }
+  }
+
+  // Track durable-store reachability. A cycle that fully drained without a
+  // single failure means the store answered — reset the counter (re-enabling
+  // writes if they had been refused). A cycle where every bucket failed counts
+  // as one more consecutive failure toward the refuse threshold.
+  if (anyFailed) {
+    _consecutiveFlushFailures++;
+    if (_consecutiveFlushFailures === _FLUSH_FAILURE_THRESHOLD) {
+      log(`[DB] ${_FLUSH_FAILURE_THRESHOLD} consecutive flush failures — refusing economy-mutating writes until a flush succeeds (reads still served from cache)`);
+    }
+  } else {
+    if (_consecutiveFlushFailures >= _FLUSH_FAILURE_THRESHOLD) {
+      log(`[DB] Flush recovered — re-enabling economy-mutating writes`);
+    }
+    _consecutiveFlushFailures = 0;
   }
 }
 
@@ -349,23 +409,112 @@ export function getAllServerPersonas() { return Object.fromEntries(_serverPerson
 // All of these are per-user persistent stores backed by their own table.
 // ═══════════════════════════════════════════════════════════════════════════
 // ─── FACTS / MEMORY ───
+
+// Optional TTL for sensitive-tier facts (privacy: emotional disclosures the
+// user flagged as "sensitive" shouldn't necessarily live forever). Off by
+// default — set SENSITIVE_FACT_TTL_DAYS to a positive integer to enable. Secret
+// and normal facts are never auto-expired here (secrets are access-gated and
+// never embedded; normal facts persist by importance, not time).
+const _SENSITIVE_FACT_TTL_DAYS = (() => {
+  const raw = process.env.SENSITIVE_FACT_TTL_DAYS;
+  if (raw == null || raw === "") return 0;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+})();
+
+// Tracks whether the `expires_at` column (migration 006) is deployed. The first
+// insert that trips a column-not-found error flips this off and never retries —
+// every later write then drops to the legacy row shape (no expiry) so facts keep
+// persisting before migrations/006 is applied. Mirrors the
+// `_localCmdSigColsAvailable` latch idiom.
+let _factExpiryColAvailable = true;
+
 export async function saveFact(userId, factText, sensitivity = "normal", importance = "normal") {
   if (!supabase) return false;
-  const { error } = await supabase.from("eris_facts").insert({ user_id: userId, fact_text: factText, sensitivity, importance: importance || "normal" });
-  return !error;
+  const baseRow = { user_id: userId, fact_text: factText, sensitivity, importance: importance || "normal" };
+  const row = { ...baseRow };
+  // Stamp an expiry only for sensitive-tier facts when a TTL is configured AND
+  // the column is known to exist. Degrades to the legacy (no-expiry) shape
+  // otherwise so nothing breaks before migration 006.
+  if (_factExpiryColAvailable && _SENSITIVE_FACT_TTL_DAYS > 0 && sensitivity === "sensitive") {
+    row.expires_at = new Date(Date.now() + _SENSITIVE_FACT_TTL_DAYS * 86_400_000).toISOString();
+  }
+  const { error } = await supabase.from("eris_facts").insert(row);
+  if (error) {
+    // Migration 006 (expires_at column) not applied yet — retry with the legacy
+    // shape so fact writes keep succeeding. Latch the column off for the process
+    // lifetime so we don't pay the failed round-trip on every write.
+    if (_factExpiryColAvailable && row.expires_at !== undefined &&
+        (error.code === "PGRST204" || /column .* does not exist|Could not find the .* column/i.test(error.message || ""))) {
+      _factExpiryColAvailable = false;
+      log(`[DB] saveFact: eris_facts.expires_at column missing — falling back to no-expiry inserts. Apply migrations/006_facts_expiry.sql to enable sensitive-fact TTL.`);
+      const { error: retryErr } = await supabase.from("eris_facts").insert(baseRow);
+      return !retryErr;
+    }
+    return false;
+  }
+  return true;
 }
 
 export async function getFacts(userId, limit = 20) {
   if (!supabase) return [];
-  const { data: rows } = await supabase.from("eris_facts").select("id, fact_text, sensitivity").eq("user_id", userId).order("created_at", { ascending: true }).limit(limit);
-  return rows || [];
+  // Newest-first so a long-term user's most recent facts reach context rather
+  // than being crowded out by the oldest `limit` rows. Coordinates with the
+  // write-side cap enforced in memory.js/memoryExecutor.js.
+  // Selecting expires_at (when present) lets us hide already-expired sensitive
+  // facts from context immediately, even before the prune cron sweeps the row.
+  // The column may not exist pre-migration-006; PostgREST silently omits it and
+  // the filter below is a no-op in that case.
+  const { data: rows } = await supabase.from("eris_facts").select("id, fact_text, sensitivity, expires_at").eq("user_id", userId).order("created_at", { ascending: false }).limit(limit);
+  return _filterExpiredFacts(rows);
+}
+
+// Drop facts whose expires_at has passed. Rows without the column (legacy /
+// pre-migration) carry no expires_at and are always kept.
+function _filterExpiredFacts(rows) {
+  if (!rows) return [];
+  const now = Date.now();
+  return rows.filter(r => {
+    if (!r || r.expires_at == null) return true;
+    const t = Date.parse(r.expires_at);
+    return !Number.isFinite(t) || t > now;
+  });
+}
+
+/**
+ * Hard-delete sensitive-tier facts whose expires_at has elapsed. Best-effort:
+ * returns 0 (and logs nothing loud) when the column is missing or Supabase is
+ * offline. Intended to be called from the same maintenance cron that prunes
+ * episodic memories. Degrades safely everywhere.
+ */
+export async function pruneExpiredFacts() {
+  if (!supabase || !_factExpiryColAvailable) return { deleted: 0 };
+  try {
+    const result = await supabase
+      .from("eris_facts")
+      .delete()
+      .not("expires_at", "is", null)
+      .lt("expires_at", new Date().toISOString());
+    if (result?.error) {
+      if (/column .* does not exist|Could not find the .* column/i.test(result.error.message || "")) {
+        _factExpiryColAvailable = false;
+      }
+      return { deleted: 0 };
+    }
+    return { deleted: result?.count ?? 0 };
+  } catch {
+    return { deleted: 0 };
+  }
 }
 
 export async function getFactsGlobal(userId, limit = 20) {
   if (!supabase) return [];
-  // Get facts across all servers — no guild filter
-  const { data: rows } = await supabase.from("eris_facts").select("id, fact_text, sensitivity").eq("user_id", userId).order("created_at", { ascending: true }).limit(limit);
-  return rows || [];
+  // Get facts across all servers — no guild filter. Selecting + filtering
+  // expires_at keeps this consistent with getFacts so a future caller that
+  // builds context off getFactsGlobal can't surface already-expired sensitive
+  // facts. No-op pre-migration-006 (PostgREST omits the missing column).
+  const { data: rows } = await supabase.from("eris_facts").select("id, fact_text, sensitivity, expires_at").eq("user_id", userId).order("created_at", { ascending: true }).limit(limit);
+  return _filterExpiredFacts(rows);
 }
 
 export async function deleteFactByText(userId, searchText) {
@@ -402,10 +551,51 @@ export async function deleteFact(userId, factId) {
 }
 
 // ─── LOCAL COMMANDS ───
+// One-time warning latch so an unsigned-enqueue config gap is logged loudly
+// without spamming the log on every command.
+let _localCmdSignWarned = false;
+// Tracks whether the sig/ts columns (migration 004) are deployed. The first
+// insert that trips a column-not-found error flips this to false and never
+// retries — every later enqueue then drops straight to the legacy row shape so
+// the command queue keeps working before migrations/004 is applied. Mirrors the
+// `_rpcAddBalanceAvailable` latch idiom above.
+let _localCmdSigColsAvailable = true;
+
 export async function queueLocalCommand(command, channelId, requestedBy) {
   if (!supabase) return false;
-  const { error } = await supabase.from("local_commands").insert({ command, channel_id: channelId, requested_by: requestedBy, status: "pending" });
-  return !error;
+  // The PC-agent poller requires an HMAC signature over the request so a
+  // forged local_commands row can't drive owner machine-level execution.
+  // sig = HMAC_SHA256(secret, `${requested_by}.${command}.${ts}`).
+  const ts = Date.now();
+  const secret = config.twinApiSecret || config.pcAgentSecret || null;
+  // Legacy row shape (pre-migration-004): no sig/ts columns.
+  const baseRow = { command, channel_id: channelId, requested_by: requestedBy, status: "pending" };
+  const row = { ...baseRow };
+  if (_localCmdSigColsAvailable) {
+    row.ts = ts;
+    if (secret) {
+      row.sig = createHmac("sha256", secret).update(`${requestedBy}.${command}.${ts}`).digest("hex");
+    } else if (!_localCmdSignWarned) {
+      _localCmdSignWarned = true;
+      log(`[DB] queueLocalCommand: NO twinApiSecret/pcAgentSecret configured — enqueuing UNSIGNED local commands. The PC-agent poller will reject these. Set TWIN_API_SECRET.`);
+    }
+  }
+  const { error } = await supabase.from("local_commands").insert(row);
+  if (error) {
+    // Migration 004 (sig/ts columns) not applied yet — PostgREST reports the
+    // unknown column as PGRST204 / "column ... does not exist" / "Could not
+    // find the ... column". Latch the columns off for the process lifetime and
+    // retry with the legacy row so PC-agent enqueues still succeed.
+    if (_localCmdSigColsAvailable &&
+        (error.code === "PGRST204" || /column .* does not exist|Could not find the .* column/i.test(error.message || ""))) {
+      _localCmdSigColsAvailable = false;
+      log(`[DB] queueLocalCommand: local_commands.sig/ts columns missing — falling back to unsigned legacy enqueue. Apply migrations/004_local_commands_signature.sql to enable signed commands.`);
+      const { error: retryErr } = await supabase.from("local_commands").insert(baseRow);
+      return !retryErr;
+    }
+    return false;
+  }
+  return true;
 }
 
 // ─── NOTES ───
@@ -437,8 +627,11 @@ export async function searchNotes(userId, query) {
 export async function saveReminder(userId, channelId, text, remindAt) {
   if (!supabase) return false;
   const row = { user_id: userId, channel_id: channelId, reminder_text: text, remind_at: remindAt, status: "pending" };
-  const { error } = await supabase.from("eris_reminders").insert(row);
-  if (!error) data.reminders.push(row);
+  // Return the inserted row so the cache carries the DB-assigned id. Without it
+  // the cached row has no id and markReminderDone (which filters by id) can
+  // never evict it — the reminder lingers in the cache forever.
+  const { data: inserted, error } = await supabase.from("eris_reminders").insert(row).select().single();
+  if (!error) data.reminders.push(inserted ? { ...inserted } : row);
   return !error;
 }
 
@@ -730,6 +923,26 @@ setInterval(() => {
   for (const [uid, ts] of _earnCooldown) {
     if (now - ts > 30_000) _earnCooldown.delete(uid);
   }
+  // Evict generic per-tool cooldowns older than 2h — past the longest cooldown
+  // window (1h rob/pet_train) so the entry can't change any future check, but
+  // accumulates one row per (user, tool) forever otherwise.
+  for (const [key, ts] of _cooldowns) {
+    if (now - ts > 7_200_000) _cooldowns.delete(key);
+  }
+  // Bound _careerTiers: it's a cumulative per-user count with no timestamp, so
+  // we can't expire by staleness without losing progress. Cap the map size and
+  // drop the oldest-inserted entries (Map preserves insertion order) — a
+  // re-derived count from a fresh entry only costs a user some work-tier bonus
+  // they had to re-earn, never coins.
+  const CAREER_TIER_MAX = 5000;
+  if (_careerTiers.size > CAREER_TIER_MAX) {
+    const overflow = _careerTiers.size - CAREER_TIER_MAX;
+    let dropped = 0;
+    for (const uid of _careerTiers.keys()) {
+      if (dropped++ >= overflow) break;
+      _careerTiers.delete(uid);
+    }
+  }
 }, 300_000);
 
 /** Acquire a per-user lock for atomic economy operations */
@@ -922,6 +1135,9 @@ export async function updateBalance(userId, delta, type = "other", details = "")
   // Block economy mutations when the DB is offline — prevents in-memory drift
   // that would silently vanish on next restart.
   if (!supabase) throw new Error("economy_unavailable: database offline");
+  // Same refusal once the durable store has been unreachable for too long: a
+  // write we can't flush is a write that vanishes on restart.
+  _assertPersistenceHealthy();
   return withEconLock(userId, () => _updateBalanceUnsafe(userId, delta, type, details));
 }
 
@@ -934,6 +1150,7 @@ export async function updateBalance(userId, delta, type = "other", details = "")
  */
 export async function updateBalanceUnsafe(userId, delta, type = "other", details = "") {
   if (!supabase) throw new Error("economy_unavailable: database offline");
+  _assertPersistenceHealthy();
   return _updateBalanceUnsafe(userId, delta, type, details);
 }
 
@@ -943,6 +1160,7 @@ export async function updateBalanceUnsafe(userId, delta, type = "other", details
  */
 export async function tryDeductBalanceUnsafe(userId, amount, type = "deduct", details = "") {
   if (!supabase) return { ok: false, reason: "economy_unavailable" };
+  if (!isPersistenceHealthy()) return { ok: false, reason: "economy_unavailable" };
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, reason: "invalid_amount" };
   const current = await getBalance(userId);
   if (current.balance < amount) {
@@ -967,6 +1185,7 @@ export async function tryDeductBalanceUnsafe(userId, amount, type = "deduct", de
  */
 export async function transferBalance(fromId, toId, amount, tax = 0, type = "transfer", details = "") {
   if (!supabase) return { ok: false, reason: "economy_unavailable" };
+  if (!isPersistenceHealthy()) return { ok: false, reason: "economy_unavailable" };
   if (fromId === toId) return { ok: false, reason: "self_transfer" };
   if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(tax) || tax < 0) {
     return { ok: false, reason: "invalid_amount" };
@@ -1003,6 +1222,9 @@ export async function transferBalance(fromId, toId, amount, tax = 0, type = "tra
 
 export async function claimDaily(userId) {
   if (!supabase) return { success: false, offline: true };
+  // Durable store gone dark — refuse rather than stamp a cooldown + credit that
+  // can't be flushed. Surfaced to callers as the transient claim_failed message.
+  if (!isPersistenceHealthy()) return { success: false, error: "claim_failed" };
   // Serialize the whole read-check-write sequence so rapid /daily spams can't
   // double-claim between the cooldown check and the cache/DB update.
   return withEconLock(userId, async () => {
@@ -1024,19 +1246,27 @@ export async function claimDaily(userId) {
     const bonus = Math.min(streak * 10, 150);
     const coins = base + bonus;
 
-    // Credit via the unsafe helper (lock already held)
-    const newBalance = await _updateBalanceUnsafe(userId, coins, "daily", `streak:${streak}`);
-
-    // Persist the streak/timestamp separately since updateBalance only owns balance/version
+    // Fail-closed ordering: stamp the cooldown (last_daily + streak) and AWAIT
+    // it BEFORE crediting. If the process crashes between stamp and credit the
+    // user merely loses one claim's coins (recoverable) rather than being able
+    // to re-claim forever. If the stamp write itself fails, abort WITHOUT
+    // crediting. The durable fix is the atomic claim RPC (migration 003).
     try {
-      await supabase.from("eris_economy")
+      const { error: stampErr } = await supabase.from("eris_economy")
         .update({ daily_streak: streak, last_daily: now.toISOString() })
         .eq("user_id", userId);
+      if (stampErr) throw new Error(stampErr.message);
       if (_economyCache[userId]) {
         _economyCache[userId].daily_streak = streak;
         _economyCache[userId].last_daily = now.toISOString();
       }
-    } catch (e) { log(`[DB] claimDaily streak update: ${e.message}`); }
+    } catch (e) {
+      log(`[DB] claimDaily stamp failed (no credit): ${e.message}`);
+      return { success: false, error: "claim_failed" };
+    }
+
+    // Credit via the unsafe helper (lock already held)
+    const newBalance = await _updateBalanceUnsafe(userId, coins, "daily", `streak:${streak}`);
 
     return { success: true, coins, streak, bonus, newBalance };
   });
@@ -1381,12 +1611,19 @@ export async function addToInventory(userId, itemName, itemType) {
   try { await supabase.from("eris_inventory").insert({ user_id: userId, item_name: itemName, item_type: itemType }); } catch (e) { log(`[DB] ${e.message}`); }
 }
 
+// Removes one matching row and returns its original item_type (or null) so
+// callers that re-grant the item later — e.g. auction escrow refunds — can
+// restore it under the same inventory category instead of a lifecycle string.
 export async function removeFromInventory(userId, itemName) {
-  if (!supabase) return;
+  if (!supabase) return null;
   try {
-    const { data } = await supabase.from("eris_inventory").select("id").eq("user_id", userId).eq("item_name", itemName).limit(1).single();
-    if (data) await supabase.from("eris_inventory").delete().eq("id", data.id);
+    const { data } = await supabase.from("eris_inventory").select("id, item_type").eq("user_id", userId).eq("item_name", itemName).limit(1).single();
+    if (data) {
+      await supabase.from("eris_inventory").delete().eq("id", data.id);
+      return data.item_type ?? null;
+    }
   } catch (e) { log(`[DB] ${e.message}`); }
+  return null;
 }
 
 export async function hasItem(userId, itemName) {
@@ -1746,8 +1983,32 @@ export async function resolveHeist(heistId, status, loot = 0) {
 export async function createAuction(sellerId, itemName, startingPrice, guildId, durationMs = 3600_000) {
   if (!supabase) return null;
   try {
+    // Escrow the listed item out of the seller's inventory at list time. Without
+    // this the seller keeps a copy while settlement grants another to the
+    // winner, duping the item. The item is returned to the winner at settlement
+    // (events/ready.js) or refunded to the seller if the auction expires with no
+    // bids (closeExpiredAuctions). Refuse to list an item the seller doesn't own.
+    if (!(await hasItem(sellerId, itemName))) return null;
+    // Capture the item's original category as we escrow it out, so refunds (here
+    // or at no-bid expiry) restore it under its real type rather than a lifecycle
+    // string. Fall back to "auction" if the row carried no type.
+    const itemType = (await removeFromInventory(sellerId, itemName)) || "auction";
     const endsAt = new Date(Date.now() + durationMs).toISOString();
-    const { data } = await supabase.from("eris_auctions").insert({ seller_id: sellerId, item_name: itemName, starting_price: startingPrice, current_bid: startingPrice, ends_at: endsAt, guild_id: guildId }).select().single();
+    const baseRow = { seller_id: sellerId, item_name: itemName, starting_price: startingPrice, current_bid: startingPrice, ends_at: endsAt, guild_id: guildId };
+    // Persist item_type on the row (migration 005) so closeExpiredAuctions can
+    // round-trip it on a no-bid refund. If that column doesn't exist yet (migration
+    // unapplied), PostgREST rejects the column — retry without it so listing still
+    // works; the no-bid refund then falls back to "auction" as before.
+    let { data, error } = await supabase.from("eris_auctions").insert({ ...baseRow, item_type: itemType }).select().single();
+    if (error && /item_type/.test(error.message || "")) {
+      ({ data, error } = await supabase.from("eris_auctions").insert(baseRow).select().single());
+    }
+    if (error || !data) {
+      // Listing row never landed — give the escrowed item back under its original
+      // type so it isn't lost or re-grouped under the wrong inventory category.
+      await addToInventory(sellerId, itemName, itemType);
+      return null;
+    }
     return data;
   } catch { return null; }
 }
@@ -1784,18 +2045,40 @@ export async function bidOnAuction(auctionId, bidderId, amount) {
         const { data } = await supabase.from("eris_auctions").select("*").eq("id", auctionId).single();
         if (!data || data.status !== "active" || amount <= data.current_bid) return false;
         const lastSeen = data.current_bid;
+        const prevBidderId = data.current_bidder_id || null;
+
+        // Escrow-on-bid: take the bid amount from the new bidder up front so
+        // settlement just hands the already-held coins to the seller — no coins
+        // are minted. If the bidder can't pay, reject the bid.
+        const escrow = await tryDeductBalance(bidderId, amount, "auction_bid", `bid on ${auctionId}`);
+        if (!escrow.ok) return false;
+
         // Defensive optimistic-concurrency: only update if current_bid is
         // still what we just read. If a concurrent writer changed it, the
-        // .eq() filter matches zero rows and the update is a no-op — we
-        // retry the read instead of silently overwriting.
+        // .eq() filter matches zero rows and the update is a no-op — refund the
+        // escrow and retry the read.
         const { data: updated } = await supabase
           .from("eris_auctions")
           .update({ current_bid: amount, current_bidder_id: bidderId })
           .eq("id", auctionId)
           .eq("current_bid", lastSeen)
           .select();
-        if (updated && updated.length > 0) return true;
-        // Optimistic check failed — loop to re-read and retry once.
+        if (updated && updated.length > 0) {
+          // We're now the high bidder — refund the previous escrow. The starting
+          // price has no escrowed bidder (current_bidder_id is null on create),
+          // so only a real previous bidder gets refunded. This INCLUDES the same
+          // bidder raising their own bid: we just escrowed the full new `amount`
+          // on top of their already-held `lastSeen`, so refunding `lastSeen` to
+          // them leaves their total escrow == their current bid (no over-pay).
+          if (prevBidderId && lastSeen > 0) {
+            try { await updateBalance(prevBidderId, lastSeen, "auction_refund", `outbid on ${auctionId}`); }
+            catch (e) { log(`[DB] bidOnAuction refund failed for ${prevBidderId}: ${e.message} — manual reconciliation needed`); }
+          }
+          return true;
+        }
+        // Optimistic check failed — refund our escrow and loop to retry once.
+        try { await updateBalance(bidderId, amount, "auction_refund", `bid race lost on ${auctionId}`); }
+        catch (e) { log(`[DB] bidOnAuction escrow refund failed for ${bidderId}: ${e.message} — manual reconciliation needed`); }
       } catch { return false; }
     }
     return false;
@@ -1808,6 +2091,16 @@ export async function closeExpiredAuctions() {
   if (!data?.length) return [];
   for (const auction of data) {
     try { await supabase.from("eris_auctions").update({ status: "closed" }).eq("id", auction.id); } catch (e) { log(`[DB] ${e.message}`); }
+    // No winning bidder → the item was escrowed out at createAuction time, so
+    // return it to the seller. Auctions that sold are settled by the winner-grant
+    // path in events/ready.js (the item the seller escrowed becomes the winner's).
+    if (!(auction.current_bidder_id && auction.current_bid > 0)) {
+      // Restore under the item's original category (captured at list time on the
+      // row). Falls back to "auction" if the column is absent / unset so the item
+      // is never grouped under a lifecycle string like "auction_unsold".
+      try { await addToInventory(auction.seller_id, auction.item_name, auction.item_type || "auction"); }
+      catch (e) { log(`[DB] closeExpiredAuctions refund failed for ${auction.seller_id}: ${e.message}`); }
+    }
   }
   return data;
 }
@@ -1877,6 +2170,7 @@ export async function updateBankBalance(userId, delta) {
  */
 export async function tryDeductBalance(userId, amount, type = "deduct", details = "") {
   if (!supabase) return { ok: false, reason: "economy_unavailable" };
+  if (!isPersistenceHealthy()) return { ok: false, reason: "economy_unavailable" };
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, reason: "invalid_amount" };
   return withEconLock(userId, async () => {
     const current = await getBalance(userId);
@@ -1896,6 +2190,7 @@ export async function tryDeductBalance(userId, amount, type = "deduct", details 
  */
 export async function bankDeposit(userId, amount) {
   if (!supabase) return { ok: false, reason: "economy_unavailable" };
+  if (!isPersistenceHealthy()) return { ok: false, reason: "economy_unavailable" };
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, reason: "invalid_amount" };
   return withEconLock(userId, async () => {
     const wallet = await getBalance(userId);
@@ -1905,8 +2200,19 @@ export async function bankDeposit(userId, amount) {
     if (bank.balance + amount > cap) {
       return { ok: false, reason: "bank_full", bank: bank.balance, capacity: cap, maxDeposit: cap - bank.balance };
     }
+    // Deduct the source (wallet) FIRST — it throws on failure, so we never
+    // credit the bank against a debit that didn't land. If the bank credit
+    // then throws, roll the wallet back so coins are conserved.
     const newWalletBalance = await _updateBalanceUnsafe(userId, -amount, "bank_deposit", "deposited to bank");
-    const newBankBalance = await updateBankBalance(userId, amount);
+    let newBankBalance;
+    try {
+      newBankBalance = await updateBankBalance(userId, amount);
+    } catch (err) {
+      try { await _updateBalanceUnsafe(userId, amount, "bank_deposit_refund", "bank credit failed"); } catch (rollbackErr) {
+        log(`[DB] bankDeposit rollback failed for ${userId}: ${rollbackErr.message} — manual reconciliation needed`);
+      }
+      return { ok: false, reason: err?.message || "bank_credit_failed" };
+    }
     return { ok: true, newWalletBalance, newBankBalance, capacity: cap };
   });
 }
@@ -1916,12 +2222,23 @@ export async function bankDeposit(userId, amount) {
  */
 export async function bankWithdraw(userId, amount) {
   if (!supabase) return { ok: false, reason: "economy_unavailable" };
+  if (!isPersistenceHealthy()) return { ok: false, reason: "economy_unavailable" };
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, reason: "invalid_amount" };
   return withEconLock(userId, async () => {
     const bank = await getBankBalance(userId);
     if (bank.balance < amount) return { ok: false, reason: "insufficient_bank", balance: bank.balance };
+    // Deduct the source (bank) FIRST, then credit the wallet. If the wallet
+    // credit throws, refund the bank so coins are conserved.
     const newBankBalance = await updateBankBalance(userId, -amount);
-    const newWalletBalance = await _updateBalanceUnsafe(userId, amount, "bank_withdraw", "withdrew from bank");
+    let newWalletBalance;
+    try {
+      newWalletBalance = await _updateBalanceUnsafe(userId, amount, "bank_withdraw", "withdrew from bank");
+    } catch (err) {
+      try { await updateBankBalance(userId, amount); } catch (rollbackErr) {
+        log(`[DB] bankWithdraw rollback failed for ${userId}: ${rollbackErr.message} — manual reconciliation needed`);
+      }
+      return { ok: false, reason: err?.code === "insufficient_balance" ? "wallet_credit_failed" : err?.message || "wallet_credit_failed" };
+    }
     return { ok: true, newWalletBalance, newBankBalance };
   });
 }
@@ -1932,24 +2249,30 @@ export async function getBankCapacity(userId) {
 }
 
 export async function applyBankInterest(userId) {
-  const bank = await getBankBalance(userId);
-  if (bank.balance <= 0) return 0;
-  const last = bank.last_interest ? new Date(bank.last_interest) : new Date();
-  const hoursSince = (Date.now() - last.getTime()) / 3_600_000;
-  if (hoursSince < 24) return 0;
-  const days = Math.floor(hoursSince / 24);
-  const interest = Math.floor(bank.balance * 0.01 * days);
-  if (interest <= 0) return 0;
-  const cap = await getBankCapacity(userId);
-  const actualInterest = Math.min(interest, cap - bank.balance);
-  if (actualInterest <= 0) return 0;
-  await updateBankBalance(userId, actualInterest);
-  const updated = await getBankBalance(userId);
-  if (supabase) {
-    try { await supabase.from("eris_bank").update({ last_interest: new Date().toISOString() }).eq("user_id", userId); } catch (e) { log(`[DB] ${e.message}`); }
-  }
-  _bankCache.set(userId, { ...updated, last_interest: new Date().toISOString() });
-  return actualInterest;
+  // Serialize the read-modify-write so two concurrent calls can't both read the
+  // same last_interest, both pass the 24h check, and each credit interest —
+  // double-crediting (minting) coins. The last_interest stamp inside the lock
+  // makes a second call see hoursSince < 24 and short-circuit.
+  return withEconLock(userId, async () => {
+    const bank = await getBankBalance(userId);
+    if (bank.balance <= 0) return 0;
+    const last = bank.last_interest ? new Date(bank.last_interest) : new Date();
+    const hoursSince = (Date.now() - last.getTime()) / 3_600_000;
+    if (hoursSince < 24) return 0;
+    const days = Math.floor(hoursSince / 24);
+    const interest = Math.floor(bank.balance * 0.01 * days);
+    if (interest <= 0) return 0;
+    const cap = await getBankCapacity(userId);
+    const actualInterest = Math.min(interest, cap - bank.balance);
+    if (actualInterest <= 0) return 0;
+    await updateBankBalance(userId, actualInterest);
+    const updated = await getBankBalance(userId);
+    if (supabase) {
+      try { await supabase.from("eris_bank").update({ last_interest: new Date().toISOString() }).eq("user_id", userId); } catch (e) { log(`[DB] ${e.message}`); }
+    }
+    _bankCache.set(userId, { ...updated, last_interest: new Date().toISOString() });
+    return actualInterest;
+  });
 }
 
 // ─── PRESTIGE ──────────────────────────────────────────────────────────────
@@ -2044,6 +2367,7 @@ export async function deleteMarriage(userId) {
 
 export async function claimWeekly(userId) {
   if (!supabase) return { success: false, offline: true };
+  if (!isPersistenceHealthy()) return { success: false, error: "claim_failed" };
   return withEconLock(userId, async () => {
     const econ = await getBalance(userId);
     const now = new Date();
@@ -2054,22 +2378,28 @@ export async function claimWeekly(userId) {
     }
     const streak = lastWeekly && (now - lastWeekly) < 336 * 3_600_000 ? (econ.weekly_streak || 0) + 1 : 1;
     const coins = 500 + streak * 100;
-    const newBal = await _updateBalanceUnsafe(userId, coins, "weekly", `streak:${streak}`);
+    // Fail-closed ordering: stamp the cooldown BEFORE crediting (see claimDaily).
     try {
-      await supabase.from("eris_economy")
+      const { error: stampErr } = await supabase.from("eris_economy")
         .update({ last_weekly: now.toISOString(), weekly_streak: streak })
         .eq("user_id", userId);
+      if (stampErr) throw new Error(stampErr.message);
       if (_economyCache[userId]) {
         _economyCache[userId].last_weekly = now.toISOString();
         _economyCache[userId].weekly_streak = streak;
       }
-    } catch (e) { log(`[DB] claimWeekly streak update: ${e.message}`); }
+    } catch (e) {
+      log(`[DB] claimWeekly stamp failed (no credit): ${e.message}`);
+      return { success: false, error: "claim_failed" };
+    }
+    const newBal = await _updateBalanceUnsafe(userId, coins, "weekly", `streak:${streak}`);
     return { success: true, coins, streak, newBalance: newBal };
   });
 }
 
 export async function claimMonthly(userId) {
   if (!supabase) return { success: false, offline: true };
+  if (!isPersistenceHealthy()) return { success: false, error: "claim_failed" };
   return withEconLock(userId, async () => {
     const econ = await getBalance(userId);
     const now = new Date();
@@ -2080,16 +2410,21 @@ export async function claimMonthly(userId) {
     }
     const streak = lastMonthly && (now - lastMonthly) < 1440 * 3_600_000 ? (econ.monthly_streak || 0) + 1 : 1;
     const coins = 5000 + streak * 1000;
-    const newBal = await _updateBalanceUnsafe(userId, coins, "monthly", `streak:${streak}`);
+    // Fail-closed ordering: stamp the cooldown BEFORE crediting (see claimDaily).
     try {
-      await supabase.from("eris_economy")
+      const { error: stampErr } = await supabase.from("eris_economy")
         .update({ last_monthly: now.toISOString(), monthly_streak: streak })
         .eq("user_id", userId);
+      if (stampErr) throw new Error(stampErr.message);
       if (_economyCache[userId]) {
         _economyCache[userId].last_monthly = now.toISOString();
         _economyCache[userId].monthly_streak = streak;
       }
-    } catch (e) { log(`[DB] claimMonthly streak update: ${e.message}`); }
+    } catch (e) {
+      log(`[DB] claimMonthly stamp failed (no credit): ${e.message}`);
+      return { success: false, error: "claim_failed" };
+    }
+    const newBal = await _updateBalanceUnsafe(userId, coins, "monthly", `streak:${streak}`);
     return { success: true, coins, streak, newBalance: newBal };
   });
 }

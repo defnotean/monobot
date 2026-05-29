@@ -22,6 +22,8 @@ export const TYPING_MAX_MS = 4500;
 /**
  * Estimate how long a human would take to type `text`, including a small
  * thinking pause for longer replies. Returns milliseconds.
+ * @param {string} text
+ * @param {{ min?: number, max?: number, cps?: number }} [opts]
  */
 export function calculateTypingDelay(text, opts = {}) {
   if (!text) return opts.min ?? TYPING_MIN_MS;
@@ -50,6 +52,8 @@ const PAUSE_BETWEEN_SEGMENTS_MAX = 1400;
 /**
  * Split a reply into 1-3 segments at natural breakpoints. Never splits
  * mid-sentence. Short replies always return a single segment.
+ * @param {string} text
+ * @param {{ minLength?: number, chance?: number }} [opts]
  * @returns {string[]}
  */
 export function splitHumanReply(text, opts = {}) {
@@ -66,8 +70,9 @@ export function splitHumanReply(text, opts = {}) {
   if (Math.random() > splitChance) return [text];
 
   const lower = text.toLowerCase();
+  /** @type {number[]} */
   const candidates = [];
-  const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapeRegex = (/** @type {string} */ s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   for (const marker of SPLIT_STARTERS) {
     // Only split on marker at the start of a clause (after punctuation or comma).
     const re = new RegExp(`([.!?,]\\s+)(${escapeRegex(marker)}\\b)`, "gi");
@@ -88,6 +93,7 @@ export function splitHumanReply(text, opts = {}) {
 
 // ─── Orchestrated send ──────────────────────────────────────────────────────
 
+/** @param {number} ms */
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 /**
@@ -109,14 +115,20 @@ export async function sendHumanReply(message, replyText, opts = {}) {
   const extra = opts.messageOptions || null;
   const segments = allowSplit ? splitHumanReply(replyText) : [replyText];
 
-  const buildPayload = (content) => (extra ? { content, ...extra } : content);
+  const buildPayload = (/** @type {string} */ content) => (extra ? { content, ...extra } : content);
+
+  // discord.js types `message.channel` as a union where send/sendTyping only
+  // exist on the text-capable members; the bot only ever reaches here with a
+  // sendable channel, so cast to sidestep the union narrowing.
+  /** @type {any} */
+  const channel = message.channel;
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
     if (!seg) continue;
 
     // Show typing while we "type" this segment.
-    try { await message.channel.sendTyping(); } catch { /* channel deleted etc. */ }
+    try { await channel.sendTyping(); } catch { /* channel deleted etc. */ }
     await sleep(calculateTypingDelay(seg));
 
     // First segment replies to the original; follow-ups are plain sends so we
@@ -125,10 +137,10 @@ export async function sendHumanReply(message, replyText, opts = {}) {
       try {
         await message.reply(buildPayload(seg));
       } catch {
-        try { await message.channel.send(buildPayload(seg)); } catch {}
+        try { await channel.send(buildPayload(seg)); } catch {}
       }
     } else {
-      try { await message.channel.send(buildPayload(seg)); } catch {}
+      try { await channel.send(buildPayload(seg)); } catch {}
     }
 
     // Brief pause between segments — enough for the user to register the

@@ -104,6 +104,7 @@ const MIN_ENV_VALUE_LEN = 8;
 // Pattern philosophy: prefer over-matching. The cost of a `[REDACTED]` where
 // a non-secret used to be is "operator squints once"; the cost of a missed
 // secret is "secret on disk forever."
+/** @type {Array<{ re: RegExp, fmt: (substring: string, ...args: any[]) => string }>} */
 const TOKEN_PATTERNS = [
   // Pattern order matters — earlier patterns run first, and later ones see
   // text that already contains "[REDACTED]" placeholders, so we put the
@@ -166,6 +167,7 @@ const TOKEN_PATTERNS = [
 /**
  * Escape a string for use as a literal inside a RegExp.
  * Standard ECMAScript-spec sequence; no engine assumptions.
+ * @param {string} s
  */
 function _escapeReLiteral(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -195,6 +197,7 @@ function _envSecretValues() {
  *
  * `s` MUST be a string. Callers that hold other types should go through
  * `redactValue()` instead — that one stringifies safely first.
+ * @param {string} s
  */
 export function redactString(s) {
   if (typeof s !== "string" || s.length === 0) return s;
@@ -227,6 +230,10 @@ export function redactString(s) {
  *
  * Depth-limited so a malicious nested object can't burn the event loop.
  * Cycle-safe via a WeakSet.
+ * @param {*} value
+ * @param {number} [maxDepth]
+ * @param {WeakSet<object>} [_seen]
+ * @returns {*}
  */
 export function redactValue(value, maxDepth = 4, _seen = new WeakSet()) {
   if (value == null) return value;
@@ -253,6 +260,7 @@ export function redactValue(value, maxDepth = 4, _seen = new WeakSet()) {
       return value.map((v) => redactValue(v, maxDepth - 1, _seen));
     }
 
+    /** @type {Record<string, any>} */
     const out = {};
     for (const k of Object.keys(value)) {
       // Don't recurse into known-secret-shaped KEYS — replace the value
@@ -281,6 +289,8 @@ export function redactValue(value, maxDepth = 4, _seen = new WeakSet()) {
  * 4-byte emoji is one `.length` unit but 4 bytes on disk).
  *
  * Appends `…[truncated N bytes]` so an operator can see the cut.
+ * @param {string} s
+ * @param {number} [max]
  */
 export function truncateLine(s, max = MAX_LOG_LINE_BYTES) {
   if (typeof s !== "string") return s;
@@ -298,6 +308,7 @@ export function truncateLine(s, max = MAX_LOG_LINE_BYTES) {
 /**
  * Logger entry point. Redacts + truncates a single log line.
  * This is what `log()` in each bot's logger.js calls before doing I/O.
+ * @param {string} s
  */
 export function redactLogLine(s) {
   if (typeof s !== "string") return redactLogLine(String(s));

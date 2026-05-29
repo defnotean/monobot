@@ -1,6 +1,8 @@
 // ─── XP/Leveling Engine ─────────────────────────────────────────────────────
 // In-memory store with JSON backup structure. No database imports.
 
+import { log } from "./logger.js";
+
 const levelData = {
   users: {},        // guildId -> userId -> { xp, totalXp }
   lastXpTime: {},   // guildId -> userId -> timestamp
@@ -217,7 +219,7 @@ export async function applyLevelRewards(member, guildId, level, guild) {
       await member.roles.add(reward.roleId);
     } catch (err) {
       // Log but continue with other rewards
-      console.error(`Failed to add reward role to ${member.user.tag}:`, err.message);
+      log(`Failed to add reward role to ${member.user.tag}: ${err.message}`);
     }
   }
 }

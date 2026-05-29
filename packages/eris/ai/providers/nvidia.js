@@ -6,6 +6,7 @@
 
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
+import { stableSig } from "../dual.js";
 
 const NV = config.nvidia;
 
@@ -342,7 +343,10 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
         allDuplicates = false;
         return { call, fnName, fnArgs, duplicate: false, parseError };
       }
-      const signature = `${fnName}::${JSON.stringify(fnArgs)}`;
+      // Use the same key-sorted signature dual.js uses for Gemini so identical
+      // tool calls dedup consistently across providers — {a:1,b:2} and
+      // {b:2,a:1} must collapse to one execution regardless of key order.
+      const signature = stableSig(fnName, fnArgs);
       if (calledSignatures.has(signature)) {
         log(`[NVIDIA] Skipping duplicate ${fnName} call (already executed this turn)`);
         return { call, fnName, fnArgs, duplicate: true };

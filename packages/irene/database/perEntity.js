@@ -32,6 +32,7 @@
 
 import { getSupabase } from "../database.js";
 import config from "../config.js";
+import { log } from "../utils/logger.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -121,7 +122,7 @@ async function _writeWithRetry(table, keyColumn, keyValue, data) {
       await new Promise((r) => setTimeout(r, 200 * attempt));
     }
   }
-  console.error(`[perEntity] giving up after ${MAX_RETRIES} attempts: ${lastErr?.message ?? "unknown"}`);
+  log(`[perEntity] giving up after ${MAX_RETRIES} attempts: ${lastErr?.message ?? "unknown"}`);
 }
 
 // ─── Coalescing scheduler ────────────────────────────────────────────────────

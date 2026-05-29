@@ -39,6 +39,7 @@
 
 import { getSupabase } from "./database.js";
 import config from "./config.js";
+import { log } from "./utils/logger.js";
 
 const MAX_ATTEMPTS = 5;
 const RECONCILE_INTERVAL_MS = 5 * 60_000; // 5 minutes
@@ -86,12 +87,12 @@ export async function createSaga(entityType, entityId, payload) {
       .select("id")
       .single();
     if (error) {
-      console.error(`[SAGA] createSaga failed: ${error.message}`);
+      log(`[SAGA] createSaga failed: ${error.message}`);
       return null;
     }
     return data?.id ?? null;
   } catch (err) {
-    console.error(`[SAGA] createSaga threw: ${err?.message ?? err}`);
+    log(`[SAGA] createSaga threw: ${err?.message ?? err}`);
     return null;
   }
 }
@@ -120,9 +121,9 @@ export async function markSagaLeg(sagaId, leg, status, errorMessage) {
       .from("dual_write_sagas")
       .update(update)
       .eq("id", sagaId);
-    if (error) console.error(`[SAGA] markSagaLeg(${leg}=${status}) failed: ${error.message}`);
+    if (error) log(`[SAGA] markSagaLeg(${leg}=${status}) failed: ${error.message}`);
   } catch (err) {
-    console.error(`[SAGA] markSagaLeg threw: ${err?.message ?? err}`);
+    log(`[SAGA] markSagaLeg threw: ${err?.message ?? err}`);
   }
 }
 
@@ -200,12 +201,12 @@ export async function runReconcilerOnce() {
       .order("created_at", { ascending: true })
       .limit(RECONCILE_BATCH_SIZE);
     if (error) {
-      console.error(`[SAGA] reconciler query failed: ${error.message}`);
+      log(`[SAGA] reconciler query failed: ${error.message}`);
       return stats;
     }
     rows = data ?? [];
   } catch (err) {
-    console.error(`[SAGA] reconciler query threw: ${err?.message ?? err}`);
+    log(`[SAGA] reconciler query threw: ${err?.message ?? err}`);
     return stats;
   }
 
@@ -224,7 +225,7 @@ export async function runReconcilerOnce() {
         })
         .eq("id", saga.id);
       if (updErr) {
-        console.error(`[SAGA] reconciler update-success failed on ${saga.id}: ${updErr.message}`);
+        log(`[SAGA] reconciler update-success failed on ${saga.id}: ${updErr.message}`);
         stats.failed++;
         continue;
       }
@@ -243,13 +244,13 @@ export async function runReconcilerOnce() {
           })
           .eq("id", saga.id);
       } catch (innerErr) {
-        console.error(`[SAGA] reconciler update-failure threw on ${saga.id}: ${innerErr?.message ?? innerErr}`);
+        log(`[SAGA] reconciler update-failure threw on ${saga.id}: ${innerErr?.message ?? innerErr}`);
       }
       if (willBePermanent) {
-        console.error(`[SAGA] PERMANENT FAILURE for saga ${saga.id} (entity_type=${saga.entity_type} entity_id=${saga.entity_id} after ${nextAttempts} attempts): ${errMsg}`);
+        log(`[SAGA] PERMANENT FAILURE for saga ${saga.id} (entity_type=${saga.entity_type} entity_id=${saga.entity_id} after ${nextAttempts} attempts): ${errMsg}`);
         stats.permanent++;
       } else {
-        console.warn(`[SAGA] retry ${nextAttempts}/${MAX_ATTEMPTS} for ${saga.id} failed: ${errMsg}`);
+        log(`[SAGA] retry ${nextAttempts}/${MAX_ATTEMPTS} for ${saga.id} failed: ${errMsg}`);
         stats.failed++;
       }
     }
@@ -273,11 +274,11 @@ export function startSagaReplayer() {
     try {
       await runReconcilerOnce();
     } catch (err) {
-      console.error(`[SAGA] reconciler tick threw: ${err?.message ?? err}`);
+      log(`[SAGA] reconciler tick threw: ${err?.message ?? err}`);
     }
     _reconcilerTimer = setTimeout(tick, RECONCILE_INTERVAL_MS);
   }, 30_000);
-  console.log("[SAGA] Replayer started — reconciling drift every 5 min");
+  log("[SAGA] Replayer started — reconciling drift every 5 min");
 }
 
 export function stopSagaReplayer() {

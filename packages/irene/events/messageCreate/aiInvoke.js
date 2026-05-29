@@ -30,9 +30,12 @@ export function getConvClient() { return _geminiPools.conv?.get() || null; }
 export function getGeminiClient() { return _geminiPools.work?.get() || null; }
 export function hasWorkPool() { return !!_geminiPools.work; }
 
+// Prompt char budget. Exported so callers/tests share one source of truth.
+// Local model → generous budget (no per-token cost); lower it for cloud deploys.
+export const PROMPT_BUDGET = 100000; // ~25k tokens — local model, no cost ceiling
+
 // Trim core personality to make room for runtime context.
 export function applyPromptBudget(systemPromptWithMemory) {
-  const PROMPT_BUDGET = 100000; // ~25k tokens — local model, no cost ceiling
   if (systemPromptWithMemory.length > PROMPT_BUDGET) {
     const runtimeStart = systemPromptWithMemory.indexOf("\n\n[Currently speaking:");
     if (runtimeStart > 0) {

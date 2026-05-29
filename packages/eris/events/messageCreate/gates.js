@@ -21,6 +21,7 @@ import { LRUCache } from "@defnotean/shared/LRUCache";
 import { isSleeping, wakeSleep } from "./sleepState.js";
 import { trackMessage, addWarning, jaccardSim } from "./spamTracker.js";
 import { EXPLOIT_PATTERNS, AWAIT_REPLY_MS } from "./constants.js";
+import { checkBudget, incrementBudget, shouldNotify } from "../../utils/aiBudget.js";
 
 let _humanityCounter = 0;
 
@@ -355,20 +356,49 @@ export async function runGates(message) {
     log(`[GUARD] Blocked long message (${message.content.length} chars) from ${message.author?.tag}`);
     return STOP;
   }
+  // ── AI daily budget ceiling — OPT-IN, default-OFF ────────────────────────
+  // Last gate before the expensive AI call: if an operator set a per-user or
+  // per-guild daily cap (AI_DAILY_USER_CAP / AI_DAILY_GUILD_CAP) and it's been
+  // hit, drop the message so a chatty user / small raid can't run up unbounded
+  // Gemini/Voyage spend. When no cap is configured this is a pure pass-through
+  // (early return inside checkBudget) — the green baseline is unchanged. The
+  // owner is exempt. The counter is incremented just before the proceed return
+  // so only messages that actually reach the AI count against the cap.
+  if (message.author.id !== config.ownerId) {
+    const budget = checkBudget({ userId: message.author.id, guildId: message.guild?.id });
+    if (budget.exceeded) {
+      // One short notice per scope per UTC day — respect the channel like the
+      // rest of the gauntlet; never spam on every subsequent dropped message.
+      if (shouldNotify(budget.scope, budget.scope === "guild" ? message.guild?.id : message.author.id)) {
+        message.reply("i've hit my daily chat limit, talk to me again tomorrow 😴").catch(() => {});
+      }
+      return STOP;
+    }
+  }
   // ── Injection firewall — speculative: kick off non-awaited so AI runs in parallel.
   // Verdict is awaited via `firewallGate` immediately before any user-visible send.
   // Net latency: max(firewall, AI) instead of firewall + AI.
   let firewallPromise = null;
   if (!isTwin && message.author.id !== config.ownerId) {
+    // Always run the firewall — supabase may be null (no-Supabase mode). The L3
+    // semantic layer self-guards on supabase && voyageApiKey, so L1/L1.5/L2/L2.5
+    // run regardless and only the semantic layer is skipped when Supabase/Voyage
+    // are absent. Previously this only ran inside `if (supabase)`, so in the
+    // supported no-Supabase mode every message passed unchecked.
     const supabase = db.getSupabase();
-    if (supabase) {
-      firewallPromise = checkInjection(message.content, supabase, message.author.id)
-        .catch(e => { log(`[FIREWALL] Error: ${e.message}`); return { safe: true, _error: e }; });
-    }
+    firewallPromise = checkInjection(message.content, supabase, message.author.id)
+      .catch(e => { log(`[FIREWALL] Error: ${e.message}`); return { safe: true, _error: e }; });
   }
 
   // Per-CHANNEL history for servers (group awareness), per-user for DMs
   const channelKey = isDM ? `dm:${message.author.id}` : `ch:${message.channel.id}`;
+
+  // This message survived every gate and is about to reach the AI — count it
+  // against the daily budget (no-op when no cap is configured). Owner exempt,
+  // matching the check above.
+  if (message.author.id !== config.ownerId) {
+    incrementBudget({ userId: message.author.id, guildId: message.guild?.id });
+  }
 
   return {
     stop: false,

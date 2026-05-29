@@ -234,6 +234,18 @@ export async function execute(interaction) {
     return;
   }
 
+  // ── Mod action confirm / cancel buttons ───────────────────────────────────
+  // Posted when an AI-initiated destructive action (ban/kick/tempban, large
+  // purge) or a threshold-crossing /warn needs a human to confirm before it
+  // commits. Same anti-spoof + admin-only posture as modundo.
+  if (interaction.isButton() && (interaction.customId.startsWith("modconfirm:") || interaction.customId.startsWith("modcancel:"))) {
+    await handleModConfirm(interaction).catch((err) => {
+      log(`[ModConfirm] Button error: ${err.message}`);
+      interaction.reply({ content: `confirm failed: ${err.message}`, flags: 64 }).catch(() => {});
+    });
+    return;
+  }
+
   // ── Scrim Match commands ──────────────────────────────────────────────────
   if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith("scrim:")) {
     const { manageScrimInteraction } = await import("../utils/scrims.js");
@@ -586,7 +598,7 @@ export async function execute(interaction) {
       await command.execute(interaction);
     } catch (error) {
       log(`Context command error [${interaction.commandName}]: ${error.message}`);
-      console.error(error);
+      log(error);
       const reply = {
         embeds: [errorEmbed("Error", "Something went wrong running that action.")],
         flags: 64,
@@ -610,7 +622,7 @@ export async function execute(interaction) {
     await command.execute(interaction);
   } catch (error) {
     log(`Command error [${interaction.commandName}]: ${error.message}`);
-    console.error(error);
+    log(error);
 
     const reply = {
       embeds: [errorEmbed("Error", "Something went wrong executing that command.")],
@@ -738,4 +750,103 @@ async function handleModUndo(interaction) {
   }
 
   await interaction.editReply({ content: `✅ ${result}` }).catch(() => {});
+}
+
+// ─── Destructive-action confirm / cancel handler ────────────────────────────
+// Commits (or discards) an AI-initiated ban/kick/tempban/large-purge or a
+// /warn that would cross the ban/kick escalation threshold. The pending action
+// was stashed in moderationExecutor's in-memory store under a short token; we
+// re-verify the clicking member's perms + hierarchy at click time before
+// committing. One-shot: the token is consumed so a double-click can't fire it
+// twice; Cancel and TTL-expiry both discard.
+async function handleModConfirm(interaction) {
+  const { PermissionFlagsBits } = await import("discord.js");
+
+  // Only accept buttons the bot itself posted — prevents customId spoofing.
+  if (interaction.message?.author?.id !== interaction.client.user.id) {
+    return interaction.reply({ content: "this button isn't from me", flags: 64 }).catch(() => {});
+  }
+
+  // Idempotency — once committed/cancelled the components are stripped.
+  if (!interaction.message?.components?.length) {
+    return interaction.reply({ content: "already handled", flags: 64 }).catch(() => {});
+  }
+
+  const [prefix, token] = (interaction.customId || "").split(":");
+  if (!token) {
+    return interaction.reply({ content: "malformed confirm button", flags: 64 }).catch(() => {});
+  }
+
+  const {
+    consumePendingAction, getPendingAction, commitPendingAction,
+  } = await import("../ai/executors/moderationExecutor.js");
+
+  // Cancel — discard without running anything.
+  if (prefix === "modcancel") {
+    consumePendingAction(token);
+    return interaction.update({ content: "✖️ Action cancelled.", embeds: [], components: [] }).catch(() => {});
+  }
+
+  // Confirm — must have the permission the original action required.
+  const pending = getPendingAction(token);
+  if (!pending) {
+    // TTL-expired or already consumed. Strip the now-dead buttons.
+    return interaction.update({ content: "⌛ This confirmation expired — re-run the request.", embeds: [], components: [] }).catch(() => {});
+  }
+
+  // Perm pre-check at click time before doing any work. commitPendingAction
+  // re-checks too, but this gives a clean ephemeral reject without consuming
+  // the token, so a different mod can still confirm.
+  const member = interaction.member;
+  if (!member?.permissions?.has?.(PermissionFlagsBits.Administrator)
+      && member?.id !== interaction.guild?.ownerId
+      && !member?.permissions?.has?.(pending.requiredPerm)) {
+    return interaction.reply({ content: "you don't have permission to confirm this action", flags: 64 }).catch(() => {});
+  }
+
+  // Now consume — committed exactly once.
+  const taken = consumePendingAction(token);
+  if (!taken) {
+    return interaction.update({ content: "⌛ This confirmation expired — re-run the request.", embeds: [], components: [] }).catch(() => {});
+  }
+
+  try { await interaction.deferReply({ flags: 64 }); }
+  catch (err) { if (err?.code === 10062 || err?.code === 40060) return; throw err; }
+
+  // Build commit deps: findMember/checkHierarchy come from the stashed ctx
+  // (the same helpers the executor uses); DB/twin effects are imported here.
+  const { logAudit, addTempBan } = await import("../database.js");
+  const { firePunishSignal } = await import("../utils/twinPunish.js");
+  const deps = {
+    findMember: taken.ctx?.findMember,
+    checkHierarchy: taken.ctx?.checkHierarchy,
+    logAudit,
+    addTempBan,
+    firePunishSignal,
+  };
+
+  let outcome;
+  try {
+    outcome = await commitPendingAction(taken, {
+      guild: interaction.guild,
+      member: interaction.member,
+      clickedBy: interaction.user,
+      deps,
+    });
+  } catch (err) {
+    return interaction.editReply({ content: `couldn't complete the action: ${err.message}` }).catch(() => {});
+  }
+
+  // Strip the buttons + annotate the original prompt so it can't be re-clicked.
+  try {
+    const verb = outcome?.ok
+      ? `✅ Confirmed by <@${interaction.user.id}>`
+      : `⚠️ Could not complete (clicked by <@${interaction.user.id}>)`;
+    await interaction.message.edit({ content: `~~${(interaction.message.content || "pending action").slice(0, 1800)}~~\n\n${verb}`, embeds: [], components: [] })
+      .catch((err) => log(`[ModConfirm] edit failed: ${err?.message || err}`));
+  } catch (err) {
+    log(`[ModConfirm] edit crash: ${err?.message || err}`);
+  }
+
+  await interaction.editReply({ content: outcome?.ok ? `✅ ${outcome.message}` : `⚠️ ${outcome?.message || "action failed"}` }).catch(() => {});
 }

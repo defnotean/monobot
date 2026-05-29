@@ -10,6 +10,7 @@ import { EmbedBuilder, ChannelType, PermissionFlagsBits } from "discord.js";
 import { tempChannels, tempTextChannels, tempVcSeq, renameTimers, tempControlPanels, tempVcCreatedAt, tempVcMembers, ownerGraceTimers, guildVcSeqCounters, manualRenames } from "../utils/tempvc.js";
 import { applyVcTemplate, queueRename, initRenameTimer } from "../utils/vcrenamer.js";
 import { createControlPanel, updateControlPanel } from "../utils/vcpanel.js";
+import { getQueue, handleVoiceMembershipChange } from "../music/player.js";
 
 // ─── VC History: format duration ─────────────────────────────────────────────
 function formatDuration(ms) {
@@ -491,6 +492,15 @@ export async function execute(oldState, newState) {
   }
 
   const settings = getGuildSettings(guild.id);
+
+  // ── Music: pause + schedule disconnect when the bot is left alone in its VC ──
+  // (and resume/cancel when a human rejoins). Only react to changes touching the
+  // bot's active music channel; the helper no-ops when there's no queue.
+  const musicQueue = getQueue(guild.id);
+  const musicVcId = musicQueue?.voiceChannel?.id;
+  if (musicVcId && (oldState.channel?.id === musicVcId || newState.channel?.id === musicVcId)) {
+    handleVoiceMembershipChange(guild.id);
+  }
 
   // ── Auto-delete temp VC when it empties ──────────────────────────────────
   if (oldState.channel && tempChannels.has(oldState.channel.id)) {
