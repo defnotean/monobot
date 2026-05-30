@@ -116,6 +116,49 @@ describe("dual.runGeminiChat honors config.timeouts", () => {
       expect(winner).toBe("pending"); // still pending — both defaults are far above 100ms
     }
   });
+
+  it("routes Gemini catalog-only tool calls through use_tool", async () => {
+    const client = {
+      models: {
+        generateContent: vi
+          .fn()
+          .mockResolvedValueOnce({
+            candidates: [{
+              content: {
+                parts: [{
+                  functionCall: {
+                    name: "use_tool",
+                    args: { tool_name: "search_notes", arguments: { query: "raid" } },
+                  },
+                }],
+              },
+            }],
+          })
+          .mockResolvedValueOnce({
+            candidates: [{ content: { parts: [{ text: "found it" }] } }],
+          }),
+      },
+    };
+    const executor = vi.fn(async () => "note result");
+
+    const result = await dual.runGeminiChat(
+      client,
+      "sys",
+      [],
+      [{ role: "user", parts: [{ text: "find my note" }] }],
+      "find my note",
+      executor,
+      { routerToolNames: ["search_notes"] },
+    );
+
+    const firstRequest = client.models.generateContent.mock.calls[0][0];
+    const declarations = firstRequest.config.tools.flatMap((group: any) => group.functionDeclarations || []);
+    expect(declarations.map((decl: any) => decl.name)).toContain("use_tool");
+    expect(executor).toHaveBeenCalledWith("search_notes", { query: "raid" }, expect.any(AbortSignal));
+    expect(result.toolsUsed).toEqual(["search_notes"]);
+    expect(result.functionCalls).toEqual([{ name: "search_notes", args: { query: "raid" } }]);
+    expect(result.text).toBe("found it");
+  });
 });
 
 // ─── (b) isRateLimited reflects real work-pool health ───────────────────────
@@ -251,5 +294,50 @@ describe("nvidia.js dedups identical tool calls (stableSig)", () => {
     // The duplicate-only turn exits the loop with that turn's content.
     expect(result.text).toBe("wrapping up");
     expect(result.toolsUsed).toEqual(["web_search"]);
+  });
+
+  it("routes catalog-only tools through use_tool", async () => {
+    const responses = [
+      chatMessage({
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "c1",
+            function: {
+              name: "use_tool",
+              arguments: JSON.stringify({ tool_name: "search_notes", arguments: { query: "raid" } }),
+            },
+          },
+        ],
+      }),
+      chatMessage({ role: "assistant", content: "found it" }),
+    ];
+    let i = 0;
+    globalThis.fetch = vi.fn(async () => {
+      const body = responses[Math.min(i++, responses.length - 1)];
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      } as any;
+    }) as any;
+    const executor = vi.fn(async () => "note result");
+
+    const result = await nvidia.runGeminiChat(
+      null,
+      "you are a test bot",
+      [],
+      [{ role: "user", parts: [{ text: "find my note" }] }],
+      "find my note",
+      executor,
+      { routerToolNames: ["search_notes"] },
+    );
+    const firstBody = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+
+    expect(firstBody.tools.map((tool: any) => tool.function.name)).toContain("use_tool");
+    expect(executor).toHaveBeenCalledWith("search_notes", { query: "raid" });
+    expect(result).toEqual({ text: "found it", toolsUsed: ["search_notes"] });
   });
 });

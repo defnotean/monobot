@@ -2,14 +2,25 @@ import { describe, expect, it } from "vitest";
 import { EVERYONE_TOOLS, OWNER_TOOLS } from "../../ai/tools.js";
 import { registry } from "../../ai/toolRegistry.js";
 
-// Parse the tool names out of a Tier-2 catalog block. Lines are "- name: desc".
+// Parse the tool names out of a Tier-2 catalog block. Lines are
+// "- category: tool_one, tool_two".
 function catalogNames(catalog: string): Set<string> {
   const names = new Set<string>();
   for (const line of catalog.split("\n")) {
-    const m = line.match(/^- ([a-z0-9_]+):/i);
-    if (m) names.add(m[1]);
+    const m = line.match(/^- [^:]+:\s*(.*)$/i);
+    if (!m) continue;
+    for (const name of m[1].split(/,\s*/)) {
+      if (/^[a-z0-9_]+$/i.test(name)) names.add(name);
+    }
   }
   return names;
+}
+
+function reachableNames(tier1: Array<{ name: string }>, tier2Catalog: string): Set<string> {
+  return new Set([
+    ...tier1.map((t) => t.name),
+    ...catalogNames(tier2Catalog),
+  ]);
 }
 
 describe("tool registry", () => {
@@ -43,10 +54,7 @@ describe("two-tier selection (Eris)", () => {
       everyoneTools: EVERYONE_TOOLS,
       ownerTools: OWNER_TOOLS,
     });
-    const reachable = new Set([
-      ...tier1.map((t) => t.name),
-      ...catalogNames(tier2Catalog),
-    ]);
+    const reachable = reachableNames(tier1, tier2Catalog);
     const accessible = new Set([...EVERYONE_TOOLS, ...OWNER_TOOLS].map((t) => t.name));
     expect(reachable).toEqual(accessible);
   });
@@ -57,10 +65,7 @@ describe("two-tier selection (Eris)", () => {
       everyoneTools: EVERYONE_TOOLS,
       ownerTools: OWNER_TOOLS,
     });
-    const reachable = new Set([
-      ...tier1.map((t) => t.name),
-      ...catalogNames(tier2Catalog),
-    ]);
+    const reachable = reachableNames(tier1, tier2Catalog);
     // Non-owner should NOT see owner-only tools, but must reach every
     // everyone-tool somewhere.
     const everyoneNames = new Set(EVERYONE_TOOLS.map((t) => t.name));
@@ -90,6 +95,26 @@ describe("two-tier selection (Eris)", () => {
       ownerTools: OWNER_TOOLS,
     });
     expect(tier1.length).toBeLessThan(full * 0.6);
+  });
+
+  it("uses a compact grouped Tier-2 catalog instead of per-tool descriptions", () => {
+    const { tier1, tier2Catalog } = registry.selectByMessage("hey", {
+      isOwner: true,
+      everyoneTools: EVERYONE_TOOLS,
+      ownerTools: OWNER_TOOLS,
+    });
+    const tier2Names = catalogNames(tier2Catalog);
+    const byName = new Map([...EVERYONE_TOOLS, ...OWNER_TOOLS].map((tool) => [tool.name, tool]));
+    const full = new Set([...EVERYONE_TOOLS, ...OWNER_TOOLS].map((t) => t.name)).size;
+    const legacyVerboseCatalog =
+      "\n\nOTHER AVAILABLE TOOLS (call these through use_tool with {tool_name, arguments}; do not write tool syntax as text):\n" +
+      [...tier2Names]
+        .map((name) => `- ${name}: ${(byName.get(name)?.description || "").split(/\.\s/)[0]}`)
+        .join("\n");
+
+    expect(tier1.length).toBeLessThan(full * 0.6);
+    expect(tier2Names.size).toBeGreaterThan(50);
+    expect(tier2Catalog.length).toBeLessThan(legacyVerboseCatalog.length * 0.5);
   });
 
   // (d) Always-include tools are ALWAYS Tier 1 (declarations), never demoted

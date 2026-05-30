@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPromptBudget, PROMPT_BUDGET } from "../../events/messageCreate/aiInvoke.js";
+import { applyPromptBudget } from "@defnotean/shared/promptBudget";
 
 // Regression: Irene's contextBuild emits a "\n\n[Currently speaking:"
 // runtime-boundary anchor (matching Eris). applyPromptBudget locates that
@@ -12,16 +12,17 @@ import { applyPromptBudget, PROMPT_BUDGET } from "../../events/messageCreate/aiI
 // the bug.
 //
 // CRITICAL — these tests now exercise the PRODUCTION regime. The real Irene
-// admin catalog is ~15.6k chars (194 tool lines) — LARGER than the entire
-// 12000-char PROMPT_BUDGET by itself. A toy 3-tool catalog (~180 chars) never
+// admin catalog used to be ~15.6k chars (194 tool lines) — larger than common
+// cloud PROMPT_BUDGET settings by itself. A toy 3-tool catalog (~180 chars) never
 // pushes runtime over the budget, so the failing code path (the final hard
 // slice at aiInvoke.js when runtime alone exceeds the budget) is never hit and
 // a passing test gives false confidence. We therefore build a realistically
 // oversized catalog so the hard-slice path actually fires.
 
-// PROMPT_BUDGET is imported from the source so this test is correct at ANY
-// configured budget (12k cloud / 100k local). Fixtures are sized RELATIVE to
-// it so the catalog alone exceeds the budget and the core forces trimming.
+// Fixtures are sized relative to the cloud budget so the catalog alone exceeds
+// the budget and the core forces trimming.
+const PROMPT_BUDGET = 12000;
+const budgetPrompt = (prompt: string) => applyPromptBudget(prompt, { budget: PROMPT_BUDGET });
 
 // Build a catalog whose total size exceeds the budget (each "- name: desc"
 // line is ~60-80 chars), mirroring the real admin catalog being larger than
@@ -68,7 +69,7 @@ describe("applyPromptBudget runtime anchor (Irene)", () => {
   // behavioral rules — which override Irene's defaults — must always survive.
   it("preserves DIRECTIVES and SERVER RULES when the catalog is appended LAST", () => {
     const runtime = ANCHOR + MEMORY + DIRECTIVES + RULES + BIG_CATALOG;
-    const out = applyPromptBudget(BIG_CORE + runtime);
+    const out = budgetPrompt(BIG_CORE + runtime);
 
     expect(out.length).toBeLessThanOrEqual(PROMPT_BUDGET);
     expect(out).toContain("Currently speaking: bob");
@@ -86,7 +87,7 @@ describe("applyPromptBudget runtime anchor (Irene)", () => {
   // This is the production failure on every budget-pressured admin turn.
   it("DROPS directives/rules and ~half the catalog when the catalog sits INSIDE the budget before them (documents the bug)", () => {
     const runtime = ANCHOR + MEMORY + BIG_CATALOG + DIRECTIVES + RULES;
-    const out = applyPromptBudget(BIG_CORE + runtime);
+    const out = budgetPrompt(BIG_CORE + runtime);
 
     expect(out.length).toBeLessThanOrEqual(PROMPT_BUDGET);
     // Behavioral rules that follow the oversized catalog are sliced off.
@@ -106,11 +107,11 @@ describe("applyPromptBudget runtime anchor (Irene)", () => {
   // post-budget. (See needsInfra: messageCreate.js must wire this up.)
   it("preserves the ENTIRE catalog when it is appended AFTER applyPromptBudget", () => {
     const runtime = ANCHOR + MEMORY + DIRECTIVES + RULES;
-    let out = applyPromptBudget(BIG_CORE + runtime);
+    let out = budgetPrompt(BIG_CORE + runtime);
     // Behavioral rules survived the budget (they're the only runtime now).
     expect(out).toContain("never delete #general");
     expect(out).toContain("no spam");
-    // Catalog appended post-budget — NOT subject to the 12000 cap.
+    // Catalog appended post-budget — NOT subject to the configured prompt cap.
     out += BIG_CATALOG;
     for (const name of CATALOG_NAMES) expect(out).toContain(name);
   });

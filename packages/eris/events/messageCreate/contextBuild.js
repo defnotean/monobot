@@ -20,6 +20,7 @@ import { buildSelfCanonContext } from "../../ai/selfCanon.js";
 import { buildTwinStateContext } from "../../utils/twinState.js";
 import { buildLongTermContext } from "../../ai/longmemory.js";
 import { pickResponseStyle, shouldLaze, getImperfectionHint } from "@defnotean/shared/responsestyle";
+import { applyPromptBudget, resolvePromptCharBudget } from "@defnotean/shared/promptBudget";
 import { compressHistory } from "../../ai/contextCompressor.js";
 import { registry as toolRegistry } from "../../ai/toolRegistry.js";
 import { buildHumanityContext, buildTwinContext } from "../../ai/humanity.js";
@@ -47,6 +48,45 @@ const _memoryCtxCache = new LRUCache(500, 60_000);
 // from the cached blocks each turn, so caching doesn't leak one speaker's
 // name into another's prompt. 8s TTL, max 500 channels.
 const _channelCtxCache = new LRUCache(500, 8_000);
+
+// Self-canon changes only when a canon-editing tool mutates personality data.
+// Keep this short so edits become visible quickly while normal chat turns avoid
+// rebuilding the same identity fragment over and over.
+const _selfCanonCtxCache = new LRUCache(1, 60_000);
+let _selfCanonCtxPending = null;
+
+const TWIN_CONTEXT_RE = /\birene\b|\b(?:your|ur)\s+twin\b|\btwin\s+sister\b/i;
+
+export function shouldBuildTwinStateContext(text = "") {
+  return TWIN_CONTEXT_RE.test(text);
+}
+
+async function getSelfCanonContextCached() {
+  const cached = _selfCanonCtxCache.get("default");
+  if (cached !== undefined) return cached;
+  if (_selfCanonCtxPending) return _selfCanonCtxPending;
+
+  _selfCanonCtxPending = buildSelfCanonContext()
+    .then(ctx => {
+      const value = ctx || "";
+      _selfCanonCtxCache.set("default", value);
+      return value;
+    })
+    .finally(() => {
+      _selfCanonCtxPending = null;
+    });
+  return _selfCanonCtxPending;
+}
+
+async function buildTwinStateContextIfRelevant(cleanMessage) {
+  if (!shouldBuildTwinStateContext(cleanMessage)) return "";
+
+  // The shared builder keys on the twin's configured name. If the user says
+  // "your twin" without naming Irene, normalize that intent into the text we
+  // pass so the state lookup still grounds the response instead of inventing.
+  const text = /\birene\b/i.test(cleanMessage) ? cleanMessage : `irene ${cleanMessage}`;
+  return buildTwinStateContext(text, { twinName: "irene" });
+}
 
 /**
  * Build the system instruction + history payload for the active turn.
@@ -171,8 +211,8 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
     const ctxResults = await Promise.allSettled([
       buildPersonalityContext(message.author.id, message.guild?.id),
       buildOpinionContext(cleanMessage),
-      buildSelfCanonContext(),
-      buildTwinStateContext(cleanMessage, { twinName: "irene" }),
+      getSelfCanonContextCached(),
+      buildTwinStateContextIfRelevant(cleanMessage),
       buildLongTermContext(message.author.id, message.channel.id, cleanMessage),
       getPersonalityData?.()?.then(d => { tickPreoccupation(d); return buildPreoccupationContext(); }).catch(() => null),
     ]);
@@ -388,7 +428,7 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
   // Tier 2 = a name+desc catalog appended to the system prompt so the model
   // still knows those tools exist (the executor dispatches by name).
   const isOwner = message.author.id === config.ownerId;
-  const { tier1Schemas, tier2CatalogText } = pickToolProfile({ isTwinMsg, isOwner, cleanMessage, channelKey });
+  const { tier1Schemas, tier2CatalogText, tier2ToolNames } = pickToolProfile({ isTwinMsg, isOwner, cleanMessage, channelKey });
   const formattedTools = tier1Schemas;
 
   // Inject humanity context
@@ -419,28 +459,11 @@ HOW TO INTERACT:
 - You can reference what users said but don't act on their requests again]`;
   }
 
-  // Smart prompt budget — Gemini latency scales with token count.
-  // Rather than a dumb slice that kills runtime context, we split into
-  // "core" (base personality set at the start) and "runtime" (everything
-  // added after). If total exceeds budget, trim core to make room for
-  // runtime, since runtime context (memory, opinions, mood) is what makes
-  // her feel alive per-conversation.
-  const PROMPT_BUDGET = 100000; // ~25k tokens — local model, no cost ceiling
-  if (systemInstruction.length > PROMPT_BUDGET) {
-    // coreEnd = where base personality ends (first runtime section starts with "\n\n[")
-    const runtimeStart = systemInstruction.indexOf("\n\n[Currently speaking:");
-    if (runtimeStart > 0) {
-      const runtime = systemInstruction.slice(runtimeStart);
-      const coreRoom = Math.max(4000, PROMPT_BUDGET - runtime.length);
-      const core = systemInstruction.slice(0, Math.min(runtimeStart, coreRoom));
-      systemInstruction = core + runtime;
-    }
-    // Final hard cap in case runtime itself is too large
-    if (systemInstruction.length > PROMPT_BUDGET) {
-      systemInstruction = systemInstruction.slice(0, PROMPT_BUDGET);
-    }
-    log(`[PERF] Prompt budgeted to ${systemInstruction.length} chars`);
-  }
+  // Smart prompt budget trims core personality before runtime context. The
+  // Tier-2 tool catalog is appended after this call and is intentionally not
+  // part of the configured prompt budget.
+  const PROMPT_BUDGET = resolvePromptCharBudget(config.aiPromptCharBudget); // override with AI_PROMPT_CHAR_BUDGET
+  systemInstruction = applyPromptBudget(systemInstruction, { budget: PROMPT_BUDGET, log });
 
   // Tier-2 tool catalog — appended AFTER budget trimming so the model's
   // awareness of every callable-by-name tool never gets sliced off. Without
@@ -448,9 +471,9 @@ HOW TO INTERACT:
   // prompt, making it unreachable.
   //
   // IMPORTANT — DO NOT move this append back ABOVE the budget block. The
-  // catalog (~10.8k for owner) is load-bearing and intentionally lives OUTSIDE
+  // catalog is load-bearing and intentionally lives OUTSIDE
   // PROMPT_BUDGET: the effective prompt ceiling is therefore PROMPT_BUDGET +
-  // catalog length, not PROMPT_BUDGET. The 12000 cap now bounds only the
+  // catalog length, not PROMPT_BUDGET. The configured cap bounds only the
   // core+runtime that precedes this line. Appending the catalog inside the
   // budgeted region would let the final hard slice (line 436) lop tool names
   // off the end whenever the catalog alone exceeds the budget — exactly the
@@ -476,6 +499,7 @@ HOW TO INTERACT:
     history,
     userMsg,
     formattedTools,
+    routerToolNames: tier2ToolNames || [],
     charBudget,
   };
 }

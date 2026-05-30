@@ -206,6 +206,44 @@ function toGeminiTools(tools) {
   return result;
 }
 
+function routerToolDeclaration() {
+  return {
+    name: "use_tool",
+    description: "Call a catalog-only tool by exact name. Use only for tools listed in OTHER AVAILABLE TOOLS.",
+    parameters: {
+      type: "object",
+      properties: {
+        tool_name: { type: "string", description: "Exact catalog tool name to call." },
+        arguments: { type: "object", description: "Arguments for that tool." },
+      },
+      required: ["tool_name"],
+    },
+  };
+}
+
+function withRouterTool(geminiTools, routerToolNames = []) {
+  if (!Array.isArray(routerToolNames) || routerToolNames.length === 0) return geminiTools;
+  const router = routerToolDeclaration();
+  if (!geminiTools?.length) return [{ functionDeclarations: [router] }];
+  return geminiTools.map((group, idx) => ({
+    ...group,
+    functionDeclarations: idx === 0
+      ? [...(group.functionDeclarations || []), router]
+      : group.functionDeclarations,
+  }));
+}
+
+function routeCatalogTool(name, args, routerToolNames = []) {
+  if (name !== "use_tool") return { ok: true, toolName: name, args: args || {}, responseName: name };
+  const allowed = new Set(routerToolNames || []);
+  const raw = args || {};
+  const toolName = String(raw.tool_name || raw.name || raw.tool || "").trim();
+  if (!toolName) return { ok: false, responseName: "use_tool", result: "Error: use_tool requires tool_name" };
+  if (!allowed.has(toolName)) return { ok: false, responseName: "use_tool", result: `Error: "${toolName}" is not available in this turn's catalog` };
+  const routedArgs = raw.arguments ?? raw.args ?? raw.input ?? raw.parameters ?? {};
+  return { ok: true, toolName, args: routedArgs && typeof routedArgs === "object" ? routedArgs : {}, responseName: "use_tool" };
+}
+
 // Convert our internal history (Anthropic format) → Gemini contents format
 async function toGeminiHistory(history) {
   const contents = [];
@@ -296,6 +334,7 @@ async function toGeminiHistory(history) {
  *  - text: final text reply from Gemini
  *  - toolsUsed: boolean
  *  - history: updated history array (Anthropic format) for persistence
+ * @param {{ geminiClient: any, systemInstruction: string, history: any[], tools: any[], message: any, isAdmin: boolean, onToolStatus?: Function, useFastModel?: boolean, routerToolNames?: string[] }} args
  */
 export async function runGeminiChat({
   geminiClient,
@@ -306,9 +345,10 @@ export async function runGeminiChat({
   isAdmin,
   onToolStatus,
   useFastModel = false,
+  routerToolNames = [],
 }) {
   // ─── GEMINI PROVIDER ──────────────────────────────────────────────
-  const geminiTools = toGeminiTools(tools);
+  const geminiTools = withRouterTool(toGeminiTools(tools), routerToolNames);
   const contents = await toGeminiHistory(history);
   let toolsUsed = false;
   let iterations = 0;
@@ -536,17 +576,24 @@ export async function runGeminiChat({
     await Promise.all(
       funcCalls.map(async (part, idx) => {
         const { name, args } = part.functionCall;
+        const routed = routeCatalogTool(name, args, routerToolNames);
+        if (!routed.ok) {
+          funcResponses.push({ functionResponse: { name: routed.responseName, response: { result: routed.result } } });
+          toolResults.push({ type: "tool_result", tool_use_id: `gemini_${iterations}_use_tool_error`, tool_name: "use_tool", content: routed.result });
+          _completedCount++;
+          return;
+        }
 
         // Loop guard — skip if we've already executed this exact call this turn.
         // stableSig sorts arg keys so the model emitting {a:1,b:2} on iter 1 and
         // {b:2,a:1} on iter 2 still hashes to the same signature.
-        const signature = stableSig(name, args || {});
+        const signature = stableSig(routed.toolName, routed.args || {});
         const isDuplicate = calledSignatures.has(signature);
         if (isDuplicate) {
-          log(`[Gemini] Skipping duplicate ${name} call (already executed)`);
+          log(`[Gemini] Skipping duplicate ${routed.toolName} call (already executed)`);
           const dupeMsg = "already executed earlier this turn — don't call again, move on or finish";
-          funcResponses.push({ functionResponse: { name, response: { result: dupeMsg } } });
-          toolResults.push({ type: "tool_result", tool_use_id: `gemini_${iterations}_${name}_dup`, tool_name: name, content: dupeMsg });
+          funcResponses.push({ functionResponse: { name: routed.responseName, response: { result: dupeMsg } } });
+          toolResults.push({ type: "tool_result", tool_use_id: `gemini_${iterations}_${routed.toolName}_dup`, tool_name: routed.responseName, content: dupeMsg });
           _completedCount++;
           return;
         }
@@ -556,30 +603,30 @@ export async function runGeminiChat({
         // secret-shaped values + secret-named keys (apiKey, token, etc.) get
         // scrubbed even if the line escapes the file-transport regex pass.
         // The logger truncates anything past MAX_LOG_LINE_BYTES on its own.
-        log(`[Gemini] ${name}(${JSON.stringify(redact(args))})`);
+        log(`[Gemini] ${routed.toolName}(${JSON.stringify(redact(routed.args))})`);
 
-        const isAdminTool = ADMIN_TOOLS.some((t) => t.name === name);
-        const timeoutMs = VERY_SLOW_TOOLS.has(name) ? config.timeouts.toolVerySlow
-                        : SLOW_TOOLS.has(name)      ? config.timeouts.toolSlow
+        const isAdminTool = ADMIN_TOOLS.some((t) => t.name === routed.toolName);
+        const timeoutMs = VERY_SLOW_TOOLS.has(routed.toolName) ? config.timeouts.toolVerySlow
+                        : SLOW_TOOLS.has(routed.toolName)      ? config.timeouts.toolSlow
                         :                             config.timeouts.toolFast;
         let result;
 
         if (isAdminTool && !isAdmin) {
-          log(`[SECURITY] Blocked admin tool "${name}" for non-admin`);
+          log(`[SECURITY] Blocked admin tool "${routed.toolName}" for non-admin`);
           result = pickDenial();
         } else {
           // Track the underlying tool promise so that if the race times out, we
           // still attach a handler to its eventual completion. This prevents
           // silent half-finished state (e.g. a role created after the timeout)
           // from vanishing without a trace and logs unhandled rejections.
-          const toolPromise = executeTool(name, args, message, { aiInitiated: true });
+          const toolPromise = executeTool(routed.toolName, routed.args, message, { aiInitiated: true });
           let timedOut = false;
           try {
             result = await Promise.race([
               toolPromise,
               new Promise((_, rej) => setTimeout(() => {
                 timedOut = true;
-                rej(new Error(`tool "${name}" timed out after ${timeoutMs / 1000}s`));
+                rej(new Error(`tool "${routed.toolName}" timed out after ${timeoutMs / 1000}s`));
               }, timeoutMs)),
             ]);
             // Render bridge: a destructive AI action returns a confirm-prompt
@@ -588,21 +635,21 @@ export async function runGeminiChat({
             result = await postDeferralIfNeeded(result, message.channel);
           } catch (err) {
             result = `Error: ${err.message}`;
-            log(`[Gemini] tool error in ${name}: ${err.message}`);
+            log(`[Gemini] tool error in ${routed.toolName}: ${err.message}`);
           }
           // Attach observer to the orphaned promise so we know what happened
           if (timedOut) {
             toolPromise.then(
-              (late) => log(`[Gemini] late-completion of timed-out "${name}" → ${String(late).slice(0, 140)}`),
-              (err) => log(`[Gemini] late-failure of timed-out "${name}": ${err?.message || err}`)
+              (late) => log(`[Gemini] late-completion of timed-out "${routed.toolName}" → ${String(late).slice(0, 140)}`),
+              (err) => log(`[Gemini] late-failure of timed-out "${routed.toolName}": ${err?.message || err}`)
             );
           }
         }
 
-        log(`[Gemini] ${name} → ${result}`);
+        log(`[Gemini] ${routed.toolName} → ${result}`);
         // Track usage for two-tier tool selection
         const channelKey = message.guild ? `${message.guild.id}-${message.author?.id || "unknown"}` : `dm-${message.author?.id || "unknown"}`;
-        registry.trackUsage(channelKey, name);
+        registry.trackUsage(channelKey, routed.toolName);
 
         // Update status
         _completedCount++;
@@ -629,11 +676,11 @@ export async function runGeminiChat({
           ? safeSlice(result, 1500)
           : result;
 
-        funcResponses.push({ functionResponse: { name, response: { result: truncResult } } });
+        funcResponses.push({ functionResponse: { name: routed.responseName, response: { result: truncResult } } });
         toolResults.push({
           type: "tool_result",
-          tool_use_id: `gemini_${iterations}_${name}`,
-          tool_name: name,
+          tool_use_id: `gemini_${iterations}_${routed.toolName}`,
+          tool_name: routed.responseName,
           content: truncResult,
         });
       })
@@ -672,4 +719,3 @@ export async function runGeminiChat({
   }
   return { text: "done — that was a complex task so i hit my action limit, let me know if anything's still missing", toolsUsed, history };
 }
-

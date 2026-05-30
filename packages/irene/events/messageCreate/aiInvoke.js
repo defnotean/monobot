@@ -11,6 +11,10 @@ import { log } from "../../utils/logger.js";
 import { runGeminiChat, quickReply, looksLikeTask } from "../../ai/providers/index.js";
 import { setRateLimitCallbacks } from "../../ai/providers/index.js";
 import { createSplitPools } from "@defnotean/shared/keyPool";
+import {
+  applyPromptBudget as applySharedPromptBudget,
+  resolvePromptCharBudget,
+} from "@defnotean/shared/promptBudget";
 
 // ── Smart Gemini key pool — per-key rate limit tracking ───────────────────
 // With 12 keys: keys 0,2,4,6,8,10 → conversation, keys 1,3,5,7,9,11 → worker
@@ -31,25 +35,13 @@ export function getGeminiClient() { return _geminiPools.work?.get() || null; }
 export function hasWorkPool() { return !!_geminiPools.work; }
 
 // Prompt char budget. Exported so callers/tests share one source of truth.
-// Local model → generous budget (no per-token cost); lower it for cloud deploys.
-export const PROMPT_BUDGET = 100000; // ~25k tokens — local model, no cost ceiling
+// Default stays generous for local models; set AI_PROMPT_CHAR_BUDGET lower for
+// cloud deployments.
+export const PROMPT_BUDGET = resolvePromptCharBudget(config.aiPromptCharBudget);
 
 // Trim core personality to make room for runtime context.
 export function applyPromptBudget(systemPromptWithMemory) {
-  if (systemPromptWithMemory.length > PROMPT_BUDGET) {
-    const runtimeStart = systemPromptWithMemory.indexOf("\n\n[Currently speaking:");
-    if (runtimeStart > 0) {
-      const runtime = systemPromptWithMemory.slice(runtimeStart);
-      const coreRoom = Math.max(4000, PROMPT_BUDGET - runtime.length);
-      const core = systemPromptWithMemory.slice(0, Math.min(runtimeStart, coreRoom));
-      systemPromptWithMemory = core + runtime;
-    }
-    if (systemPromptWithMemory.length > PROMPT_BUDGET) {
-      systemPromptWithMemory = systemPromptWithMemory.slice(0, PROMPT_BUDGET);
-    }
-    log(`[PERF] Prompt budgeted to ${systemPromptWithMemory.length} chars`);
-  }
-  return systemPromptWithMemory;
+  return applySharedPromptBudget(systemPromptWithMemory, { budget: PROMPT_BUDGET, log });
 }
 
 // Wire up per-key rate limit callbacks for the pool that actually owns this

@@ -14,6 +14,20 @@ import { analyzeExchange } from "../../ai/longmemory.js";
 import { triggerSleep, isSleeping } from "./sleepState.js";
 import { SLEEP_TRIGGERS, NAP_TRIGGERS } from "./constants.js";
 
+const MAX_HISTORY_REPLY_CHARS = 1900;
+
+export function appendModelReplyIfMissing(history, text) {
+  if (!Array.isArray(history) || !text) return false;
+  const storedText = String(text).slice(0, MAX_HISTORY_REPLY_CHARS);
+  const last = history[history.length - 1];
+  const lastText = last?.parts?.[0]?.text;
+  if ((last?.role === "model" || last?.role === "assistant") && lastText === storedText) {
+    return false;
+  }
+  history.push({ role: "model", parts: [{ text: storedText }] });
+  return true;
+}
+
 /**
  * Run the post-reply analytics pass. Persists the conversation, updates
  * mood/affinity, trains personality tracker, records the inside-joke
@@ -37,7 +51,7 @@ export async function runAnalytics({
   // ─── 7. STATE PERSISTENCE ───────────────────────────────────────────
   // Update history — don't save suppressed game text (user never saw it)
   if (result?.text && !gameEmbedSent) {
-    history.push({ role: "model", parts: [{ text: result.text }] });
+    appendModelReplyIfMissing(history, result.text);
   } else if (gameEmbedSent && result?.toolsUsed?.length) {
     // For games, just note what happened — not the AI's narration
     // Don't add tool-usage notes to history — model echoes them as visible text

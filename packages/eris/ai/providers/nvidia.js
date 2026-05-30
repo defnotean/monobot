@@ -65,6 +65,40 @@ export function toNvidiaTools(tools) {
   return result;
 }
 
+function routerToolDefinition() {
+  return {
+    type: "function",
+    function: {
+      name: "use_tool",
+      description: "Call a catalog-only tool by exact name. Use only for tools listed in OTHER AVAILABLE TOOLS.",
+      parameters: {
+        type: "object",
+        properties: {
+          tool_name: { type: "string", description: "Exact catalog tool name to call." },
+          arguments: { type: "object", description: "Arguments for that tool." },
+        },
+        required: ["tool_name"],
+      },
+    },
+  };
+}
+
+function withRouterTool(nvidiaTools, routerToolNames = []) {
+  if (!Array.isArray(routerToolNames) || routerToolNames.length === 0) return nvidiaTools;
+  return [...(nvidiaTools || []), routerToolDefinition()];
+}
+
+function routeCatalogTool(name, args, routerToolNames = []) {
+  if (name !== "use_tool") return { ok: true, toolName: name, args: args || {} };
+  const allowed = new Set(routerToolNames || []);
+  const raw = args || {};
+  const toolName = String(raw.tool_name || raw.name || raw.tool || "").trim();
+  if (!toolName) return { ok: false, result: "Error: use_tool requires tool_name" };
+  if (!allowed.has(toolName)) return { ok: false, result: `Error: "${toolName}" is not available in this turn's catalog` };
+  const routedArgs = raw.arguments ?? raw.args ?? raw.input ?? raw.parameters ?? {};
+  return { ok: true, toolName, args: routedArgs && typeof routedArgs === "object" ? routedArgs : {} };
+}
+
 // ─── Quick reply (no tools, fast acknowledgment) ────────────────────────────
 
 export async function quickReply(_client, systemInstruction, userText, context) {
@@ -174,7 +208,7 @@ export function _providerHealth() {
  */
 export async function runNvidiaChat(_client, systemInstruction, tools, history, userMessage, executor, options = {}) {
   const model = options.useFastModel ? NV.fastModel : NV.model;
-  const nvidiaTools = toNvidiaTools(tools);
+  const nvidiaTools = withRouterTool(toNvidiaTools(tools), options.routerToolNames);
 
   // Append tool-use directive to system prompt with explicit examples.
   // Qwen needs concrete mappings between user requests and tool names, not
@@ -326,7 +360,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
     // web_searches in one turn without paying N× latency.
     let allDuplicates = true;
     const slots = msg.tool_calls.map((call) => {
-      const fnName = call.function?.name;
+      let fnName = call.function?.name;
       let fnArgs = {};
       let parseError = null;
       // Guard malformed calls — without this, an undefined fnName flows into
@@ -344,6 +378,13 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
         allDuplicates = false;
         return { call, fnName, fnArgs, duplicate: false, parseError };
       }
+      const routed = routeCatalogTool(fnName, fnArgs, options.routerToolNames);
+      if (!routed.ok) {
+        allDuplicates = false;
+        return { call, fnName, fnArgs, duplicate: false, routeError: routed.result };
+      }
+      fnName = routed.toolName;
+      fnArgs = routed.args;
       // Use the same key-sorted signature dual.js uses for Gemini so identical
       // tool calls dedup consistently across providers — {a:1,b:2} and
       // {b:2,a:1} must collapse to one execution regardless of key order.
@@ -357,7 +398,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
       return { call, fnName, fnArgs, duplicate: false };
     });
 
-    const fresh = slots.filter((s) => !s.duplicate && !s.parseError);
+    const fresh = slots.filter((s) => !s.duplicate && !s.parseError && !s.routeError);
     if (fresh.length > 1) log(`[NVIDIA] running ${fresh.length} tool calls in parallel: ${fresh.map((s) => s.fnName).join(", ")}`);
     const execResults = await Promise.all(fresh.map(async ({ fnName, fnArgs }) => {
       log(`[NVIDIA] ${fnName}(${JSON.stringify(fnArgs).slice(0, 100)})`);
@@ -377,6 +418,12 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
           role: "tool",
           tool_call_id: s.call.id,
           content: `Tool call was malformed: ${s.parseError.message}. Re-emit the tool call with valid name and JSON arguments.`,
+        });
+      } else if (s.routeError) {
+        messages.push({
+          role: "tool",
+          tool_call_id: s.call.id,
+          content: s.routeError,
         });
       } else if (s.duplicate) {
         messages.push({

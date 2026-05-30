@@ -20,11 +20,33 @@ import {
   buildUserTurn,
   stripMention,
   scrubTwinHistoryForRecall,
+  shouldBuildOpinionContextForMessage,
+  shouldBuildTwinStateContextForMessage,
 } from "../../../events/messageCreate/contextBuild.js";
 // @ts-expect-error JS helper, no types
 import { makeMessage, makeUser, makeMember, makeGuild, makeChannel, makeClient, makeRole, Collection } from "../../_helpers/mockDiscord.js";
 
 beforeEach(() => vi.clearAllMocks());
+
+describe("contextBuild / tail context gates", () => {
+  it("skips expensive optional builders for ordinary chat", () => {
+    expect(shouldBuildOpinionContextForMessage("hey whats up")).toBe(false);
+    expect(shouldBuildTwinStateContextForMessage("hey whats up")).toBe(false);
+  });
+
+  it("keeps opinion context enabled for opinion-bearing triggers", () => {
+    expect(shouldBuildOpinionContextForMessage("what's your take on pineapple pizza?")).toBe(true);
+    expect(shouldBuildOpinionContextForMessage("i love pineapple pizza")).toBe(true);
+    expect(shouldBuildOpinionContextForMessage("do you hate valorant ranked")).toBe(true);
+  });
+
+  it("keeps twin state enabled for sister and bot-name triggers", () => {
+    expect(shouldBuildTwinStateContextForMessage("is eris around?")).toBe(true);
+    expect(shouldBuildTwinStateContextForMessage("what is your twin doing")).toBe(true);
+    expect(shouldBuildTwinStateContextForMessage("ask your sister about that")).toBe(true);
+    expect(shouldBuildTwinStateContextForMessage("can <@ERIS_ID> see this")).toBe(true);
+  });
+});
 
 describe("contextBuild / safeIdentityName", () => {
   it("prefers the member displayName", () => {

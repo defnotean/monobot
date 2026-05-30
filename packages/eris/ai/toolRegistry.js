@@ -1,6 +1,6 @@
 // ai/toolRegistry.js — Two-tier tool loading system
-// Tier 1: Full schemas sent as API tools parameter (15-25 most relevant)
-// Tier 2: Name+description catalog in system prompt (everything else)
+// Tier 1: Full schemas sent as API tools parameter (most relevant)
+// Tier 2: Compact grouped name catalog in system prompt (everything else)
 // The AI can call ANY tool by name — the executor dispatches regardless of tier.
 
 import { log } from "../utils/logger.js";
@@ -65,6 +65,7 @@ class ToolRegistry {
   constructor() {
     this._tools = new Map();           // name -> full tool definition
     this._categories = new Map();      // category -> { names: string[], keywords: RegExp }
+    this._toolCategories = new Map();  // name -> category
     this._alwaysInclude = new Set();   // tool names always in Tier 1
     this._recentUsage = new Map();     // channelKey -> [toolName, toolName, ...]
     this._maxRecent = 10;
@@ -79,6 +80,9 @@ class ToolRegistry {
     const cat = this._categories.get(category);
     for (const tool of tools) {
       this._tools.set(tool.name, tool);
+      if (!this._toolCategories.has(tool.name) || category !== "always_include") {
+        this._toolCategories.set(tool.name, category);
+      }
       if (!cat.names.includes(tool.name)) cat.names.push(tool.name);
     }
   }
@@ -102,7 +106,7 @@ class ToolRegistry {
     if (isTwin) {
       const FUN_NAMES = ["send_gif", "create_meme", "search_meme_templates", "get_mood", "get_relationship", "remember_fact", "web_search"];
       const tier1 = everyoneTools.filter(t => FUN_NAMES.includes(t.name));
-      return { tier1, tier2Catalog: "" };
+      return { tier1, tier2Catalog: "", tier2Names: [] };
     }
 
     const tier1Names = new Set([...this._alwaysInclude]);
@@ -137,7 +141,8 @@ class ToolRegistry {
 
     // Split into tiers
     const tier1 = [];
-    const tier2Lines = [];
+    const tier2ByCategory = new Map();
+    const tier2Names = [];
 
     for (const name of accessibleNames) {
       const tool = this._tools.get(name);
@@ -146,16 +151,20 @@ class ToolRegistry {
       if (tier1Names.has(name)) {
         tier1.push(tool);
       } else {
-        const desc = (tool.description || "").split(/\.\s/)[0];
-        tier2Lines.push(`- ${name}: ${desc}`);
+        const category = this._toolCategories.get(name) || "other";
+        if (!tier2ByCategory.has(category)) tier2ByCategory.set(category, []);
+        tier2ByCategory.get(category).push(name);
+        tier2Names.push(name);
       }
     }
 
+    const tier2Lines = [...tier2ByCategory]
+      .map(([category, names]) => `- ${category}: ${names.join(", ")}`);
     const tier2Catalog = tier2Lines.length > 0
-      ? `\n\nOTHER AVAILABLE TOOLS (you can call these by name — just use the tool name and provide the required arguments):\n${tier2Lines.join("\n")}`
+      ? `\n\nOTHER AVAILABLE TOOLS (call these through use_tool with {tool_name, arguments}; schemas are omitted here to save tokens):\n${tier2Lines.join("\n")}`
       : "";
 
-    return { tier1, tier2Catalog };
+    return { tier1, tier2Catalog, tier2Names };
   }
 
   // ─── Usage tracking ───

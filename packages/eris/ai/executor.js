@@ -202,11 +202,19 @@ export function resolveToolName(toolName, registry = _toolRegistryNames) {
  *
  * @param {Set<string>|string[]} [registry]
  * @param {object} [opts]
- * @param {boolean} [opts.throwOnDrift=true]  - set false for "soft" mode (log + return)
+ * @param {boolean} [opts.throwOnDrift=true]  - set false for "soft" mode (return only)
+ * @param {boolean} [opts.logOnDrift=false]   - set true to log a compact warning in soft mode
+ * @param {number} [opts.maxExamples=20]      - cap alias examples in diagnostics
+ * @param {(message: string) => void} [opts.logger] - injectable logger for tests
  * @returns {string[]} the list of alias targets that are NOT in the registry
  */
 export function validateToolAliases(registry = _toolRegistryNames, opts = {}) {
-  const { throwOnDrift = true } = opts;
+  const {
+    throwOnDrift = true,
+    logOnDrift = false,
+    maxExamples = 20,
+    logger = log,
+  } = opts;
   const registrySet = registry instanceof Set ? registry : new Set(registry || []);
 
   const offenders = [];
@@ -216,20 +224,28 @@ export function validateToolAliases(registry = _toolRegistryNames, opts = {}) {
 
   if (offenders.length === 0) return [];
 
-  const lines = offenders.map((o) => `  - ${o.alias} -> ${o.target}`).join("\n");
+  const exampleLimit = Math.max(0, Number.isFinite(maxExamples) ? Math.trunc(maxExamples) : 20);
+  const examples = offenders.slice(0, exampleLimit);
+  const omitted = offenders.length - examples.length;
+  const lines = [
+    ...examples.map((o) => `  - ${o.alias} -> ${o.target}`),
+    omitted > 0 ? `  ... ${omitted} more alias(es) omitted` : null,
+  ].filter(Boolean).join("\n");
   const msg =
     `[EXECUTOR] TOOL_ALIASES drift detected: ${offenders.length} alias(es) ` +
     `point to tool names not in the registry. The model would silently ` +
-    `auto-correct to a nonexistent tool. Fix tools.js or remove the alias.\n` +
-    lines;
+    `auto-correct to a nonexistent tool. Fix tools.js or remove the alias.` +
+    (exampleLimit > 0 ? ` Showing first ${examples.length}.` : "") +
+    (lines ? `\n${lines}` : "");
 
   if (throwOnDrift) {
     throw new Error(msg);
   }
 
-  // Soft mode: visible warning, no crash. Used if a future build wants to ship
-  // with known drift while a tool rename rolls out.
-  log(msg);
+  // Soft mode returns the complete offender list without logging by default.
+  // Tests and registry audits can inspect the data without dumping hundreds of
+  // aliases; callers that want a visible warning can opt into the compact log.
+  if (logOnDrift) logger(msg);
   return offenders.map((o) => o.target);
 }
 

@@ -98,6 +98,48 @@ export function toGeminiTools(tools) {
   return result;
 }
 
+function routerToolDeclaration() {
+  return {
+    name: "use_tool",
+    description: "Call a catalog-only tool by exact name. Use only for tools listed in OTHER AVAILABLE TOOLS.",
+    parameters: {
+      type: "object",
+      properties: {
+        tool_name: { type: "string", description: "Exact catalog tool name to call." },
+        arguments: { type: "object", description: "Arguments for that tool." },
+      },
+      required: ["tool_name"],
+    },
+  };
+}
+
+function withRouterTool(geminiTools, routerToolNames = []) {
+  if (!Array.isArray(routerToolNames) || routerToolNames.length === 0) return geminiTools;
+  const router = routerToolDeclaration();
+  if (!geminiTools?.length) return [{ functionDeclarations: [router] }];
+  return geminiTools.map((group, idx) => ({
+    ...group,
+    functionDeclarations: idx === 0
+      ? [...(group.functionDeclarations || []), router]
+      : group.functionDeclarations,
+  }));
+}
+
+function routeCatalogTool(call, routerToolNames = []) {
+  if (call.name !== "use_tool") return { ok: true, callName: call.name, toolName: call.name, args: call.args || {}, responseName: call.name };
+  const allowed = new Set(routerToolNames || []);
+  const raw = call.args || {};
+  const toolName = String(raw.tool_name || raw.name || raw.tool || "").trim();
+  if (!toolName) {
+    return { ok: false, responseName: "use_tool", result: "Error: use_tool requires tool_name" };
+  }
+  if (!allowed.has(toolName)) {
+    return { ok: false, responseName: "use_tool", result: `Error: "${toolName}" is not available in this turn's catalog` };
+  }
+  const args = raw.arguments ?? raw.args ?? raw.input ?? raw.parameters ?? {};
+  return { ok: true, callName: "use_tool", toolName, args: args && typeof args === "object" ? args : {}, responseName: "use_tool" };
+}
+
 // ─── Quick Reply (fast model, no tools) ─────────────────────────────────────
 
 /**
@@ -293,7 +335,8 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
     : (config.timeouts?.workerSlow ?? 90_000);
 
   // tools may already be in Gemini format [{functionDeclarations}] or Anthropic format [{name, input_schema}]
-  const geminiTools = Array.isArray(tools) && tools[0]?.functionDeclarations ? tools : toGeminiTools(tools);
+  const baseGeminiTools = Array.isArray(tools) && tools[0]?.functionDeclarations ? tools : toGeminiTools(tools);
+  const geminiTools = withRouterTool(baseGeminiTools, options.routerToolNames);
 
   // history may already be in Gemini format [{role, parts}] — pass through if so
   const isGeminiFormat = history.length > 0 && history[0]?.parts;
@@ -476,43 +519,52 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
       const skippedGameTools = new Set();
       const skippedDuplicates = new Set(); // exact signature already executed
       for (const call of calls) {
+        const routed = routeCatalogTool(call, options.routerToolNames);
+        if (!routed.ok) {
+          functionCalls.push(call);
+          continue;
+        }
         // Hard dedup — same tool with same args = skip silently. stableSig
         // sorts arg keys so {a:1,b:2} and {b:2,a:1} hash identically.
-        const signature = stableSig(call.name, call.args || {});
+        const signature = stableSig(routed.toolName, routed.args || {});
         if (calledSignatures.has(signature)) {
           skippedDuplicates.add(signature);
-          log(`[AI] Skipping duplicate ${call.name} call (already executed this turn)`);
+          log(`[AI] Skipping duplicate ${routed.toolName} call (already executed this turn)`);
           continue;
         }
         calledSignatures.add(signature);
 
-        if (GAME_TOOLS.has(call.name)) {
-          if (gameToolSeen) { skippedGameTools.add(call.name); continue; }
+        if (GAME_TOOLS.has(routed.toolName)) {
+          if (gameToolSeen) { skippedGameTools.add(signature); continue; }
           gameToolSeen = true;
         }
-        functionCalls.push(call);
-        if (!toolsUsed.includes(call.name)) toolsUsed.push(call.name);
+        functionCalls.push({ name: routed.toolName, args: routed.args });
+        if (!toolsUsed.includes(routed.toolName)) toolsUsed.push(routed.toolName);
       }
 
       // Network-bound tools need more time than in-memory tools
       const SLOW_TOOLS = new Set(["web_search", "scrape_url", "search_images", "show_image", "generate_image", "edit_image", "search_meme_templates", "send_gif", "analyze_image", "check_deploy", "read_emails", "github_repos", "github_issues", "github_prs"]);
 
       const responseParts = await Promise.all(calls.map(async (call) => {
+        const routed = routeCatalogTool(call, options.routerToolNames);
+        if (!routed.ok) {
+          return { functionResponse: { name: routed.responseName, response: { result: routed.result } } };
+        }
         // Skip duplicate (same name + args) calls — already executed
-        const signature = stableSig(call.name, call.args || {});
+        const signature = stableSig(routed.toolName, routed.args || {});
         if (skippedDuplicates.has(signature)) {
-          return { functionResponse: { name: call.name, response: { result: "already executed earlier this turn — don't call again, move on or finish" } } };
+          return { functionResponse: { name: routed.responseName, response: { result: "already executed earlier this turn — don't call again, move on or finish" } } };
         }
         // Skip duplicate game tools — return a message instead of executing
-        if (skippedGameTools.has(call.name)) {
-          return { functionResponse: { name: call.name, response: { result: "skipped — one game at a time" } } };
+        if (skippedGameTools.has(signature)) {
+          return { functionResponse: { name: routed.responseName, response: { result: "skipped — one game at a time" } } };
         }
         let result;
-        const timeoutMs = SLOW_TOOLS.has(call.name) ? (config.timeouts?.slowTool ?? 30_000) : 10_000;
+        const timeoutMs = SLOW_TOOLS.has(routed.toolName) ? (config.timeouts?.slowTool ?? 30_000) : 10_000;
         // Pass the outer-timeout signal to the executor so tools that honor it
         // can abort their own in-flight work (e.g. fetch). Existing executors
         // ignore the extra arg, so this is backward-compatible.
-        const toolPromise = executor(call.name, call.args, abortSignal);
+        const toolPromise = executor(routed.toolName, routed.args, abortSignal);
         let timedOut = false;
         let onAbort;
         try {
@@ -520,20 +572,20 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
             toolPromise,
             new Promise((_, rej) => setTimeout(() => {
               timedOut = true;
-              rej(new Error(`tool "${call.name}" timed out after ${timeoutMs / 1000}s`));
+              rej(new Error(`tool "${routed.toolName}" timed out after ${timeoutMs / 1000}s`));
             }, timeoutMs)),
             // Unwind promptly when the OUTER timeout aborts — otherwise this
             // Promise.all would keep awaiting a tool the caller already gave up on.
             new Promise((_, rej) => {
-              if (abortSignal.aborted) return rej(new Error(`tool "${call.name}" aborted (run timed out)`));
-              onAbort = () => { timedOut = true; rej(new Error(`tool "${call.name}" aborted (run timed out)`)); };
+              if (abortSignal.aborted) return rej(new Error(`tool "${routed.toolName}" aborted (run timed out)`));
+              onAbort = () => { timedOut = true; rej(new Error(`tool "${routed.toolName}" aborted (run timed out)`)); };
               abortSignal.addEventListener("abort", onAbort, { once: true });
             }),
           ]);
           if (typeof result !== "string") result = JSON.stringify(result);
         } catch (err) {
           result = `Error: ${err.message}`;
-          log(`Tool ${call.name} failed: ${err.message}`);
+          log(`Tool ${routed.toolName} failed: ${err.message}`);
         } finally {
           if (onAbort) abortSignal.removeEventListener("abort", onAbort);
         }
@@ -541,13 +593,13 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
         // logged rather than silently producing partial side-effects.
         if (timedOut) {
           toolPromise.then(
-            (late) => log(`[AI] late-completion of timed-out "${call.name}" → ${String(late).slice(0, 140)}`),
-            (err) => log(`[AI] late-failure of timed-out "${call.name}": ${err?.message || err}`)
+            (late) => log(`[AI] late-completion of timed-out "${routed.toolName}" → ${String(late).slice(0, 140)}`),
+            (err) => log(`[AI] late-failure of timed-out "${routed.toolName}": ${err?.message || err}`)
           );
         }
         return {
           functionResponse: {
-            name: call.name,
+            name: routed.responseName,
             response: { result },
           },
         };

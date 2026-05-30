@@ -13,8 +13,11 @@ function declNames(schemas: any): Set<string> {
 function catalogNames(catalog: string): Set<string> {
   const names = new Set<string>();
   for (const line of catalog.split("\n")) {
-    const m = line.match(/^- ([a-z0-9_]+):/i);
-    if (m) names.add(m[1]);
+    const m = line.match(/^- [^:]+:\s*(.*)$/i);
+    if (!m) continue;
+    for (const name of m[1].split(/,\s*/)) {
+      if (/^[a-z0-9_]+$/i.test(name)) names.add(name);
+    }
   }
   return names;
 }
@@ -49,5 +52,42 @@ describe("pickToolProfile two-tier shape (Eris)", () => {
       isTwinMsg: false, isOwner: true, cleanMessage: "hey", channelKey: "c3",
     });
     expect(declNames(tier1Schemas).size).toBeLessThan(full * 0.6);
+  });
+
+  it("keeps demoted core tools reachable through the Tier-2 catalog", () => {
+    const { tier1Schemas, tier2CatalogText } = pickToolProfile({
+      isTwinMsg: false, isOwner: true, cleanMessage: "hey", channelKey: "c4",
+    });
+    const declared = declNames(tier1Schemas);
+    const catalog = catalogNames(tier2CatalogText);
+
+    expect(declared).not.toContain("ask_irene");
+    expect(catalog).toContain("ask_irene");
+    expect(declared).not.toContain("create_meme");
+    expect(catalog).toContain("create_meme");
+  });
+
+  it("sends materially smaller Tier-1 schemas on ordinary chat turns", () => {
+    const fullSchemaChars = JSON.stringify([{
+      functionDeclarations: [...EVERYONE_TOOLS, ...OWNER_TOOLS].map((tool) => ({
+        name: tool.name,
+        description: tool.description || "",
+        parameters: tool.input_schema,
+      })),
+    }]).length;
+    const { tier1Schemas } = pickToolProfile({
+      isTwinMsg: false, isOwner: true, cleanMessage: "hey", channelKey: "c5",
+    });
+
+    expect(JSON.stringify(tier1Schemas).length).toBeLessThan(fullSchemaChars * 0.15);
+  });
+
+  it("keeps an intent-matched core tool in Tier 1", () => {
+    const { tier1Schemas, tier2CatalogText } = pickToolProfile({
+      isTwinMsg: false, isOwner: true, cleanMessage: "ask Irene what she thinks about this", channelKey: "c6",
+    });
+
+    expect(declNames(tier1Schemas)).toContain("ask_irene");
+    expect(catalogNames(tier2CatalogText)).not.toContain("ask_irene");
   });
 });

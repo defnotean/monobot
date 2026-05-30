@@ -81,6 +81,40 @@ export function toOpenAICompatTools(tools) {
   return result;
 }
 
+function routerToolDefinition() {
+  return {
+    type: "function",
+    function: {
+      name: "use_tool",
+      description: "Call a catalog-only tool by exact name. Use only for tools listed in OTHER AVAILABLE TOOLS.",
+      parameters: {
+        type: "object",
+        properties: {
+          tool_name: { type: "string", description: "Exact catalog tool name to call." },
+          arguments: { type: "object", description: "Arguments for that tool." },
+        },
+        required: ["tool_name"],
+      },
+    },
+  };
+}
+
+function withRouterTool(openaiTools, routerToolNames = []) {
+  if (!Array.isArray(routerToolNames) || routerToolNames.length === 0) return openaiTools;
+  return [...(openaiTools || []), routerToolDefinition()];
+}
+
+function routeCatalogTool(name, args, routerToolNames = []) {
+  if (name !== "use_tool") return { ok: true, toolName: name, args: args || {} };
+  const allowed = new Set(routerToolNames || []);
+  const raw = args || {};
+  const toolName = String(raw.tool_name || raw.name || raw.tool || "").trim();
+  if (!toolName) return { ok: false, result: "Error: use_tool requires tool_name" };
+  if (!allowed.has(toolName)) return { ok: false, result: `Error: "${toolName}" is not available in this turn's catalog` };
+  const routedArgs = raw.arguments ?? raw.args ?? raw.input ?? raw.parameters ?? {};
+  return { ok: true, toolName, args: routedArgs && typeof routedArgs === "object" ? routedArgs : {} };
+}
+
 function apiKeys() {
   const keys = Array.isArray(OC.apiKeys) ? OC.apiKeys.filter(Boolean) : [];
   if (!keys.length && OC.apiKey) keys.push(OC.apiKey);
@@ -422,9 +456,9 @@ export function classifyProviderError(err) {
 }
 
 export async function runOpenAICompatChat(arg1, ...rest) {
-  let systemInstruction, history, tools, msgCtx, useFastModel, executor, onToolStatus;
+  let systemInstruction, history, tools, msgCtx, useFastModel, executor, onToolStatus, routerToolNames;
   if (typeof arg1 === "object" && arg1 && (arg1.systemInstruction || arg1.history)) {
-    ({ systemInstruction, history, tools, message: msgCtx, useFastModel, onToolStatus } = arg1);
+    ({ systemInstruction, history, tools, message: msgCtx, useFastModel, onToolStatus, routerToolNames } = arg1);
     executor = arg1.executor;
   } else {
     systemInstruction = rest[0];
@@ -433,13 +467,14 @@ export async function runOpenAICompatChat(arg1, ...rest) {
     msgCtx = { userMessage: rest[3] };
     executor = rest[4];
     useFastModel = rest[5]?.useFastModel;
+    routerToolNames = rest[5]?.routerToolNames;
   }
   // aiInitiated:true engages moderationExecutor's destructive-action confirm
   // gate — these calls come from the LLM tool loop, not a slash command.
   if (!executor) executor = (toolName, toolArgs) => executeTool(toolName, toolArgs, msgCtx, { aiInitiated: true });
 
   const model = useFastModel ? (OC.fastModel || OC.model) : OC.model;
-  const openaiTools = toOpenAICompatTools(tools);
+  const openaiTools = withRouterTool(toOpenAICompatTools(tools), routerToolNames);
   const userMessage = msgCtx?.userMessage || msgCtx?.content || "";
   const messages = toMessages(systemInstruction, history, userMessage);
   const toolsUsed = [];
@@ -533,7 +568,7 @@ export async function runOpenAICompatChat(arg1, ...rest) {
 
     let allDuplicates = true;
     const slots = msg.tool_calls.map((call) => {
-      const fnName = call.function?.name;
+      let fnName = call.function?.name;
       let fnArgs = {};
       let parseError = null;
       if (!fnName) parseError = new Error("missing tool name");
@@ -547,6 +582,13 @@ export async function runOpenAICompatChat(arg1, ...rest) {
         allDuplicates = false;
         return { call, fnName, fnArgs, duplicate: false, parseError };
       }
+      const routed = routeCatalogTool(fnName, fnArgs, routerToolNames);
+      if (!routed.ok) {
+        allDuplicates = false;
+        return { call, fnName, fnArgs, duplicate: false, parseError, routeError: routed.result };
+      }
+      fnName = routed.toolName;
+      fnArgs = routed.args;
       const searchKey = webSearchCacheKey(fnName, fnArgs);
       if (searchKey && webSearchResults.has(searchKey)) {
         allDuplicates = false;
@@ -559,7 +601,7 @@ export async function runOpenAICompatChat(arg1, ...rest) {
       return { call, fnName, fnArgs, duplicate: false, parseError, searchKey };
     });
 
-    const fresh = slots.filter((slot) => !slot.duplicate && !slot.cacheHit && !slot.parseError && slot.fnName);
+    const fresh = slots.filter((slot) => !slot.duplicate && !slot.cacheHit && !slot.parseError && !slot.routeError && slot.fnName);
     if (fresh.length > 1) log(`[${OC.providerName || "OpenAICompat"}] running ${fresh.length} tool calls in parallel`);
     if (fresh.length && onToolStatus) {
       await onToolStatus(`running ${fresh.map((s) => s.fnName).join(", ")}`).catch(() => {});
@@ -591,6 +633,8 @@ export async function runOpenAICompatChat(arg1, ...rest) {
       let content;
       if (slot.parseError) {
         content = `Tool arguments were malformed JSON: ${slot.parseError.message}`;
+      } else if (slot.routeError) {
+        content = slot.routeError;
       } else if (slot.cacheHit) {
         content = `Already searched for "${slot.fnArgs?.query || "that"}" this turn. Use this previous result instead of searching again:\n${stringifyToolContent(slot.cacheResult)}`;
       } else if (slot.duplicate) {

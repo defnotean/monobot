@@ -1,15 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { ADMIN_TOOLS, EVERYONE_TOOLS } from "../../ai/tools.js";
-import { registry } from "../../ai/toolRegistry.js";
+import { MAX_TIER1_TOOLS, registry } from "../../ai/toolRegistry.js";
 
-// Parse the tool names out of a Tier-2 catalog block. Lines are "- name: desc".
+// Parse the tool names out of a Tier-2 catalog block. Lines are
+// "- category: tool_one, tool_two".
 function catalogNames(catalog: string): Set<string> {
   const names = new Set<string>();
   for (const line of catalog.split("\n")) {
-    const m = line.match(/^- ([a-z0-9_]+):/i);
-    if (m) names.add(m[1]);
+    const m = line.match(/^- [^:]+:\s*(.*)$/i);
+    if (!m) continue;
+    for (const name of m[1].split(/,\s*/)) {
+      if (/^[a-z0-9_]+$/i.test(name)) names.add(name);
+    }
   }
   return names;
+}
+
+function reachableNames(tier1: Array<{ name: string }>, tier2Catalog: string): Set<string> {
+  return new Set([
+    ...tier1.map((t) => t.name),
+    ...catalogNames(tier2Catalog),
+  ]);
 }
 
 describe("tool registry", () => {
@@ -43,10 +54,7 @@ describe("two-tier selection (Irene)", () => {
       adminTools: ADMIN_TOOLS,
       everyoneTools: EVERYONE_TOOLS,
     });
-    const reachable = new Set([
-      ...tier1.map((t) => t.name),
-      ...catalogNames(tier2Catalog),
-    ]);
+    const reachable = reachableNames(tier1, tier2Catalog);
     const accessible = new Set([...ADMIN_TOOLS, ...EVERYONE_TOOLS].map((t) => t.name));
     expect(reachable).toEqual(accessible);
   });
@@ -57,10 +65,7 @@ describe("two-tier selection (Irene)", () => {
       adminTools: ADMIN_TOOLS,
       everyoneTools: EVERYONE_TOOLS,
     });
-    const reachable = new Set([
-      ...tier1.map((t) => t.name),
-      ...catalogNames(tier2Catalog),
-    ]);
+    const reachable = reachableNames(tier1, tier2Catalog);
     const everyoneNames = new Set(EVERYONE_TOOLS.map((t) => t.name));
     for (const name of everyoneNames) expect(reachable).toContain(name);
     const adminOnly = ADMIN_TOOLS.map((t) => t.name).filter((n) => !everyoneNames.has(n));
@@ -99,6 +104,40 @@ describe("two-tier selection (Irene)", () => {
       everyoneTools: EVERYONE_TOOLS,
     });
     expect(tier1.length).toBeLessThan(full * 0.6);
+  });
+
+  it("bounds Tier-1 schemas even when a message matches many categories", () => {
+    const { tier1, tier2Catalog } = registry.selectByMessage(
+      "ban role channel ticket birthday vc music level invite server log youtube twitch github giveaway emoji thread search messages",
+      {
+        isAdmin: true,
+        adminTools: ADMIN_TOOLS,
+        everyoneTools: EVERYONE_TOOLS,
+      }
+    );
+    const accessible = new Set([...ADMIN_TOOLS, ...EVERYONE_TOOLS].map((t) => t.name));
+
+    expect(tier1.length).toBeLessThanOrEqual(MAX_TIER1_TOOLS);
+    expect(reachableNames(tier1, tier2Catalog)).toEqual(accessible);
+  });
+
+  it("uses a compact grouped Tier-2 catalog instead of per-tool descriptions", () => {
+    const { tier1, tier2Catalog } = registry.selectByMessage("hey there", {
+      isAdmin: true,
+      adminTools: ADMIN_TOOLS,
+      everyoneTools: EVERYONE_TOOLS,
+    });
+    const tier2Names = catalogNames(tier2Catalog);
+    const byName = new Map([...ADMIN_TOOLS, ...EVERYONE_TOOLS].map((tool) => [tool.name, tool]));
+    const legacyVerboseCatalog =
+      "\n\nOTHER AVAILABLE TOOLS (you can call these by name — just use the tool name and provide the required arguments):\n" +
+      [...tier2Names]
+        .map((name) => `- ${name}: ${(byName.get(name)?.description || "").split(/\.\s/)[0]}`)
+        .join("\n");
+
+    expect(tier1.length).toBeLessThanOrEqual(MAX_TIER1_TOOLS);
+    expect(tier2Names.size).toBeGreaterThan(100);
+    expect(tier2Catalog.length).toBeLessThan(legacyVerboseCatalog.length * 0.35);
   });
 
   // (d) Always-include tools are ALWAYS Tier 1, never demoted to the catalog.

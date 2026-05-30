@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({
 // Drive the provider-detection branches via config. aiProvider is non-gemini
 // here, so the module-load side effect must NOT create any key pools.
 vi.mock("../../../config.js", () => ({
-  default: { aiProvider: "openai", openaiCompat: { providerName: "TogetherAI" } },
+  default: { aiProvider: "openai", aiPromptCharBudget: 12000, openaiCompat: { providerName: "TogetherAI" } },
 }));
 vi.mock("../../../utils/logger.js", () => ({ log: vi.fn() }));
 vi.mock("../../../ai/providers/index.js", () => ({
@@ -54,6 +54,10 @@ describe("aiInvoke / provider detection", () => {
 });
 
 describe("aiInvoke / applyPromptBudget", () => {
+  it("reads the prompt budget from config", () => {
+    expect(PROMPT_BUDGET).toBe(12000);
+  });
+
   it("returns the prompt unchanged when under budget", () => {
     const p = "small prompt";
     expect(applyPromptBudget(p)).toBe(p);

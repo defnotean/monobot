@@ -135,10 +135,10 @@ export default async function messageCreate(message) {
 
       // ─── 3. CONTEXT BUILDING ────────────────────────────────────────────
       const ctx = await buildContext({ message, isTwin, isDM, isAwaitedReply, channelKey, client, conversations });
-      const { cleanMessage, displayName, botName, isTwinMsg, systemInstruction, history, userMsg, formattedTools, charBudget } = ctx;
+      const { cleanMessage, displayName, botName, isTwinMsg, systemInstruction, history, userMsg, formattedTools, routerToolNames, charBudget } = ctx;
 
       // ─── 4. AI CALL  +  5. TOOL DISPATCH (inline callback) ──────────────
-      const { result, skipped } = await invokeAI({ message, cleanMessage, systemInstruction, formattedTools, history, userMsg, isTwinMsg });
+      const { result, skipped } = await invokeAI({ message, cleanMessage, systemInstruction, formattedTools, routerToolNames, history, userMsg, isTwinMsg });
       if (skipped) return; // No AI client configured — bail out before render.
 
       // ─── 6. RESPONSE RENDERING ──────────────────────────────────────────

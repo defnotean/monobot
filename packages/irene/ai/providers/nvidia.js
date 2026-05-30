@@ -63,6 +63,40 @@ export function toGeminiTools(tools) {
   return result;
 }
 
+function routerToolDefinition() {
+  return {
+    type: "function",
+    function: {
+      name: "use_tool",
+      description: "Call a catalog-only tool by exact name. Use only for tools listed in OTHER AVAILABLE TOOLS.",
+      parameters: {
+        type: "object",
+        properties: {
+          tool_name: { type: "string", description: "Exact catalog tool name to call." },
+          arguments: { type: "object", description: "Arguments for that tool." },
+        },
+        required: ["tool_name"],
+      },
+    },
+  };
+}
+
+function withRouterTool(nvidiaTools, routerToolNames = []) {
+  if (!Array.isArray(routerToolNames) || routerToolNames.length === 0) return nvidiaTools;
+  return [...(nvidiaTools || []), routerToolDefinition()];
+}
+
+function routeCatalogTool(name, args, routerToolNames = []) {
+  if (name !== "use_tool") return { ok: true, toolName: name, args: args || {} };
+  const allowed = new Set(routerToolNames || []);
+  const raw = args || {};
+  const toolName = String(raw.tool_name || raw.name || raw.tool || "").trim();
+  if (!toolName) return { ok: false, result: "Error: use_tool requires tool_name" };
+  if (!allowed.has(toolName)) return { ok: false, result: `Error: "${toolName}" is not available in this turn's catalog` };
+  const routedArgs = raw.arguments ?? raw.args ?? raw.input ?? raw.parameters ?? {};
+  return { ok: true, toolName, args: routedArgs && typeof routedArgs === "object" ? routedArgs : {} };
+}
+
 // ─── Quick reply (no tools, fast acknowledgment) ────────────────────────────
 
 export async function quickReply(_client, systemInstruction, userText, context) {
@@ -119,10 +153,10 @@ export function isRateLimited() { return false; }
 
 export async function runGeminiChat(arg1, ...rest) {
   // Detect call style
-  let geminiClient, systemInstruction, history, tools, msgCtx, isAdmin, useFastModel, executor, onToolStatus;
+  let geminiClient, systemInstruction, history, tools, msgCtx, isAdmin, useFastModel, executor, onToolStatus, routerToolNames;
   if (typeof arg1 === "object" && arg1 && (arg1.systemInstruction || arg1.history)) {
     // Irene-style object call
-    ({ geminiClient, systemInstruction, history, tools, message: msgCtx, isAdmin, useFastModel, onToolStatus } = arg1);
+    ({ geminiClient, systemInstruction, history, tools, message: msgCtx, isAdmin, useFastModel, onToolStatus, routerToolNames } = arg1);
     executor = arg1.executor;
   } else {
     // Eris-style positional call: (client, sysInstr, tools, history, userMsg, executor, opts)
@@ -134,6 +168,7 @@ export async function runGeminiChat(arg1, ...rest) {
     executor = rest[4];
     const opts = rest[5] || {};
     useFastModel = opts.useFastModel;
+    routerToolNames = opts.routerToolNames;
     msgCtx = { userMessage };
   }
 
@@ -146,7 +181,7 @@ export async function runGeminiChat(arg1, ...rest) {
   }
 
   const model = useFastModel ? NV.fastModel : NV.model;
-  const nvidiaTools = toGeminiTools(tools);
+  const nvidiaTools = withRouterTool(toGeminiTools(tools), routerToolNames);
 
   // Append tool-use directive with explicit examples for Qwen.
   let sysPrompt = systemInstruction;
@@ -235,7 +270,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
       const cls = _classifyError(e);
       if (cls.shouldFallback) {
         const fb = await _fallbackToGemini({
-          systemInstruction, history, tools, msgCtx, isAdmin, onToolStatus,
+          systemInstruction, history, tools, msgCtx, isAdmin, onToolStatus, routerToolNames,
           errorLabel: cls.label,
         });
         if (fb) return fb;
@@ -266,7 +301,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
     // in one turn without paying N× latency.
     let allDuplicates = true;
     const slots = msg.tool_calls.map((call) => {
-      const fnName = call.function?.name;
+      let fnName = call.function?.name;
       let fnArgs = {};
       let parseError = null;
       // Guard malformed calls — without this, an undefined fnName flows into
@@ -284,6 +319,13 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
         allDuplicates = false;
         return { call, fnName, fnArgs, duplicate: false, parseError };
       }
+      const routed = routeCatalogTool(fnName, fnArgs, routerToolNames);
+      if (!routed.ok) {
+        allDuplicates = false;
+        return { call, fnName, fnArgs, duplicate: false, routeError: routed.result };
+      }
+      fnName = routed.toolName;
+      fnArgs = routed.args;
       const signature = `${fnName}::${JSON.stringify(fnArgs)}`;
       if (calledSignatures.has(signature)) {
         log(`[NVIDIA] Skipping duplicate ${fnName} call (already executed)`);
@@ -294,7 +336,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
       return { call, fnName, fnArgs, duplicate: false };
     });
 
-    const fresh = slots.filter((s) => !s.duplicate && !s.parseError);
+    const fresh = slots.filter((s) => !s.duplicate && !s.parseError && !s.routeError);
     if (fresh.length > 1) log(`[NVIDIA] running ${fresh.length} tool calls in parallel: ${fresh.map((s) => s.fnName).join(", ")}`);
     const execResults = await Promise.all(fresh.map(async ({ fnName, fnArgs }) => {
       log(`[NVIDIA] ${fnName}(${JSON.stringify(fnArgs).slice(0, 100)})`);
@@ -320,6 +362,12 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
           role: "tool",
           tool_call_id: s.call.id,
           content: `Tool call was malformed: ${s.parseError.message}. Re-emit the tool call with a valid name and JSON arguments.`,
+        });
+      } else if (s.routeError) {
+        messages.push({
+          role: "tool",
+          tool_call_id: s.call.id,
+          content: s.routeError,
         });
       } else if (s.duplicate) {
         messages.push({
@@ -381,7 +429,7 @@ async function _getGeminiClient() {
   return _geminiFallbackClient;
 }
 
-async function _fallbackToGemini({ systemInstruction, history, tools, msgCtx, isAdmin, onToolStatus, errorLabel }) {
+async function _fallbackToGemini({ systemInstruction, history, tools, msgCtx, isAdmin, onToolStatus, routerToolNames, errorLabel }) {
   if (!config.geminiKeys?.length) {
     log(`[NVIDIA→Gemini] fallback skipped — no GEMINI_API_KEY configured`);
     return null;
@@ -404,6 +452,7 @@ async function _fallbackToGemini({ systemInstruction, history, tools, msgCtx, is
       isAdmin,
       useFastModel: fbUseFastModel,
       onToolStatus,
+      routerToolNames,
     });
   } catch (e) {
     log(`[NVIDIA→Gemini] fallback also failed: ${e.message}`);

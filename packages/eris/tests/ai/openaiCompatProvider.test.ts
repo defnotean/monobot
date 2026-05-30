@@ -67,6 +67,34 @@ describe("OpenAI-compatible provider (Eris)", () => {
     );
   });
 
+  it("routes catalog-only tools through use_tool", async () => {
+    mockFetchResponses(
+      chatMessage({
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: "call_1",
+          type: "function",
+          function: {
+            name: "use_tool",
+            arguments: JSON.stringify({ tool_name: "search_notes", arguments: { query: "raid" } }),
+          },
+        }],
+      }),
+      chatMessage({ role: "assistant", content: "found it" }),
+    );
+    const executor = vi.fn(async () => "note result");
+
+    const result = await provider.runGeminiChat(null, "system", [], [], "find my note", executor, {
+      routerToolNames: ["search_notes"],
+    });
+    const firstBody = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+
+    expect(firstBody.tools.map((t: any) => t.function.name)).toContain("use_tool");
+    expect(executor).toHaveBeenCalledWith("search_notes", { query: "raid" });
+    expect(result).toEqual({ text: "found it", toolsUsed: ["search_notes"] });
+  });
+
   it("sends Owl Alpha tools without unsupported tool_choice", async () => {
     Object.assign(config.openaiCompat, {
       model: "openrouter/owl-alpha",

@@ -83,6 +83,40 @@ describe("OpenAI-compatible provider (Irene)", () => {
     );
   });
 
+  it("routes catalog-only tools through use_tool", async () => {
+    mockFetchResponses(
+      chatMessage({
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: "call_1",
+          type: "function",
+          function: {
+            name: "use_tool",
+            arguments: JSON.stringify({ tool_name: "list_channels", arguments: { include_hidden: false } }),
+          },
+        }],
+      }),
+      chatMessage({ role: "assistant", content: "listed them" }),
+    );
+    const executor = vi.fn(async () => "channel list");
+
+    const result = await provider.runGeminiChat({
+      systemInstruction: "system",
+      history: [],
+      tools: [],
+      message: { userMessage: "show channels" },
+      executor,
+      isAdmin: true,
+      routerToolNames: ["list_channels"],
+    });
+    const firstBody = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+
+    expect(firstBody.tools.map((t: any) => t.function.name)).toContain("use_tool");
+    expect(executor).toHaveBeenCalledWith("list_channels", { include_hidden: false });
+    expect(result).toEqual({ text: "listed them", toolsUsed: ["list_channels"] });
+  });
+
   it("sends Owl Alpha tools without unsupported tool_choice", async () => {
     Object.assign(config.openaiCompat, {
       model: "openrouter/owl-alpha",

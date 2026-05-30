@@ -97,6 +97,57 @@ describe("NVIDIA → Gemini fallback (Irene)", () => {
     Object.assign(config.nvidia, savedNvidia);
   });
 
+  it("routes catalog-only tools through use_tool", async () => {
+    const responses = [
+      {
+        choices: [{
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "c1",
+              function: {
+                name: "use_tool",
+                arguments: JSON.stringify({ tool_name: "list_channels", arguments: { include_hidden: false } }),
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+      },
+      {
+        choices: [{ message: { role: "assistant", content: "listed them" }, finish_reason: "stop" }],
+      },
+    ];
+    let i = 0;
+    globalThis.fetch = vi.fn(async () => {
+      const body = responses[Math.min(i++, responses.length - 1)];
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      } as any;
+    }) as any;
+    const executor = vi.fn(async () => "channel list");
+
+    const result = await nvidia.runGeminiChat({
+      geminiClient: null,
+      systemInstruction: "you are a test bot",
+      history: [{ role: "user", parts: [{ text: "show channels" }] }],
+      tools: [],
+      message: { userMessage: "show channels" },
+      executor,
+      isAdmin: true,
+      routerToolNames: ["list_channels"],
+    });
+    const firstBody = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+
+    expect(firstBody.tools.map((tool: any) => tool.function.name)).toContain("use_tool");
+    expect(executor).toHaveBeenCalledWith("list_channels", { include_hidden: false });
+    expect(result).toEqual({ text: "listed them", toolsUsed: ["list_channels"] });
+  });
+
   it("falls back to Gemini when NVIDIA returns 503", async () => {
     mockNvidiaResponse(503, "Service Unavailable");
     (dual.runGeminiChat as any).mockResolvedValue({

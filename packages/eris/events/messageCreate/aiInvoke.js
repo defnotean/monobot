@@ -19,12 +19,13 @@ import { activeProviderNeedsGeminiClient, activeProviderLabel, getConvClient, ge
  * @param {string} opts.cleanMessage
  * @param {string} opts.systemInstruction
  * @param {object} opts.formattedTools
+ * @param {string[]} [opts.routerToolNames]
  * @param {object[]} opts.history
  * @param {string} opts.userMsg
  * @param {boolean} opts.isTwinMsg
  * @returns {Promise<{ result: any, aiMs: number, skipped?: boolean }>}
  */
-export async function invokeAI({ message, cleanMessage, systemInstruction, formattedTools, history, userMsg, isTwinMsg }) {
+export async function invokeAI({ message, cleanMessage, systemInstruction, formattedTools, routerToolNames = [], history, userMsg, isTwinMsg }) {
   const workClient = getWorkClient();
   if (!workClient && activeProviderNeedsGeminiClient()) {
     await message.reply("no AI keys configured - can't respond right now").catch(() => {});
@@ -71,7 +72,7 @@ export async function invokeAI({ message, cleanMessage, systemInstruction, forma
     const elapsed = Date.now() - t0;
     if (elapsed > 2000) log(`[TOOL] ${toolName} took ${elapsed}ms (slow)`);
     return toolResult;
-  });
+  }, { routerToolNames });
 
   const aiMs = Date.now() - t0Ai;
   if (aiMs > 5000) log(`[PERF] ${activeProviderLabel()} took ${aiMs}ms (prompt ${systemInstruction.length} chars, history ${history.length} msgs)`);

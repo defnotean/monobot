@@ -413,6 +413,7 @@ const config = {
   // Tunable thresholds
   maxQueuedMessages: 3,
   historyCharBudget: 8000,
+  aiPromptCharBudget: parseInt(env("AI_PROMPT_CHAR_BUDGET", "100000")),
   toolResultMaxChars: 500,
   historyToolResultMax: 300,
   ttsMaxCacheSize: 50,

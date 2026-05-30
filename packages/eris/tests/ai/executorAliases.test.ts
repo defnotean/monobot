@@ -54,8 +54,9 @@ describe("executor alias resolution + registry validation", () => {
   it("(c) boot-time validator catches drift when an alias points outside the registry", () => {
     // Mocked registry that is missing one canonical target every TOOL_ALIASES
     // entry maps to. Forces every alias-target → "drift". throwOnDrift: false
-    // gives us the offender list back without aborting the test runner; we
-    // separately verify the throwing path raises a clear error too.
+    // gives us the offender list back without aborting the test runner or
+    // dumping hundreds of aliases into test output; we separately verify the
+    // throwing path raises a clear, capped error too.
     const emptyRegistry = new Set<string>();
     const offenders = validateToolAliases(emptyRegistry, { throwOnDrift: false });
     expect(offenders.length).toBeGreaterThan(0);
@@ -63,8 +64,19 @@ describe("executor alias resolution + registry validation", () => {
     const aliasTargets = new Set<string>(Object.values(TOOL_ALIASES) as string[]);
     for (const t of offenders) expect(aliasTargets.has(t)).toBe(true);
 
-    expect(() => validateToolAliases(emptyRegistry, { throwOnDrift: true }))
-      .toThrowError(/TOOL_ALIASES drift detected/);
+    expect(() => validateToolAliases(emptyRegistry, { throwOnDrift: true, maxExamples: 3 }))
+      .toThrowError(/TOOL_ALIASES drift detected: \d+ alias\(es\)[\s\S]*Showing first 3[\s\S]*more alias\(es\) omitted/);
+
+    const messages: string[] = [];
+    validateToolAliases(emptyRegistry, {
+      throwOnDrift: false,
+      logOnDrift: true,
+      maxExamples: 2,
+      logger: (message: string) => messages.push(message),
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0].split("\n").length).toBeLessThanOrEqual(4);
+    expect(messages[0]).toMatch(/Showing first 2[\s\S]*more alias\(es\) omitted/);
 
     // And the happy path: the *real* registry must have zero drift today — if
     // a future PR breaks this, the module-load assertion in executor.js will

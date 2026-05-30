@@ -545,16 +545,17 @@ export async function execute(message) {
     // ── Worker AI — handles conversation + tool calls ────────────────────
     // (humanity context already injected above before ack timer)
 
-    // All tools are loaded with full schemas — no tier 2 catalog needed
+    // Tools are tiered: bounded relevant schemas go to the API, while the
+    // compact Tier-2 name catalog is appended after prompt budgeting below.
 
     // Wire up per-key rate limit callbacks for the pool that actually owns this client.
     wireRateLimitCallbacks(isTask);
 
     // Smart prompt budget — trim core personality to make room for runtime context
     systemPromptWithMemory = applyPromptBudget(systemPromptWithMemory);
-    // Append the Tier-2 tool catalog AFTER budgeting so the full catalog (often
-    // ~15k chars, larger than the budget itself) survives intact — the model
-    // dispatches Tier-2 tools by name, so it must see every tool's name here.
+    // Append the Tier-2 tool catalog AFTER budgeting so every demoted tool name
+    // survives intact. The compact catalog keeps those tools discoverable
+    // without spending per-turn tokens on their full schemas/descriptions.
     if (ctxResult.tier2Catalog) systemPromptWithMemory += ctxResult.tier2Catalog;
 
     // ─── 4. AI CALL (dual.js → runGeminiChat — also stage 5 tool dispatch) ─
@@ -574,6 +575,7 @@ export async function execute(message) {
           systemInstruction: systemPromptWithMemory,
           history,
           tools,
+          routerToolNames: ctxResult.tier2ToolNames || [],
           message: msgCtx,
           isAdmin,
           useFastModel: !isTask,

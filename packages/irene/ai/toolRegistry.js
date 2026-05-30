@@ -1,14 +1,17 @@
 // ai/toolRegistry.js — Two-tier tool loading system
-// Tier 1: Full schemas sent as API tools parameter (15-25 most relevant)
-// Tier 2: Name+description catalog in system prompt (everything else)
+// Tier 1: Full schemas sent as API tools parameter (bounded most relevant)
+// Tier 2: Compact grouped name catalog in system prompt (everything else)
 // The AI can call ANY tool by name — the executor dispatches regardless of tier.
 
 import { log } from "../utils/logger.js";
+
+export const MAX_TIER1_TOOLS = 32;
 
 class ToolRegistry {
   constructor() {
     this._tools = new Map();           // name -> full tool definition
     this._categories = new Map();      // category -> { names: string[], keywords: RegExp }
+    this._toolCategories = new Map();  // name -> category
     this._alwaysInclude = new Set();   // tool names always in Tier 1
     this._recentUsage = new Map();     // channelKey -> [toolName, toolName, ...]
     this._maxRecent = 10;
@@ -23,6 +26,9 @@ class ToolRegistry {
     const cat = this._categories.get(category);
     for (const tool of tools) {
       this._tools.set(tool.name, tool);
+      if (!this._toolCategories.has(tool.name) || category !== "always_include") {
+        this._toolCategories.set(tool.name, category);
+      }
       if (!cat.names.includes(tool.name)) cat.names.push(tool.name);
     }
   }
@@ -36,16 +42,21 @@ class ToolRegistry {
   /**
    * @param {string} text
    * @param {{ isAdmin?: boolean, channelKey?: string|null, adminTools?: Array<{name: string, description?: string}>, everyoneTools?: Array<{name: string, description?: string}> }} [opts]
-   * @returns {{ tier1: any[], tier2Catalog: string }}
+   * @returns {{ tier1: any[], tier2Catalog: string, tier2Names: string[] }}
    */
   selectByMessage(text, { isAdmin = false, channelKey = null, adminTools = [], everyoneTools = [] } = {}) {
     const lower = (text || "").toLowerCase();
-    const tier1Names = new Set([...this._alwaysInclude]);
+    const scores = new Map();
+    const bumpScore = (name, score) => {
+      scores.set(name, Math.max(scores.get(name) || 0, score));
+    };
+
+    for (const name of this._alwaysInclude) bumpScore(name, 1000);
 
     // Add tools from categories whose keywords match
     for (const [, cat] of this._categories) {
       if (cat.keywords && cat.keywords.test(lower)) {
-        for (const name of cat.names) tier1Names.add(name);
+        for (const name of cat.names) bumpScore(name, 700);
       }
     }
 
@@ -53,8 +64,11 @@ class ToolRegistry {
     if (channelKey) {
       const recent = this._recentUsage.get(channelKey);
       if (recent) {
-        for (const name of recent) {
-          if (this._tools.has(name)) tier1Names.add(name);
+        for (let i = 0; i < recent.length; i++) {
+          const name = recent[i];
+          if (this._tools.has(name)) {
+            bumpScore(name, 900 - i);
+          }
         }
       }
     }
@@ -66,29 +80,50 @@ class ToolRegistry {
     }
     for (const t of everyoneTools) accessibleNames.add(t.name);
 
-    // Split into tiers
+    const accessible = [...accessibleNames]
+      .map((name, index) => ({ name, index, tool: this._tools.get(name) }))
+      .filter((entry) => entry.tool);
+    const alwaysAccessible = accessible.filter((entry) => this._alwaysInclude.has(entry.name));
+    const tier1Limit = Math.max(MAX_TIER1_TOOLS, alwaysAccessible.length);
+    const tier1NameSet = new Set(
+      accessible
+        .filter((entry) => scores.has(entry.name))
+        .sort((a, b) => {
+          const scoreDelta = (scores.get(b.name) || 0) - (scores.get(a.name) || 0);
+          return scoreDelta || a.index - b.index;
+        })
+        .slice(0, tier1Limit)
+        .map((entry) => entry.name)
+    );
+
+    // Split into tiers. Tier 1 is bounded to keep per-turn schema volume
+    // predictable; any relevant tools beyond the cap remain reachable by exact
+    // name through Tier 2.
     const tier1 = [];
-    const tier2Lines = [];
+    const tier2ByCategory = new Map();
+    const tier2Names = [];
 
-    for (const name of accessibleNames) {
-      const tool = this._tools.get(name);
-      if (!tool) continue;
-
-      if (tier1Names.has(name)) {
+    for (const { name, tool } of accessible) {
+      if (tier1NameSet.has(name)) {
         tier1.push(tool);
       } else {
-        // Compact: just name + first sentence of description
-        const desc = (tool.description || "").split(/\.\s/)[0];
-        tier2Lines.push(`- ${name}: ${desc}`);
+        const category = this._toolCategories.get(name) || "other";
+        if (!tier2ByCategory.has(category)) tier2ByCategory.set(category, []);
+        tier2ByCategory.get(category).push(name);
+        tier2Names.push(name);
       }
     }
 
-    // Build catalog string for system prompt
+    // Build a compact catalog for the system prompt. Exact names are enough for
+    // dispatch and preserve the reachability invariant without spending a line
+    // of description tokens on every demoted tool.
+    const tier2Lines = [...tier2ByCategory]
+      .map(([category, names]) => `- ${category}: ${names.join(", ")}`);
     const tier2Catalog = tier2Lines.length > 0
-      ? `\n\nOTHER AVAILABLE TOOLS (you can call these by name — just use the tool name and provide the required arguments):\n${tier2Lines.join("\n")}`
+      ? `\n\nOTHER AVAILABLE TOOLS (call these through use_tool with {tool_name, arguments}; schemas are omitted here to save tokens):\n${tier2Lines.join("\n")}`
       : "";
 
-    return { tier1, tier2Catalog };
+    return { tier1, tier2Catalog, tier2Names };
   }
 
   // ─── Usage tracking ───

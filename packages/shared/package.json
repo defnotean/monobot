@@ -24,6 +24,7 @@
     "./memoryQuirks": "./src/ai/memoryQuirks.js",
     "./temporal": "./src/ai/temporal.js",
     "./responsestyle": "./src/ai/responsestyle.js",
+    "./promptBudget": "./src/ai/promptBudget.js",
     "./humanDelay": "./src/utils/humanDelay.js",
     "./keyPool": "./src/ai/keyPool.js",
     "./toolRateLimit": "./src/utils/toolRateLimit.js",
