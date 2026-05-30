@@ -123,6 +123,11 @@ vi.mock("@supabase/supabase-js", () => ({ createClient: () => makeMockSupabase()
 
 let db: any;
 
+function freezePetClock() {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+}
+
 beforeEach(async () => {
   pets = [];
   loans = [];
@@ -146,16 +151,15 @@ describe("activities.js — pet hunger decay (via getPet)", () => {
     // Pin the clock so the source's Date.now() and our last_fed timestamp agree
     // to the millisecond → hoursPassed === 0 → no decay. Without this the slow
     // coverage run lets real time elapse and Math.floor(hoursPassed*2) can tick to 1.
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    freezePetClock();
     pets.push({ user_id: "u1", name: "Rex", species: "dog", hunger: 80, mood: 90, last_fed: new Date().toISOString() });
     const pet = await db.getPet("u1");
     expect(pet.hunger).toBe(80);
     expect(pet.mood).toBe(90);
-    vi.useRealTimers();
   });
 
   it("decays hunger ~2/hour over elapsed time", async () => {
+    freezePetClock();
     const tenHoursAgo = new Date(Date.now() - 10 * 3_600_000).toISOString();
     pets.push({ user_id: "u2", name: "Rex", species: "dog", hunger: 100, mood: 100, last_fed: tenHoursAgo });
     const pet = await db.getPet("u2");
@@ -165,6 +169,7 @@ describe("activities.js — pet hunger decay (via getPet)", () => {
   });
 
   it("hangry pets (hunger<=30) lose mood instead of gaining it", async () => {
+    freezePetClock();
     const fortyHoursAgo = new Date(Date.now() - 40 * 3_600_000).toISOString();
     pets.push({ user_id: "u3", name: "Rex", species: "cat", hunger: 50, mood: 100, last_fed: fortyHoursAgo });
     const pet = await db.getPet("u3");
@@ -174,6 +179,7 @@ describe("activities.js — pet hunger decay (via getPet)", () => {
   });
 
   it("clamps a future last_fed (clock skew) so decay never goes negative", async () => {
+    freezePetClock();
     const future = new Date(Date.now() + 1_000 * 3_600_000).toISOString();
     pets.push({ user_id: "u4", name: "Rex", species: "dog", hunger: 75, mood: 75, last_fed: future });
     const pet = await db.getPet("u4");
@@ -189,6 +195,7 @@ describe("activities.js — feedPet & trainPet (read-modify-write)", () => {
   });
 
   it("feedPet adds hunger/mood/xp on the decayed-forward baseline", async () => {
+    freezePetClock();
     pets.push({ user_id: "f1", name: "Rex", species: "dog", hunger: 50, mood: 50, xp: 0, last_fed: new Date().toISOString() });
     const res = await db.feedPet("f1");
     expect(res.hunger).toBe(80); // 50 + 30
@@ -199,6 +206,7 @@ describe("activities.js — feedPet & trainPet (read-modify-write)", () => {
   });
 
   it("feedPet caps hunger/mood at 100", async () => {
+    freezePetClock();
     pets.push({ user_id: "f2", name: "Rex", species: "dog", hunger: 95, mood: 95, xp: 1, last_fed: new Date().toISOString() });
     const res = await db.feedPet("f2");
     expect(res.hunger).toBe(100);
@@ -206,6 +214,7 @@ describe("activities.js — feedPet & trainPet (read-modify-write)", () => {
   });
 
   it("trainPet rejects an invalid stat", async () => {
+    freezePetClock();
     pets.push({ user_id: "t0", name: "Rex", species: "dog", attack: 5, last_fed: new Date().toISOString() });
     expect(await db.trainPet("t0", "charisma")).toBeNull();
   });
@@ -215,6 +224,7 @@ describe("activities.js — feedPet & trainPet (read-modify-write)", () => {
   });
 
   it("trainPet increments a valid stat by +1..+3", async () => {
+    freezePetClock();
     pets.push({ user_id: "t1", name: "Rex", species: "dog", attack: 5, last_fed: new Date().toISOString() });
     vi.spyOn(Math, "random").mockReturnValue(0); // gain = 1 + floor(0*3) = 1
     const res = await db.trainPet("t1", "attack");
@@ -224,6 +234,7 @@ describe("activities.js — feedPet & trainPet (read-modify-write)", () => {
   });
 
   it("trainPet defaults a missing stat baseline to 5", async () => {
+    freezePetClock();
     pets.push({ user_id: "t2", name: "Rex", species: "dog", last_fed: new Date().toISOString() });
     vi.spyOn(Math, "random").mockReturnValue(0.99); // gain = 1 + floor(0.99*3) = 3
     const res = await db.trainPet("t2", "speed");
