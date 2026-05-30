@@ -137,6 +137,40 @@ exports) check the invoking Discord user ID against `BOT_OWNER_ID` and refuse
 otherwise. This is a single-tenant trust model — there is no admin/sub-owner
 distinction.
 
+### Dashboard / aux-route localhost trust (`packages/eris/api/dashboard.js`, `packages/eris/api/adminAuxRoutes.js`)
+
+The Eris dashboard API, the `/api/irene/*` cross-bot proxy, and `/api/logs`
+authorize a request when either (a) a valid `DASHBOARD_API_KEY` /
+`TWIN_API_SECRET` bearer token is presented, or (b) the connection originates
+from localhost. The localhost check keys on `req.socket.remoteAddress`
+(`127.0.0.1` / `::1` / `::ffff:127.0.0.1`) — the kernel-assigned peer address of
+the TCP connection, which a remote client cannot spoof — and **not** on any
+client-supplied header such as `X-Forwarded-For`. Every dashboard surface
+(including the two aux routes, which run before the generic API handler) is also
+behind the same per-IP rate limiter (30 req/min, shared bucket).
+
+This is safe under the **documented topology**: the bot's HTTP port is either
+not exposed to the public internet at all, or reached only through an
+outbound-only tunnel — no inbound proxy terminates connections on loopback in
+front of it. In that topology, "connection from `127.0.0.1`" genuinely means
+"a process already on this host," and a host-local process is already inside the
+trust boundary (it can read the same `.env`, the same token).
+
+It is, however, **deployment-fragile**. If a loopback-terminating reverse proxy
+is ever placed in front of these ports — e.g. nginx listening on `127.0.0.1`, a
+sidecar/service-mesh proxy, or an SSH-forwarded bind that lands on the loopback
+interface — then every forwarded *external* request arrives at the bot with
+`socket.remoteAddress = 127.0.0.1` and would inherit the unauthenticated
+localhost bypass. That would expose the dashboard, the `/api/irene/*` proxy, and
+`/api/logs` to anyone who can reach the proxy. This is **not** a bypass in the
+current/documented setup — it is a constraint on how these ports may be fronted.
+
+Mitigation if you must front these ports with a loopback-terminating proxy:
+either don't (expose them on a non-loopback bind the proxy forwards to with the
+real client address preserved and trusted accordingly), or require an explicit
+bearer token even from localhost by removing the loopback bypass for that
+deployment so `DASHBOARD_API_KEY` is always mandatory.
+
 ### PC-agent destructive-command gate (`packages/eris/utils/pcAgent.js`)
 
 On top of the owner check, the PC-agent tool surface adds:

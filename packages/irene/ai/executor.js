@@ -93,6 +93,7 @@ import { log } from "../utils/logger.js";
 import { tempChannels, tempTextChannels, tempVcSeq, manualRenames } from "../utils/tempvc.js";
 import { TOOL_ALIASES } from "./toolAliases.js";
 import { recordUnknownTool, _unknownToolCounts } from "./unknownTools.js";
+import { isAdminMember } from "../utils/permissions.js";
 export { TOOL_ALIASES, validateToolAliases } from "./toolAliases.js";
 export { _unknownToolCounts } from "./unknownTools.js";
 
@@ -858,6 +859,14 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
 
     // ─── Directives: persistent behavioral rules ───────────────────
     case "save_directive": {
+      // Directives are injected into Irene's system prompt as admin-set
+      // overrides — gating them is a security boundary, not a courtesy. This
+      // handler gate covers EVERY provider (incl. nvidia/openaiCompat, which
+      // have no admin tool filter) and the scheduled-task fire path. A missing
+      // message.member (DM / failed rehydrate) is treated as non-admin.
+      if (!isAdminMember(message.member)) {
+        return "only admins/mods can set or remove directives";
+      }
       const { addDirective } = await import("../database.js");
       const directive = String(input.directive || "").trim();
       if (!directive) return "give me the rule text — what should i remember to do?";
@@ -880,6 +889,9 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
     }
 
     case "remove_directive": {
+      if (!isAdminMember(message.member)) {
+        return "only admins/mods can set or remove directives";
+      }
       const { removeDirective } = await import("../database.js");
       const keyword = String(input.keyword || "").trim();
       if (!keyword) return "give me a directive number or keyword to remove";

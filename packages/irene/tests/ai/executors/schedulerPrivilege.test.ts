@@ -110,7 +110,12 @@ afterEach(() => {
 });
 
 describe("schedule_task privilege boundaries", () => {
-  it.each(["trust_user", "trust", "set_log_channel"])(
+  // save_directive / remove_directive were reclassified from EVERYONE_TOOLS to
+  // ADMIN_TOOLS (SECURITY_AUDIT_2026-05-29.md Finding 5). Once they're admin
+  // tools, isAdminToolName() catches them here — closing the schedule_task
+  // laundering path. On the pre-fix code these names were everyone-tools, so
+  // the scheduler let a non-admin queue them and this expectation fails.
+  it.each(["trust_user", "trust", "set_log_channel", "save_directive", "remove_directive"])(
     "rejects non-admin attempts to schedule admin-only tool %s",
     async (toolName) => {
       const message = buildMessage();
@@ -187,7 +192,7 @@ describe("schedule_task privilege boundaries", () => {
 });
 
 describe("scheduled task fire-time privilege boundaries", () => {
-  it.each(["trust_user", "trust", "set_log_channel"])(
+  it.each(["trust_user", "trust", "set_log_channel", "save_directive", "remove_directive"])(
     "drops queued admin-only tool %s when the scheduler is not admin at fire time",
     async (toolName) => {
       vi.useFakeTimers();

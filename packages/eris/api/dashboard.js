@@ -72,6 +72,24 @@ export function requireDashboardAuth(req, res) {
   return false;
 }
 
+// Per-IP rate-limit gate shared by every dashboard surface. Factored out of
+// handleApiRequest so the admin auxiliary routes (/api/irene/* proxy and
+// /api/logs in adminAuxRoutes.js), which run BEFORE handleApiRequest and so
+// never reach the inline check below, enforce the SAME 30 req/min/IP budget
+// against the SAME _dashboardLimiter bucket. Returns true (and writes a 429)
+// when the request is over the limit, so callers `return`/short-circuit on
+// true; false means "allowed, keep going". Uses getClientIp (X-Forwarded-For
+// aware) because behind Render's proxy every request shares one socket peer.
+export function enforceDashboardRateLimit(req, res) {
+  const clientIP = getClientIp(req);
+  if (!_dashboardLimiter.allow(clientIP)) {
+    res.setHeader?.("Content-Type", "application/json");
+    json(res, 429, { error: "rate limited" });
+    return true;
+  }
+  return false;
+}
+
 function requireTwinHmac(req, res, rawBody) {
   const twinSecret = process.env.TWIN_API_SECRET;
   if (!twinSecret) {
@@ -110,13 +128,10 @@ export async function handleApiRequest(req, res) {
   res.setHeader("Content-Type", "application/json");
 
   // ── Rate limiting (per-IP, 30 req/min) ──────────────────────────────────
-  // Use getClientIp (X-Forwarded-For aware): behind Render's proxy every
-  // request shares one socket peer, so keying on remoteAddress would collapse
-  // all visitors into a single bucket.
-  const clientIP = getClientIp(req);
-  if (!_dashboardLimiter.allow(clientIP)) {
-    json(res, 429, { error: "rate limited" }); return;
-  }
+  // Shared helper (also used by the admin auxiliary routes) — same bucket,
+  // X-Forwarded-For aware so Render's single shared socket peer doesn't
+  // collapse all visitors into one key.
+  if (enforceDashboardRateLimit(req, res)) return;
 
   const url0 = new URL(req.url, `http://localhost:${config.port}`);
   const isTwinPath = url0.pathname.startsWith("/api/twin/");

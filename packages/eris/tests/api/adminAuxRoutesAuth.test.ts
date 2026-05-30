@@ -81,4 +81,51 @@ describe("Eris admin auxiliary routes", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).not.toBe(401);
   });
+
+  // Regression for the hardening gap: handleAdminAuxRoute runs BEFORE
+  // handleApiRequest, where the per-IP 30 req/min dashboard limiter lives. So
+  // before the fix, an AUTHED caller could hammer /api/logs and /api/irene/*
+  // without ever tripping a 429. These assert the shared limiter now fires.
+  it("rate-limits authed aux-route requests after 30 hits in the window (31st gets 429)", async () => {
+    // Unique remote IP so this test's bucket is isolated from any other test
+    // that touched the shared module-level _dashboardLimiter for a known IP.
+    const ip = "198.51.100.31";
+    const auth = { authorization: "Bearer test-twin-secret" };
+
+    // First 30 authed requests are under the per-IP limit. They are authed
+    // (valid Bearer) and hit a nonexistent log (404), so never a 401 or 429.
+    for (let i = 0; i < 30; i++) {
+      const res = makeRes();
+      const handled = await handleAdminAuxRoute(
+        makeReq("/api/logs?bot=nonexistent&lines=10", auth, ip),
+        res,
+      );
+      expect(handled).toBe(true);
+      expect(res.statusCode).not.toBe(429);
+      expect(res.statusCode).not.toBe(401);
+    }
+
+    // The 31st authed request within the same window must be rate limited.
+    const limitedRes = makeRes();
+    const limitedHandled = await handleAdminAuxRoute(
+      makeReq("/api/logs?bot=nonexistent&lines=10", auth, ip),
+      limitedRes,
+    );
+    expect(limitedHandled).toBe(true);
+    expect(limitedRes.statusCode).toBe(429);
+    expect(JSON.parse(limitedRes.body).error).toBe("rate limited");
+  });
+
+  it("lets a single authed aux-route request through (rate limit not over-eager)", async () => {
+    // Distinct IP again so the 30 hits above don't bleed into this assertion.
+    const res = makeRes();
+    const handled = await handleAdminAuxRoute(
+      makeReq("/api/logs?bot=nonexistent&lines=10", { authorization: "Bearer test-twin-secret" }, "198.51.100.77"),
+      res,
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).not.toBe(429);
+    expect(res.statusCode).not.toBe(401);
+  });
 });

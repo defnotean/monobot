@@ -1,7 +1,7 @@
 import http from "http";
 import { existsSync, readFileSync } from "fs";
 import config from "../config.js";
-import { requireDashboardAuth } from "./dashboard.js";
+import { requireDashboardAuth, enforceDashboardRateLimit } from "./dashboard.js";
 
 const HOME_DIR = process.env.HOME || `/home/${process.env.USER || "defnotean"}`;
 const LOG_DIR = `${HOME_DIR}/.local/monobot-logs`;
@@ -61,12 +61,18 @@ export function handleLogs(req, res) {
 
 export async function handleAdminAuxRoute(req, res) {
   if (req.url?.startsWith("/api/irene/") || req.url === "/api/irene") {
+    // These aux routes run BEFORE handleApiRequest, where the per-IP limiter
+    // normally fires — so without this they'd be auth-gated but NOT rate-
+    // limited. Enforce the SAME 30 req/min/IP bucket here (mirrors the order
+    // in handleApiRequest: rate-limit first, then auth).
+    if (enforceDashboardRateLimit(req, res)) return true;
     if (!requireDashboardAuth(req, res)) return true;
     await proxyToIrene(req, res);
     return true;
   }
 
   if (req.url?.startsWith("/api/logs")) {
+    if (enforceDashboardRateLimit(req, res)) return true;
     if (!requireDashboardAuth(req, res)) return true;
     handleLogs(req, res);
     return true;

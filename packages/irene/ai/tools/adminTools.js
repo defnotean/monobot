@@ -1385,6 +1385,36 @@ export const ADMIN_TOOLS = [
       required: ["channel_name"],
     },
   },
+  // ─── Directives: persistent behavioral rules (admin-only) ─────────────
+  // These mutate rules that are injected into Irene's system prompt as
+  // admin-set overrides, so they live in ADMIN_TOOLS. This makes dual.js's
+  // admin filter, the toolRegistry isAdmin filter, and scheduler.js's
+  // isAdminToolName gate all naturally block non-admins (defense in depth on
+  // top of the handler gate in ai/executor.js). The read-only counterpart
+  // list_directives stays in EVERYONE_TOOLS.
+  {
+    name: "save_directive",
+    description: "Save a behavioral rule/instruction that you will follow persistently. Admin-only. Use when an admin tells you to do (or not do) something as a standing rule. Examples: 'don't reply in #announcements', 'always speak spanish in #español', 'be extra sarcastic in #shitposting'. IMPORTANT: When an admin gives you a standing instruction (not a one-time request), ALWAYS save it as a directive so you remember it forever.",
+    input_schema: {
+      type: "object",
+      properties: {
+        directive: { type: "string", description: "The rule to follow, in clear language (max 300 chars)" },
+        channel_name: { type: "string", description: "If this rule only applies to a specific channel, name it here. Leave empty for server-wide rules" },
+      },
+      required: ["directive"],
+    },
+  },
+  {
+    name: "remove_directive",
+    description: "Remove a saved directive by keyword or index number. Admin-only. Use when an admin says to forget a rule or stop following an instruction.",
+    input_schema: {
+      type: "object",
+      properties: {
+        keyword: { type: "string", description: "Keyword to search for in the directive text, OR the index number" },
+      },
+      required: ["keyword"],
+    },
+  },
   ...NEW_ADMIN_TOOLS,
   // ═══════════════════════════════════════════════════════════════════
   // VOICE & AUTO-RESPONDER — VC leaderboard, auto-replies, milestones,
