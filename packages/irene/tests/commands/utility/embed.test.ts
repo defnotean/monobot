@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { PermissionFlagsBits } from "discord.js";
 // @ts-expect-error JS helper, no types
 import { makeInteraction, repliedText } from "../../_helpers/mockDiscord.js";
 
@@ -7,12 +8,19 @@ import * as embedCmd from "../../../commands/utility/embed.js";
 // embed.execute checks `interaction.memberPermissions?.has("ManageMessages")`
 // (a string flag, not the bigint API). Build a minimal matching shim.
 function memberPerms(granted: string[]) {
-  return { has: (name: string) => granted.includes(name) };
+  return {
+    has: (name: string | bigint) => granted.includes(String(name))
+      || (name === PermissionFlagsBits.ManageMessages && granted.includes("ManageMessages")),
+  };
 }
 
 // Build a modal-submit-like interaction whose fields return our values.
 function makeModal(values: Record<string, string>, extra: any = {}) {
   const interaction = makeInteraction({});
+  interaction.memberPermissions = memberPerms(["ManageMessages"]);
+  interaction.channel.permissionsFor = vi.fn(() => ({
+    has: (flag: bigint) => flag === PermissionFlagsBits.SendMessages || flag === PermissionFlagsBits.EmbedLinks,
+  }));
   interaction.fields = {
     getTextInputValue: (id: string) => values[id] ?? "",
   };

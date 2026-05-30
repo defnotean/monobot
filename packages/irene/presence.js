@@ -621,7 +621,13 @@ export function startPresenceAPI(client) {
               return j(403, { success: false, error: `twin auth failed: ${verified.reason}` });
             }
 
-            const { requester_id, guild_id, channel_id, command, args } = JSON.parse(body);
+            let parsedBody;
+            try {
+              parsedBody = JSON.parse(body);
+            } catch {
+              return j(400, { success: false, error: "invalid JSON" });
+            }
+            const { requester_id, guild_id, channel_id, command, args } = parsedBody;
 
             // 2. Verify requester is owner or trusted
             const isOwner = requester_id === config.ownerId;
@@ -711,7 +717,9 @@ export function startPresenceAPI(client) {
 
             return j(200, { success: true, result: String(result).substring(0, 500) });
           } catch (e) {
-            log(`[Twin] Command error for "${JSON.parse(body).command}": ${e.message}`);
+            let commandForLog = "(unparsed)";
+            try { commandForLog = JSON.parse(body)?.command || commandForLog; } catch {}
+            log(`[Twin] Command error for "${commandForLog}": ${e.message}`);
             j(500, { success: false, error: e.message?.slice(0, 200) || "internal server error" });
           }
         });

@@ -121,10 +121,10 @@ describe("utility/birthday setup (permission gate)", () => {
     expect(repliedText(interaction)).toContain("Manage Server");
   });
 
-  it("saves channel (and optional role/message) for a member with ManageGuild", async () => {
+  it("saves channel (and optional role/message) for a member with ManageGuild and ManageRoles", async () => {
     const interaction = bday({
       sub: "setup",
-      perms: [PermissionFlagsBits.ManageGuild],
+      perms: [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles],
       options: {
         channel: { id: "chan-9", toString: () => "<#chan-9>" },
         role: { id: "role-9", toString: () => "<@&role-9>" },

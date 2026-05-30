@@ -151,7 +151,7 @@ describe("setup wizard handler (handleSetupWizard)", () => {
     const interaction = makeInteraction({
       guild,
       customId: "setupwiz:autorole:pick",
-      permissions: [PermissionFlagsBits.ManageGuild],
+      permissions: [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles],
     });
     interaction.member.roles.highest.position = 50;
     interaction.roles = { first: () => role };
@@ -167,7 +167,7 @@ describe("setup wizard handler (handleSetupWizard)", () => {
     const interaction = makeInteraction({
       guild,
       customId: "setupwiz:autorole:pick",
-      permissions: [PermissionFlagsBits.ManageGuild],
+      permissions: [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles],
     });
     interaction.member.roles.highest.position = 50;
     interaction.roles = { first: () => role };
@@ -183,7 +183,7 @@ describe("setup wizard handler (handleSetupWizard)", () => {
     const interaction = makeInteraction({
       guild,
       customId: "setupwiz:autorole:pick",
-      permissions: [PermissionFlagsBits.ManageGuild],
+      permissions: [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles],
     });
     interaction.member.roles.highest.position = 50;
     interaction.roles = { first: () => role };

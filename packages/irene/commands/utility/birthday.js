@@ -155,7 +155,7 @@ export async function execute(interaction) {
 
     setBirthdayChannel(guild.id, channel.id);
     if (role) {
-      const roleErr = validateAssignableRole(guild, role, { actor: interaction.member, actionLabel: "Birthday role" });
+      const roleErr = validateAssignableRole(guild, role, { actor: interaction.member, actionLabel: "Birthday role", requireActorManageRoles: true });
       if (roleErr) return interaction.reply({ content: roleErr, ephemeral: true });
       setBirthdayRole(guild.id, role.id);
     }

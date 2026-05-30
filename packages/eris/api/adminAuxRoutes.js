@@ -5,6 +5,7 @@ import { requireDashboardAuth, enforceDashboardRateLimit } from "./dashboard.js"
 
 const HOME_DIR = process.env.HOME || `/home/${process.env.USER || "defnotean"}`;
 const LOG_DIR = `${HOME_DIR}/.local/monobot-logs`;
+const MAX_PROXY_BODY_BYTES = 1_048_576;
 
 // Cross-bot admin proxy: /api/irene/* on Eris's port forwards to Irene's
 // :3001/api/*. The caller must pass Eris dashboard auth before this proxy
@@ -15,7 +16,23 @@ export async function proxyToIrene(req, res) {
   try {
     const chunks = [];
     if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
-      await new Promise((resolve) => { req.on("data", (c) => chunks.push(c)); req.on("end", resolve); });
+      let total = 0;
+      const tooLarge = await new Promise((resolve, reject) => {
+        req.on("data", (c) => {
+          total += c.length;
+          if (total > MAX_PROXY_BODY_BYTES) {
+            res.writeHead(413, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "payload too large" }));
+            req.destroy();
+            resolve(true);
+            return;
+          }
+          chunks.push(c);
+        });
+        req.on("end", () => resolve(false));
+        req.on("error", reject);
+      });
+      if (tooLarge) return;
     }
     const upstreamReq = http.request(proxyUrl, {
       method: req.method,

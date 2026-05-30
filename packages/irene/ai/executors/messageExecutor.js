@@ -319,7 +319,7 @@ export async function execute(toolName, input, message, ctx) {
           for (const b of input.buttons) {
             if (!b.role_id) continue;
             const role = guild.roles.cache.get(b.role_id);
-            const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Button role" });
+            const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Button role", requireActorManageRoles: true });
             if (roleErr) return roleErr;
           }
           for (let i = 0; i < input.buttons.length; i += 5) {
@@ -352,7 +352,7 @@ export async function execute(toolName, input, message, ctx) {
           const d = input.dropdown;
           for (const opt of d.options.slice(0, 25)) {
             const role = guild.roles.cache.get(opt.role_id);
-            const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Dropdown role" });
+            const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Dropdown role", requireActorManageRoles: true });
             if (roleErr) return roleErr;
           }
           const exclusive = d.exclusive ?? false;

@@ -368,6 +368,15 @@ export async function execute(interaction) {
         ephemeral: true,
       }).catch(() => {});
     }
+    const safeName = interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const isOwner = safeName && interaction.channel.name.includes(safeName);
+    const isStaff = interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels);
+    if (!isOwner && !isStaff) {
+      return interaction.reply({
+        embeds: [errorEmbed("Permission Denied", "Only the ticket owner or staff can close this ticket.")],
+        ephemeral: true,
+      }).catch(() => {});
+    }
     await interaction.reply({
       embeds: [warnEmbed("Closing Ticket", `Closed by **${interaction.user.tag}**. This channel will be deleted in 5 seconds...`)],
     }).catch(() => {});

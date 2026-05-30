@@ -153,6 +153,7 @@ export async function execute(toolName, input, message, _context) {
           method: "POST",
           headers: { "Content-Type": "application/json", ...signatureHeaders },
           body: payload,
+          signal: AbortSignal.timeout(5_000),
         });
         const data = await res.json().catch(() => ({ error: `status ${res.status}` }));
         log(`[ASK_IRENE] Response: ${res.status}`);

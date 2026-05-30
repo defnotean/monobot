@@ -304,8 +304,10 @@ describe("/ticket close", () => {
   it("warns + schedules deletion inside a ticket channel", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const channel = makeChannel({ name: "ticket-bob-abc" });
+    const user = makeUser({ username: "bob" });
     const interaction = makeInteraction({
       channel,
+      user,
       subcommand: "close",
       options: {},
       permissions: [],

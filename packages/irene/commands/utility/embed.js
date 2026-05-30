@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } from "discord.js";
+import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, PermissionFlagsBits } from "discord.js";
 import { successEmbed, errorEmbed } from "../../utils/embeds.js";
 import { EmbedBuilder } from "discord.js";
 import { log } from "../../utils/logger.js";
@@ -26,6 +26,11 @@ const NAMED_COLORS = {
   olive: 0x808000,
 };
 
+function hasManageMessages(interaction) {
+  const perms = interaction.memberPermissions;
+  return Boolean(perms?.has?.(PermissionFlagsBits.ManageMessages) || perms?.has?.("ManageMessages"));
+}
+
 export const data = new SlashCommandBuilder()
   .setName("embed")
   .setDescription("Build and send a custom embed")
@@ -33,7 +38,7 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction) {
   // Check permission
-  if (!interaction.memberPermissions?.has("ManageMessages")) {
+  if (!hasManageMessages(interaction)) {
     await interaction.reply({
       embeds: [errorEmbed("permission denied", "you need manage messages to use this")],
       flags: 64,
@@ -99,6 +104,22 @@ export async function execute(interaction) {
 }
 
 export async function handleEmbedModal(interaction) {
+  if (!hasManageMessages(interaction)) {
+    await interaction.reply({
+      embeds: [errorEmbed("permission denied", "you need manage messages to send embeds")],
+      flags: 64,
+    }).catch(() => {});
+    return;
+  }
+  const botPerms = interaction.channel?.permissionsFor?.(interaction.guild?.members?.me ?? interaction.client?.user);
+  if (!botPerms?.has?.(PermissionFlagsBits.SendMessages) || !botPerms?.has?.(PermissionFlagsBits.EmbedLinks)) {
+    await interaction.reply({
+      embeds: [errorEmbed("missing permissions", "i need send messages and embed links in this channel")],
+      flags: 64,
+    }).catch(() => {});
+    return;
+  }
+
   const title = interaction.fields.getTextInputValue("embed_title");
   const description = interaction.fields.getTextInputValue("embed_description");
   const colorStr = interaction.fields.getTextInputValue("embed_color");

@@ -365,7 +365,7 @@ export async function handleSetupWizard(interaction) {
       if (!role) return interaction.reply({ content: "couldn't resolve that role — try again", flags: E }).catch(() => {});
       const check = _checkBotCanAssignRole(guild, role);
       if (!check.ok) return interaction.reply({ content: check.reason, flags: E }).catch(() => {});
-      const roleErr = validateAssignableRole(guild, role, { actor: interaction.member, actionLabel: "Autorole" });
+      const roleErr = validateAssignableRole(guild, role, { actor: interaction.member, actionLabel: "Autorole", requireActorManageRoles: true });
       if (roleErr) return interaction.reply({ content: roleErr, flags: E }).catch(() => {});
       const saved = await _persistSetting(guild.id, "autorole_id", role.id);
       if (!saved.ok) return interaction.reply({ embeds: [errorEmbed("Save failed", saved.error)], flags: E }).catch(() => {});

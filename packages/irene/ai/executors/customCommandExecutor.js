@@ -8,6 +8,7 @@ import { PermissionFlagsBits } from "discord.js";
 import { getCustomCommand, setCustomCommand, deleteCustomCommand, listCustomCommands } from "../../database.js";
 import { COLOR_NAMES } from "../colors.js";
 import { DANGEROUS_PERMS } from "../hierarchy.js";
+import { hasManageRolesMember } from "../../utils/permissions.js";
 
 const HANDLED = new Set([
   "create_custom_command", "edit_custom_command",
@@ -25,7 +26,7 @@ function roleHasDangerousPerm(role) {
   return DANGEROUS_PERMS.some((perm) => role.permissions?.has?.(perm));
 }
 
-export function validateAssignableRole(guild, role, { actor = null, actionLabel = "Custom commands" } = {}) {
+export function validateAssignableRole(guild, role, { actor = null, actionLabel = "Custom commands", requireActorManageRoles = false } = {}) {
   if (!role) return "Couldn't find that role";
   if (role.id === guild.id) return `${actionLabel} can't manage @everyone.`;
   if (role.managed) return `${actionLabel} can't manage **${role.name}** because Discord manages that role.`;
@@ -37,6 +38,9 @@ export function validateAssignableRole(guild, role, { actor = null, actionLabel 
   if (botTop != null && role.position >= botTop) return `${actionLabel} can't manage **${role.name}** because it is at or above my top role.`;
 
   if (actor && actor.id !== guild.ownerId) {
+    if (requireActorManageRoles && !hasManageRolesMember(actor)) {
+      return `${actionLabel} requires Manage Roles before you can configure role assignment.`;
+    }
     const actorTop = actor.roles?.highest?.position;
     if (actorTop != null && role.position >= actorTop) {
       return `${actionLabel} can't manage **${role.name}** because it is at or above your top role.`;
@@ -50,7 +54,7 @@ function validateCommandRoles(guild, command, { actor = null, findRole } = {}) {
   for (const key of ["role_to_give", "role_to_remove"]) {
     if (!command[key]) continue;
     const role = resolveCustomCommandRole(guild, command[key], findRole);
-    const reason = validateAssignableRole(guild, role, { actor });
+    const reason = validateAssignableRole(guild, role, { actor, requireActorManageRoles: true });
     if (reason) return reason;
   }
   return null;

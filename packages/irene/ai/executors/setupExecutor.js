@@ -39,7 +39,7 @@ export async function execute(toolName, input, message, ctx) {
     case "set_access_role": {
       const role = findRole(guild, input.role_name);
       if (!role) return `Couldn't find role "${input.role_name}"`;
-      const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Access role" });
+      const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Access role", requireActorManageRoles: true });
       if (roleErr) return roleErr;
       setAccessRole(guild.id, role.id);
       return `Done — anyone who uses me will now automatically get the "${role.name}" role`;
@@ -66,7 +66,7 @@ export async function execute(toolName, input, message, ctx) {
       if (verRole.position >= botTop) {
         return `the role **@${verRole.name}** is higher than my role in the hierarchy — move it below my role in Server Settings > Roles, then try again`;
       }
-      const verRoleErr = validateAssignableRole(guild, verRole, { actor: message.member, actionLabel: "Verification role" });
+      const verRoleErr = validateAssignableRole(guild, verRole, { actor: message.member, actionLabel: "Verification role", requireActorManageRoles: true });
       if (verRoleErr) return verRoleErr;
 
       // Parse public channels — use partial/fuzzy matching for decorated channel names
@@ -173,7 +173,7 @@ export async function execute(toolName, input, message, ctx) {
       }
       const role = findRole(guild, input.role_name);
       if (!role) return `Couldn't find role "${input.role_name}"`;
-      const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Autorole" });
+      const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Autorole", requireActorManageRoles: true });
       if (roleErr) return roleErr;
       setAutorole(guild.id, role.id);
       return `Auto-role set to **${role.name}** — new members will get this role when they join`;
@@ -873,7 +873,7 @@ export async function execute(toolName, input, message, ctx) {
           });
         }
         if (!role) { lines.push(`${r.emoji} — ⚠️ Role "${r.role_name}" not found`); continue; }
-        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Reaction role" });
+        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Reaction role", requireActorManageRoles: true });
         if (roleErr) { lines.push(`${r.emoji} — ⚠️ ${roleErr}`); continue; }
         lines.push(`${r.emoji} — <@&${role.id}>`);
         rolesToCreate.push({ emoji: r.emoji, roleId: role.id, roleName: role.name });
@@ -918,7 +918,7 @@ export async function execute(toolName, input, message, ctx) {
     case "add_reaction_role": {
       const rrRole = findRole(guild, input.role_name);
       if (!rrRole) return `Couldn't find role "${input.role_name}"`;
-      const rrRoleErr = validateAssignableRole(guild, rrRole, { actor: message.member, actionLabel: "Reaction role" });
+      const rrRoleErr = validateAssignableRole(guild, rrRole, { actor: message.member, actionLabel: "Reaction role", requireActorManageRoles: true });
       if (rrRoleErr) return rrRoleErr;
       const exclusive = input.exclusive ?? true;
       addReactionRole(guild.id, input.message_id, input.emoji, rrRole.id, exclusive);
@@ -967,7 +967,7 @@ export async function execute(toolName, input, message, ctx) {
           role = await guild.roles.create({ name: r.name, reason: "Role picker setup" });
         }
         if (!role) return `Couldn't find role "${r.name}" — set create_if_missing: true to create it`;
-        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Role picker" });
+        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Role picker", requireActorManageRoles: true });
         if (roleErr) return roleErr;
         resolved.push({ id: role.id, name: role.name, emoji: r.emoji ?? null, label: r.description ?? r.name, style: r.style || "secondary" });
       }
@@ -1022,7 +1022,7 @@ export async function execute(toolName, input, message, ctx) {
           role = await guild.roles.create({ name: r.name, reason: "Dropdown role picker setup" });
         }
         if (!role) return `Couldn't find role "${r.name}" — set create_if_missing: true to create it`;
-        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Dropdown role" });
+        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Dropdown role", requireActorManageRoles: true });
         if (roleErr) return roleErr;
         resolved.push({ id: role.id, name: role.name, emoji: r.emoji ?? null, description: r.description ?? null });
       }
@@ -1144,7 +1144,7 @@ export async function execute(toolName, input, message, ctx) {
           const hex = parseInt(hexStr, 16);
           role = await guild.roles.create({ name: color.name, color: hex, reason: "Color role picker" });
         }
-        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Color role" });
+        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Color role", requireActorManageRoles: true });
         if (roleErr) {
           roleIds.push({ id: null, name: color.name, emoji: color.emoji ?? null, error: roleErr });
           continue;

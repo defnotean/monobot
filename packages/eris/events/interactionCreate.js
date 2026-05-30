@@ -427,7 +427,7 @@ async function handleGameButton(interaction) {
   // ── Daily challenge claim button ──────────────────────────────────
   if (id === "challenge_complete") {
     const today = new Date().toISOString().split("T")[0];
-    const { getDailyChallenge, completeDailyChallenge, getGameStats, getTriviaStats } = await import("../database.js");
+    const { getDailyChallenge, completeDailyChallenge, getGameStats, getTriviaStats, getSupabase } = await import("../database.js");
     const challenge = await getDailyChallenge(interaction.guild?.id, today);
     if (!challenge) return interaction.reply({ content: "no challenge today", flags: MessageFlags.Ephemeral });
     if ((challenge.completed_by || []).includes(userId)) return interaction.reply({ content: "already claimed", flags: MessageFlags.Ephemeral });
@@ -463,18 +463,35 @@ async function handleGameButton(interaction) {
       progress = stats.wins || 0;
       verified = progress >= target;
     } else if (type === "duel_wins") {
-      // Duels don't track in game_stats yet — trust AI judgment
-      verified = true;
+      const stats = await getGameStats(userId, "duel");
+      progress = stats.wins || 0;
+      verified = progress >= target;
     } else if (type === "total_wagered" || type === "earn_coins" || type === "rob_attempt") {
-      // These are hard to verify precisely — trust AI judgment
-      verified = true;
+      const supabase = getSupabase();
+      if (supabase) {
+        let query = supabase
+          .from("eris_transactions")
+          .select(type === "rob_attempt" ? "type" : "amount")
+          .eq("user_id", userId)
+          .gte("created_at", today + "T00:00:00")
+          .lt("created_at", today + "T23:59:59.999");
+        if (type === "total_wagered") query = query.like("type", "gamble%");
+        else if (type === "earn_coins") query = query.gt("amount", 0);
+        else query = query.in("type", ["rob_success", "rob_fail", "rob_fine"]);
+        const { data: rows } = await query;
+        progress = type === "rob_attempt"
+          ? (rows || []).length
+          : (rows || []).reduce((sum, r) => sum + (type === "total_wagered" ? Math.abs(r.amount) : r.amount), 0);
+      }
+      verified = progress >= target;
     }
 
     if (!verified) {
       return interaction.reply({ content: `you haven't completed the challenge yet! you need ${target} but you have ${progress}`, flags: MessageFlags.Ephemeral });
     }
 
-    await completeDailyChallenge(challenge.id, userId);
+    const newlyCompleted = await completeDailyChallenge(challenge.id, userId);
+    if (!newlyCompleted) return interaction.reply({ content: "already claimed", flags: MessageFlags.Ephemeral });
     await db.updateBalance(userId, challenge.reward, "challenge_reward", type);
     const { dailyChallengeEmbed } = await import("../ai/gameVisuals.js");
     const { embed } = dailyChallengeEmbed(challenge, true);
@@ -941,9 +958,15 @@ async function resolveDuelMoves(interaction, duelKey) {
   }
 
   if (pending.stake > 0) {
-    await db.updateBalance(winnerId, pending.stake, "duel_win", `duel:${move1}v${move2}`);
-    await db.updateBalance(loserId, -pending.stake, "duel_loss", `duel:${move1}v${move2}`);
+    const transfer = await db.transferBalance(loserId, winnerId, pending.stake, 0, "duel_loss", `duel:${move1}v${move2}`);
+    if (!transfer.ok) {
+      const payload = { content: `duel settlement failed: ${transfer.reason}`, flags: MessageFlags.Ephemeral };
+      if (interaction.replied || interaction.deferred) return interaction.followUp(payload).catch(() => {});
+      return interaction.reply(payload).catch(() => {});
+    }
   }
+  await db.recordGameResult(winnerId, "duel", true, pending.stake || 0, pending.stake || 0);
+  await db.recordGameResult(loserId, "duel", false, pending.stake || 0, 0);
 
   const guild = interaction.guild;
   const winnerName = guild?.members.cache.get(winnerId)?.displayName || "Winner";

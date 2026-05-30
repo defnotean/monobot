@@ -17,6 +17,7 @@ export async function execute(interaction) {
   const reason = validateAssignableRole(interaction.guild, role, {
     actor: interaction.member,
     actionLabel: "Autorole",
+    requireActorManageRoles: true,
   });
   if (reason) {
     await interaction.reply({

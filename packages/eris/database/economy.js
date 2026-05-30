@@ -519,6 +519,7 @@ export async function earnMessageCoins(userId) {
 // Supabase edits propagate within a bounded window instead of being silently
 // shadowed by a permanent in-memory copy.
 const _bankCache = new LRUCache(1000, 5 * 60_000);
+let _rpcBankBalanceAvailable = true;
 
 export async function getBankBalance(userId) {
   const supabase = getSupabase();
@@ -532,10 +533,48 @@ export async function getBankBalance(userId) {
   return { balance: 0, last_interest: null };
 }
 
-export async function updateBankBalance(userId, delta) {
+export async function updateBankBalance(userId, delta, { maxBalance = null } = {}) {
   const supabase = getSupabase();
+  if (!Number.isFinite(delta) || !Number.isInteger(delta)) {
+    throw new Error(`invalid bank delta: ${delta}`);
+  }
+
+  if (supabase && _rpcBankBalanceAvailable) {
+    try {
+      const { data: rows, error } = await supabase.rpc("eris_add_bank_balance", {
+        p_user_id: userId,
+        p_delta: delta,
+        p_max_balance: Number.isFinite(maxBalance) ? maxBalance : null,
+      });
+      if (error) {
+        if (error.code === "PGRST202" || /Could not find the function|does not exist/i.test(error.message || "")) {
+          _rpcBankBalanceAvailable = false;
+          log(`[DB] eris_add_bank_balance RPC not deployed — falling back to non-atomic bank updates. Apply migrations/009_atomic_bank_rpc.sql to enable cross-process bank safety.`);
+        } else {
+          log(`[DB] eris_add_bank_balance RPC error: ${error.message} — falling back to non-atomic bank update for this call`);
+        }
+      } else if (Array.isArray(rows) && rows.length === 0) {
+        const err = new Error(delta < 0 ? "insufficient_bank" : "bank_full");
+        err.code = err.message;
+        throw err;
+      } else if (Array.isArray(rows) && rows.length > 0) {
+        const row = rows[0];
+        _bankCache.set(userId, row);
+        return Number(row.balance) || 0;
+      }
+    } catch (e) {
+      if (e?.code === "insufficient_bank" || e?.code === "bank_full") throw e;
+      log(`[DB] eris_add_bank_balance RPC threw: ${e.message} — falling back to non-atomic bank update for this call`);
+    }
+  }
+
   const current = await getBankBalance(userId);
   const newBal = Math.max(0, current.balance + delta);
+  if (Number.isFinite(maxBalance) && newBal > maxBalance) {
+    const err = new Error("bank_full");
+    err.code = "bank_full";
+    throw err;
+  }
   const row = { user_id: userId, balance: newBal, last_interest: current.last_interest || new Date().toISOString() };
   if (supabase) {
     try { await supabase.from("eris_bank").upsert(row); } catch (e) { log(`[DB] ${e.message}`); }
@@ -591,12 +630,12 @@ export async function bankDeposit(userId, amount) {
     const newWalletBalance = await _updateBalanceUnsafe(userId, -amount, "bank_deposit", "deposited to bank");
     let newBankBalance;
     try {
-      newBankBalance = await updateBankBalance(userId, amount);
+      newBankBalance = await updateBankBalance(userId, amount, { maxBalance: cap });
     } catch (err) {
       try { await _updateBalanceUnsafe(userId, amount, "bank_deposit_refund", "bank credit failed"); } catch (rollbackErr) {
         log(`[DB] bankDeposit rollback failed for ${userId}: ${rollbackErr.message} — manual reconciliation needed`);
       }
-      return { ok: false, reason: err?.message || "bank_credit_failed" };
+      return { ok: false, reason: err?.code === "bank_full" ? "bank_full" : err?.message || "bank_credit_failed", bank: bank.balance, capacity: cap, maxDeposit: cap - bank.balance };
     }
     return { ok: true, newWalletBalance, newBankBalance, capacity: cap };
   });

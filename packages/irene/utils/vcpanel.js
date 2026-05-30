@@ -37,6 +37,31 @@ function getVcPrivacyState(vc, guild) {
   };
 }
 
+function resolvePanelOwner(vcId, vc, guild) {
+  let ownerId = tempChannels.get(vcId);
+  if (ownerId) return ownerId;
+
+  for (const [, ow] of vc.permissionOverwrites.cache) {
+    if (ow.type === 1 && ow.allow.has(PermissionFlagsBits.ManageChannels)) {
+      ownerId = ow.id;
+      tempChannels.set(vcId, ownerId);
+      saveTempVc(vcId, { ownerId, guildId: guild.id, seq: tempVcSeq.get(vcId) ?? 1, textChannelId: tempTextChannels.get(vcId) ?? null });
+      log(`[VCPanel] Repaired tempChannels for "${vc.name}" from Discord overwrites — owner: ${ownerId}`);
+      return ownerId;
+    }
+  }
+
+  return null;
+}
+
+function canManagePanel(interaction, vcId, vc) {
+  const caller = interaction.member;
+  const ownerId = resolvePanelOwner(vcId, vc, interaction.guild);
+  const isOwner = ownerId === caller?.id;
+  const isAdmin = caller?.permissions?.has?.(PermissionFlagsBits.Administrator) || caller?.id === interaction.guild?.ownerId;
+  return isOwner || isAdmin;
+}
+
 // ─── Embed builder ────────────────────────────────────────────────────────────
 
 function buildPanelEmbed(vc, guild) {
@@ -303,27 +328,7 @@ export async function handlePanelInteraction(interaction) {
     return;
   }
 
-  // Permission check — owner or admin only.
-  // Primary source is tempChannels (in-memory). If missing (e.g. just after restart
-  // before the panel re-check runs), fall back to Discord channel permission overwrites
-  // to find who actually has ManageChannels — that's the ground-truth owner.
-  let ownerId = tempChannels.get(vcId);
-  if (!ownerId) {
-    for (const [, ow] of vc.permissionOverwrites.cache) {
-      if (ow.type === 1 && ow.allow.has(PermissionFlagsBits.ManageChannels)) {
-        ownerId = ow.id;
-        // Repair in-memory state so subsequent interactions work without the fallback.
-        // Also persist to DB so the correct owner survives the next restart.
-        tempChannels.set(vcId, ownerId);
-        saveTempVc(vcId, { ownerId, guildId: guild.id, seq: tempVcSeq.get(vcId) ?? 1, textChannelId: tempTextChannels.get(vcId) ?? null });
-        log(`[VCPanel] Repaired tempChannels for "${vc.name}" from Discord overwrites — owner: ${ownerId}`);
-        break;
-      }
-    }
-  }
-  const isOwner = ownerId === caller.id;
-  const isAdmin = caller.permissions.has(PermissionFlagsBits.Administrator) || caller.id === guild.ownerId;
-  if (!isOwner && !isAdmin) {
+  if (!canManagePanel(interaction, vcId, vc)) {
     await interaction.reply({ embeds: [errorEmbed("Access Denied", "Only the **channel owner** can use these controls.")], ephemeral: true });
     return;
   }
@@ -562,6 +567,10 @@ export async function handlePanelModal(interaction) {
     await interaction.reply({ embeds: [errorEmbed("Channel Not Found", "That voice channel no longer exists.")], ephemeral: true });
     return;
   }
+  if (!canManagePanel(interaction, vcId, vc)) {
+    await interaction.reply({ embeds: [errorEmbed("Access Denied", "Only the **channel owner** can use these controls.")], ephemeral: true });
+    return;
+  }
 
   // ── Rename ────────────────────────────────────────────────────────────────
   if (modalType === "rename") {
@@ -624,6 +633,10 @@ export async function handlePanelSelect(interaction) {
       await interaction.update({ embeds: [errorEmbed("Channel Gone", "That voice channel no longer exists.")], components: [] });
       return;
     }
+    if (!canManagePanel(interaction, vcId, vc)) {
+      await interaction.update({ embeds: [errorEmbed("Access Denied", "Only the **channel owner** can use these controls.")], components: [] });
+      return;
+    }
     // "Custom" option → show a modal
     if (selected === "custom") {
       const modal = new ModalBuilder()
@@ -665,6 +678,10 @@ export async function handlePanelSelect(interaction) {
 
   if (!vc || !target) {
     await interaction.editReply({ embeds: [errorEmbed("Not Found", "Couldn't find that channel or member — they may have left.")] });
+    return;
+  }
+  if (!canManagePanel(interaction, vcId, vc)) {
+    await interaction.editReply({ embeds: [errorEmbed("Access Denied", "Only the **channel owner** can use these controls.")] });
     return;
   }
 

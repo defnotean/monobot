@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
 import { successEmbed, errorEmbed, infoEmbed } from "../../utils/embeds.js";
-import { requireAdminOrOwner } from "../../utils/permissions.js";
+import { hasAdministratorMember } from "../../utils/permissions.js";
 import { getServerPersona, setServerPersona } from "../../database.js";
 import { log } from "../../utils/logger.js";
 import config from "../../config.js";
@@ -31,7 +31,12 @@ export const data = new SlashCommandBuilder()
   );
 
 export async function execute(interaction) {
-  if (!requireAdminOrOwner(interaction)) return;
+  if (!hasAdministratorMember(interaction.member)) {
+    return interaction.reply({
+      embeds: [errorEmbed("No Permission", "You need **Administrator** to manage my server persona.")],
+      ephemeral: true,
+    });
+  }
 
   const sub = interaction.options.getSubcommand();
   const guildId = interaction.guild.id;

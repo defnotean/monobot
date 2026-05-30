@@ -106,16 +106,17 @@ export async function completeDailyChallenge(challengeId, userId) {
       try {
         const { data } = await sb.from("eris_daily_challenges").select("completed_by").eq("id", challengeId).single();
         const completed = data?.completed_by || [];
-        if (completed.includes(userId)) return; // already completed — no-op
+        if (completed.includes(userId)) return false; // already completed — no-op
         const next = [...completed, userId];
         await sb.from("eris_daily_challenges").update({ completed_by: next }).eq("id", challengeId);
         // Defense-in-depth: re-read and confirm our id landed. If a racing
         // writer overwrote us (only possible across instances since the
         // lock above serializes within a process), retry once.
         const { data: verify } = await sb.from("eris_daily_challenges").select("completed_by").eq("id", challengeId).single();
-        if ((verify?.completed_by || []).includes(userId)) return;
+        if ((verify?.completed_by || []).includes(userId)) return true;
       } catch (e) { log(`[DB] ${e.message}`); return; }
     }
+    return false;
   });
 }
 
@@ -472,22 +473,39 @@ export async function bidOnAuction(auctionId, bidderId, amount) {
 export async function closeExpiredAuctions() {
   const supabase = getSupabase();
   if (!supabase) return [];
-  const { data } = await supabase.from("eris_auctions").select("*").eq("status", "active").lt("ends_at", new Date().toISOString());
+  const { data, error } = await supabase.from("eris_auctions").select("*").eq("status", "active").lt("ends_at", new Date().toISOString());
+  if (error) {
+    log(`[DB] closeExpiredAuctions failed: ${error.message}`);
+    return [];
+  }
   if (!data?.length) return [];
+  const closed = [];
   for (const auction of data) {
-    try { await supabase.from("eris_auctions").update({ status: "closed" }).eq("id", auction.id); } catch (e) { log(`[DB] ${e.message}`); }
+    const { data: claimed, error: claimError } = await supabase
+      .from("eris_auctions")
+      .update({ status: "closed" })
+      .eq("id", auction.id)
+      .eq("status", "active")
+      .select("*");
+    if (claimError) {
+      log(`[DB] closeExpiredAuctions claim failed for ${auction.id}: ${claimError.message}`);
+      continue;
+    }
+    if (!claimed?.length) continue;
+    const claimedAuction = claimed[0];
+    closed.push(claimedAuction);
     // No winning bidder → the item was escrowed out at createAuction time, so
     // return it to the seller. Auctions that sold are settled by the winner-grant
     // path in events/ready.js (the item the seller escrowed becomes the winner's).
-    if (!(auction.current_bidder_id && auction.current_bid > 0)) {
+    if (!(claimedAuction.current_bidder_id && claimedAuction.current_bid > 0)) {
       // Restore under the item's original category (captured at list time on the
       // row). Falls back to "auction" if the column is absent / unset so the item
       // is never grouped under a lifecycle string like "auction_unsold".
-      try { await addToInventory(auction.seller_id, auction.item_name, auction.item_type || "auction"); }
-      catch (e) { log(`[DB] closeExpiredAuctions refund failed for ${auction.seller_id}: ${e.message}`); }
+      try { await addToInventory(claimedAuction.seller_id, claimedAuction.item_name, claimedAuction.item_type || "auction"); }
+      catch (e) { log(`[DB] closeExpiredAuctions refund failed for ${claimedAuction.seller_id}: ${e.message}`); }
     }
   }
-  return data;
+  return closed;
 }
 
 // ─── ROAST BATTLES ──────────────────────────────────────────────────────────

@@ -113,6 +113,17 @@ function requireTwinHmac(req, res, rawBody) {
   return true;
 }
 
+function requireTwinBearer(req, res) {
+  const token = typeof req.headers.authorization === "string"
+    ? req.headers.authorization.replace(/^Bearer\s+/i, "")
+    : "";
+  if (!token || !safeStringEqual(token, config.twinApiSecret)) {
+    json(res, 403, { error: "twin endpoint requires Bearer TWIN_API_SECRET" });
+    return false;
+  }
+  return true;
+}
+
 export async function handleApiRequest(req, res) {
   // CORS — only allow same-origin and configured dashboard domains
   const allowedOrigins = [process.env.EXTERNAL_URL, process.env.RENDER_EXTERNAL_URL, config.twinApiUrl, process.env.DASHBOARD_URL].filter(Boolean);
@@ -402,6 +413,7 @@ export async function handleApiRequest(req, res) {
     }
 
     if (path === "/api/twin/mood" && req.method === "GET") {
+      if (!requireTwinBearer(req, res)) return;
       const mood = db.getMood();
       json(res, 200, { mood_score: mood.mood_score, energy: mood.energy, from: "eris" });
       return;
@@ -481,6 +493,7 @@ export async function handleApiRequest(req, res) {
     }
 
     if (path === "/api/twin/status" && req.method === "GET") {
+      if (!requireTwinBearer(req, res)) return;
       json(res, 200, { status: "online", uptime: Math.round(process.uptime()), from: "eris", message: "hey sis im here" });
       return;
     }

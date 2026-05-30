@@ -101,13 +101,17 @@ async function loadEvents() {
 const ADMIN_HTML_PATH = join(__dirname, "api", "admin.html");
 
 const server = http.createServer(async (req, res) => {
-  // Admin panel HTML (localhost-only by virtue of the dashboard.js auth bypass)
+  // Admin panel HTML. Block framing and caching so a saved dashboard token in
+  // localStorage cannot be abused through clickjacking.
   if (req.url === "/admin" || req.url === "/admin/" || req.url?.startsWith("/admin?")) {
     if (!existsSync(ADMIN_HTML_PATH)) {
       res.writeHead(404); res.end("admin.html not found");
       return;
     }
     res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Cache-Control", "no-store");
     res.writeHead(200);
     res.end(readFileSync(ADMIN_HTML_PATH, "utf-8"));
     return;

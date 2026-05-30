@@ -11,6 +11,19 @@ import { validateAssignableRole } from "../ai/executors/customCommandExecutor.js
 
 export const name = "interactionCreate";
 
+function safeTicketNameFor(user) {
+  return user?.username?.toLowerCase().replace(/[^a-z0-9]/g, "") || "";
+}
+
+function canCloseTicket(interaction, requestedById = null, expectedChannelId = null) {
+  const { channel, member, user } = interaction;
+  if (expectedChannelId && channel?.id !== expectedChannelId) return false;
+  if (member?.permissions?.has?.("ManageChannels")) return true;
+  if (requestedById && user?.id !== requestedById) return false;
+  const safeName = safeTicketNameFor(user);
+  return Boolean(channel?.name?.startsWith("ticket-") && safeName && channel.name.includes(safeName));
+}
+
 export async function execute(interaction) {
   // Buttons can't fire from DMs — guard upfront
   if ((interaction.isButton()) && !interaction.guild) {
@@ -175,11 +188,23 @@ export async function execute(interaction) {
 
   // ── Scrim Modals ──────────────────────────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId.startsWith("scrim_modal:score:")) {
+    const { PermissionFlagsBits } = await import("discord.js");
     const { activeScrims } = await import("../utils/scrims.js");
     const id = interaction.customId.split(":")[2];
     const scrim = activeScrims.get(id);
     if (scrim) {
-       scrim.scoreStr = interaction.fields.getTextInputValue("score");
+       const canSetScore = scrim.host === interaction.user.id
+         || interaction.member?.permissions?.has?.(PermissionFlagsBits.Administrator);
+       if (!canSetScore) {
+         await interaction.reply({ content: "Only the host or an admin can set this score.", ephemeral: true });
+         return;
+       }
+       const score = interaction.fields.getTextInputValue("score").trim();
+       if (!/^\d{1,3}\s*[-:]\s*\d{1,3}$/.test(score)) {
+         await interaction.reply({ content: "Use a score like `13-5`.", ephemeral: true });
+         return;
+       }
+       scrim.scoreStr = score.replace(/\s*:\s*/g, "-").replace(/\s*-\s*/g, "-");
        await interaction.reply({ content: `✅ Match score updated to **${scrim.scoreStr}**!`, ephemeral: true });
     } else {
        await interaction.reply({ content: `Wait, this scrim lobby has expired.`, ephemeral: true });
@@ -547,16 +572,14 @@ export async function execute(interaction) {
       }
     } else if (action === "ticket_close") {
       try {
-        const { PermissionFlagsBits } = await import("discord.js");
-        const hasPerms = interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)
-          || interaction.channel.name.includes(interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, ""));
+        const hasPerms = canCloseTicket(interaction, null, interaction.customId.split(":")[1] || null);
         if (!hasPerms) return interaction.reply({ content: "Only the ticket owner or staff can close this ticket.", ephemeral: true });
 
         const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = await import("discord.js");
         const { warnEmbed } = await import("../utils/embeds.js");
         const confirmRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("ticket_confirm_close").setLabel("Confirm Close").setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId("ticket_cancel_close").setLabel("Cancel").setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`ticket_confirm_close:${interaction.channel.id}:${interaction.user.id}`).setLabel("Confirm Close").setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId(`ticket_cancel_close:${interaction.channel.id}:${interaction.user.id}`).setLabel("Cancel").setStyle(ButtonStyle.Secondary),
         );
         await interaction.reply({ embeds: [warnEmbed("Close Ticket?", "This will permanently delete this channel and all messages.")], components: [confirmRow] });
       } catch (err) {
@@ -564,6 +587,10 @@ export async function execute(interaction) {
       }
     } else if (action === "ticket_confirm_close") {
       try {
+        const [, channelId, requestedById] = interaction.customId.split(":");
+        if (!canCloseTicket(interaction, requestedById || null, channelId || null)) {
+          return interaction.reply({ content: "Only the ticket owner or staff can confirm this close.", ephemeral: true });
+        }
         await interaction.reply({ content: "🔒 Closing ticket in 3 seconds..." });
         setTimeout(async () => {
           await interaction.channel?.delete("Ticket closed by " + interaction.user.tag).catch(() => {});
@@ -572,6 +599,10 @@ export async function execute(interaction) {
         log(`[Ticket] Confirm close error: ${err.message}`);
       }
     } else if (action === "ticket_cancel_close") {
+      const [, channelId, requestedById] = interaction.customId.split(":");
+      if (!canCloseTicket(interaction, requestedById || null, channelId || null)) {
+        return interaction.reply({ content: "Only the ticket owner or staff can cancel this close prompt.", ephemeral: true });
+      }
       await interaction.update({ content: "Ticket close cancelled.", embeds: [], components: [] }).catch(() => {});
     } else if (action === "ticket_claim") {
       try {

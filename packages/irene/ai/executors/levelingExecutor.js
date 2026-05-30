@@ -17,7 +17,7 @@ export async function execute(toolName, input, message, ctx) {
       const { setLevelReward } = await import("../../utils/leveling.js");
       const role = findRole(guild, input.role_name);
       if (!role) return `couldn't find role "${input.role_name}"`;
-      const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Level reward" });
+      const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Level reward", requireActorManageRoles: true });
       if (roleErr) return roleErr;
       setLevelReward(guild.id, input.level, role.id);
       return `set level ${input.level} reward to ${role.name}`;

@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, PermissionFlagsBits, ChannelType } from "discord.js";
 import { successEmbed, errorEmbed } from "../../utils/embeds.js";
-import { requirePermission, requireAdminOrOwner } from "../../utils/permissions.js";
+import { hasAdministratorMember } from "../../utils/permissions.js";
 
 export const data = new SlashCommandBuilder()
   .setName("setup-server")
@@ -8,7 +8,24 @@ export const data = new SlashCommandBuilder()
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
 
 export async function execute(interaction) {
-  if (!requireAdminOrOwner(interaction)) return;
+  if (!hasAdministratorMember(interaction.member)) {
+    return interaction.reply({
+      embeds: [errorEmbed("No Permission", "You need **Administrator** to auto-create server roles and channels.")],
+      ephemeral: true,
+    });
+  }
+  if (!interaction.guild.members.me?.permissions?.has?.(PermissionFlagsBits.ManageRoles)) {
+    return interaction.reply({
+      embeds: [errorEmbed("Bot Missing Permissions", "I need **Manage Roles** to create setup roles.")],
+      ephemeral: true,
+    });
+  }
+  if (!interaction.guild.members.me?.permissions?.has?.(PermissionFlagsBits.ManageChannels)) {
+    return interaction.reply({
+      embeds: [errorEmbed("Bot Missing Permissions", "I need **Manage Channels** to create setup channels.")],
+      ephemeral: true,
+    });
+  }
 
   await interaction.deferReply();
 

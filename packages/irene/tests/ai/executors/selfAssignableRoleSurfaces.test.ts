@@ -52,7 +52,7 @@ function harness(role = dangerousRole()) {
   const actor = makeMember({
     user: makeUser({ id: "actor", username: "actor", tag: "actor#0001" }),
     guild,
-    permissions: [PermissionFlagsBits.ManageGuild],
+    permissions: [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles],
     highestRolePosition: 50,
   });
   guild.members.cache.set(actor.id, actor);
