@@ -87,7 +87,7 @@ Before opening a PR or merging to `main`:
 - [ ] If you touched moderation: tested ban/kick/timeout against an alt account, confirmed undo works
 - [ ] If you touched twin coordination: smoke-tested the affected sub-action with both bots running
 - [ ] `npm run test:<bot>` passes
-- [ ] `npm run lint:version-sync` passes (catches the bug class from 2026-04-24, see [DEPLOY_MIGRATION.md](../DEPLOY_MIGRATION.md))
+- [ ] `npm run lint:version-sync` passes
 
 ## Common dev-guild gotchas
 

@@ -23,7 +23,7 @@ A multi-day server-bump competition Eris runs. Tracks who bumped most. See `ai/b
 Both bots monitor for DISBOARD/Discadia/Disforge bump confirmations and ping a configured role 2h later. See `ai/bumpReminder.js`.
 
 ### Canonical
-When a file exists in both bots and one version is the "right" one to share. E.g. `ai/firewall.js` Eris is canonical, Irene needs to port. See [drift-inventory.md](./drift-inventory.md).
+When a file exists in both bots and one version is the "right" one to share. For example, one bot's implementation may be the source version to port before extracting shared behavior.
 
 ### Catchphrase
 A verbal tic the bot has learned to use repeatedly with a specific user. Tracked in `ai/personality.js`. Drift mechanic.
@@ -38,7 +38,7 @@ The ~200ms write-coalescing window in `packages/eris/database.js`. A burst of ed
 A named cache slice marked as needing flush to Supabase. `markDirty("mood")` schedules a debounced ~200ms flush. See [persistence pattern](#persistence-pattern).
 
 ### Drift (between bots)
-When a file exists in both Eris and Irene and the contents have diverged. Either **intentional** (different schemas, different personalities) or **accidental** (one bot updated, the other didn't). Full inventory in [drift-inventory.md](./drift-inventory.md).
+When a file exists in both Eris and Irene and the contents have diverged. Either **intentional** (different schemas, different personalities) or **accidental** (one bot updated, the other didn't).
 
 ### ensureLoaded
 Shared-promise lazy-init pattern (see `packages/irene/ai/personality.js`). The first caller kicks off `_loadPromise`; concurrent callers await the same promise. Avoids re-loading state on every read and guarantees exactly one in-flight Supabase fetch per cold start.
@@ -77,7 +77,7 @@ The per-user trust+grudge+streak system in `ai/humanity.js`. Tracks UTC-day stre
 A recurring phrase the bot+user have used together. Tracked per-user in `database.js` via `updateUserPreferences`. Surfaces in context.
 
 ### Karaoke
-Irene-only feature. Streams song lyrics in real time during music playback. `ai/karaoke.js` ties into the music player's `onTrackStart`/`onTrackEnd` events and uses LRCLIB. (Eris has a vestigial copy that should be removed.)
+Irene-only feature. Streams song lyrics in real time during music playback. `ai/karaoke.js` ties into the music player's `onTrackStart`/`onTrackEnd` events and uses LRCLIB.
 
 ### Key pool
 A rotating pool of API keys (Gemini, Voyage). Implemented in `ai/keyPool.js`. Tracks per-key 429 status; when one key gets throttled, requests route to others. Eris uses 4 Gemini keys; Irene uses up to 12.

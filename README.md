@@ -51,14 +51,12 @@ In a hurry to just get a bot running? **[GETTING_STARTED.md](./GETTING_STARTED.m
 | [docs/dev-guild-workflow.md](./docs/dev-guild-workflow.md) | Setting up a safe dev Discord guild for testing |
 | [docs/testing-guide.md](./docs/testing-guide.md) | Vitest patterns, mocking Discord/Supabase, fake-timer & seeded-RNG recipes |
 | [docs/debugging-playbook.md](./docs/debugging-playbook.md) | "X is broken — where do I look?" symptom→file lookups |
-| [docs/drift-inventory.md](./docs/drift-inventory.md) | Eris ↔ Irene divergence at a glance — read before touching shared modules |
 
 ### Running it (deployment)
 | File | Use it when |
 |---|---|
 | [docs/self-hosting.md](./docs/self-hosting.md) | Running on your own hardware (laptop / home server / VPS) instead of Render |
 | [docs/llm-provider-guide.md](./docs/llm-provider-guide.md) | Provider setup (Gemini / NVIDIA / OpenRouter / Ollama / LM Studio) |
-| [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) | Render deployment runbook + known deploy gotchas |
 | [docs/SCALING.md](./docs/SCALING.md) | What scales horizontally and what doesn't; multi-replica caveats |
 | [docs/MONITORING.md](./docs/MONITORING.md) | What's observable today, what's missing, alert recipes |
 
@@ -91,14 +89,8 @@ npm run lint:version-sync      # CI guard — both bots must pin identical share
 
 For the watch-mode + dev-guild workflow, see [docs/local-dev-loop.md](./docs/local-dev-loop.md).
 
-## History
-
-This monorepo was assembled from two previously separate bot repositories — one per bot — merged into a single npm-workspaces layout with a shared package.
-
 ## Deployment
 
-See [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) for the step-by-step Render setup and known deploy gotchas (workspace dependency hoisting can silently break things — worth reading before touching dep ranges).
+The root [render.yaml](./render.yaml) defines the canonical Render services. Keep workspace dependency ranges in sync with `npm run lint:version-sync` before deploying.
 
 Prefer to run on your own hardware? See [docs/self-hosting.md](./docs/self-hosting.md) — covers Linux/Windows/macOS, process managers, networking, and Lavalink setup.
-
-See [docs/drift-inventory.md](./docs/drift-inventory.md) for files that have drifted between the two bots — some intentionally (per-bot personality, schema), some accidentally (slated for extraction into `@defnotean/shared`).

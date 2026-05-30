@@ -141,14 +141,6 @@ To register changes with Discord: `npm run deploy --workspace=@defnotean/eris`.
 | &nbsp;&nbsp;`/gamewatch remove` | Stop tracking a game | commands/utility/gamewatch.js |
 | &nbsp;&nbsp;`/gamewatch list` | Show all active game watches for this server | commands/utility/gamewatch.js |
 | `/help` | See what Eris can do | commands/utility/help.js |
-| `/karaoke` | Make Irene's nickname display synced lyrics as a song plays | commands/utility/karaoke.js |
-| &nbsp;&nbsp;`/karaoke start` | Start a karaoke session for a song (manually triggered) | commands/utility/karaoke.js |
-| &nbsp;&nbsp;`/karaoke auto` | Auto-start karaoke whenever a Last.fm user starts a new track | commands/utility/karaoke.js |
-| &nbsp;&nbsp;`/karaoke stop` | Stop karaoke and restore my nickname | commands/utility/karaoke.js |
-| &nbsp;&nbsp;`/karaoke pause` | Pause the current karaoke | commands/utility/karaoke.js |
-| &nbsp;&nbsp;`/karaoke resume` | Resume the paused karaoke | commands/utility/karaoke.js |
-| &nbsp;&nbsp;`/karaoke offset` | Adjust timing if lyrics are ahead/behind (positive = lyrics later, negative = lyrics earlier) | commands/utility/karaoke.js |
-| &nbsp;&nbsp;`/karaoke status` | Show what's currently playing | commands/utility/karaoke.js |
 | `/mood` | See Eris's current mood and how it's affecting gambling odds | commands/utility/mood.js |
 | `/ping` | Check if Eris is alive | commands/utility/ping.js |
 | `/tutorial` | Learn what Eris can do — interactive walkthrough | commands/utility/tutorial.js |

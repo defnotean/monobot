@@ -3,11 +3,10 @@ import { PermissionFlagsBits } from "discord.js";
 
 // ─── Regression: directive write tools are admin-gated ───────────────────────
 //
-// Adversarial audit (SECURITY_AUDIT_2026-05-29.md Finding 5) confirmed a HIGH
-// auth gap: Irene's save_directive / remove_directive handlers had NO permission
-// check and lived in EVERYONE_TOOLS, so any member could mutate the directives
-// that get injected into Irene's system prompt as admin-set "override your
-// default behavior" rules — directly, or laundered through schedule_task.
+// Regression: Irene's save_directive / remove_directive handlers must stay
+// admin-only. If they are exposed to regular members, anyone can mutate the
+// directives injected into Irene's system prompt as admin-set rules — directly,
+// or laundered through schedule_task.
 //
 // These tests pin BOTH layers of the fix:
 //   1. The handler gate in ai/executor.js (covers ALL providers, incl. ones

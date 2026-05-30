@@ -16,7 +16,6 @@ vi.mock("@defnotean/shared/slangGuard.js", () => ({
 import { buildPromptHints } from "../../../events/messageCreate/promptHints.js";
 
 const client = { user: { username: "eris" } };
-const ireneClient = { user: { username: "Irene" } };
 
 const hints = (cleanMessage: string, opts: any = {}) =>
   buildPromptHints({ cleanMessage, client: opts.client ?? client, isAwaitedReply: opts.isAwaitedReply ?? false });
@@ -73,11 +72,6 @@ describe("buildPromptHints", () => {
 
   it("adds the game-tracking hint for patch-note tracking requests", async () => {
     expect(await hints("can you track updates for this game")).toContain("game update tracking");
-  });
-
-  it("only adds the karaoke hint when the bot is Irene", async () => {
-    expect(await hints("sing me a song", { client })).not.toContain("karaoke");
-    expect(await hints("sing me a song", { client: ireneClient })).toContain("karaoke");
   });
 
   it("adds the awaited-reply follow-up hint when isAwaitedReply is true", async () => {

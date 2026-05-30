@@ -117,7 +117,7 @@ Drop a file in [packages/eris/events/](../packages/eris/events/) (or `irene/even
 ## Some things to know before you change anything
 
 - **Surgical changes only.** Don't refactor adjacent code, don't rename things, don't reformat. From [CONTRIBUTING.md](../CONTRIBUTING.md).
-- **Don't fix drift in an unrelated PR.** Some files exist in both bots and have intentionally diverged (`personality.js`, `longmemory.js`, `firewall.js`, `bumpReminder*.js`). See [drift-inventory.md](./drift-inventory.md) before touching any of them.
+- **Don't fix drift in an unrelated PR.** Some files exist in both bots and have intentionally diverged (`personality.js`, `longmemory.js`, `firewall.js`, `bumpReminder*.js`). Check both bot implementations before touching any of them.
 - **Tests don't connect to Discord or Supabase.** Safe to run anywhere.
 - **There is no staging.** Production tests happen in your dev guild — see [dev-guild-workflow.md](./dev-guild-workflow.md).
 - **Pin dep versions exact across workspaces.** A 2026-04-24 incident took prod down because `discord.js@^14.14.1` and `^14.26.2` resolved to the same hoisted version with subtly broken APIs. `npm run lint:version-sync` enforces this.

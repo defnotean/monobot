@@ -92,8 +92,6 @@ REST endpoint at `/presence` — drop-in Lanyard replacement. Real-time Discord 
 - Full audit logging + attribution on every mod action
 - HMAC-signed twin API with Bearer-gated state endpoint
 
-See **[FEATURES.md](FEATURES.md)** for the full security inventory.
-
 ## Tech Stack
 
 Node.js 18+ · discord.js v14 · Shoukaku (Lavalink) · Gemini / NVIDIA Kimi · Supabase · Voyage AI embeddings · Render
@@ -127,7 +125,3 @@ npm start
 ```bash
 npm test
 ```
-
----
-
-**Roadmap:** see **[FEATURES.md](FEATURES.md)** — what's shipped, what's planned, what's explicitly skipped (and why).

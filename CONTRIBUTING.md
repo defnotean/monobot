@@ -11,7 +11,6 @@ MonoBot/
 ├── packages/
 │   ├── eris/             # Chaotic-twin Discord bot — economy, gambling, AI personality
 │   │   ├── COMMANDS.md   # Slash command inventory (54 commands across 8 categories)
-│   │   └── EXTRACTION_PLAN.md  # Eris↔Irene reconciliation plan (mirrored in irene/)
 │   ├── irene/            # Good-twin Discord bot — moderation, music, auto-mod, tickets
 │   │   └── COMMANDS.md   # Slash command inventory (67 commands across 8 categories)
 │   └── shared/           # Shared utilities — twin signing (HMAC), LRU cache, role categorizer
@@ -19,11 +18,9 @@ MonoBot/
 │   ├── ai-pipeline-eris.md   # Message-to-reply trace for Eris
 │   ├── ai-pipeline-irene.md  # Message-to-reply trace for Irene
 │   ├── presence-api.md       # Twin REST + HMAC signing surface
-│   ├── drift-inventory.md    # Eris ↔ Irene divergence at a glance
 │   └── dev-guild-workflow.md # How to set up a dev Discord guild + safe testing
 ├── scripts/
 │   └── verify-version-sync.js   # CI guard — both bots must pin identical shared deps
-├── DEPLOY_MIGRATION.md          # Render service runbook + 2026-04-24 post-mortem
 ├── GETTING_STARTED.md
 ├── CONTRIBUTING.md  (this file)
 └── README.md
@@ -48,7 +45,7 @@ Inside each `packages/<bot>/`:
 1. **Run the bots locally** — [GETTING_STARTED.md](./GETTING_STARTED.md)
 2. **Set up a dev guild** — [docs/dev-guild-workflow.md](./docs/dev-guild-workflow.md). There is no staging environment; never test against a real server
 3. **Read the relevant pipeline doc** — [docs/ai-pipeline-eris.md](./docs/ai-pipeline-eris.md) or [docs/ai-pipeline-irene.md](./docs/ai-pipeline-irene.md) covers how a message becomes a reply, with file:line references for every stage
-4. **Check known drift** — [docs/drift-inventory.md](./docs/drift-inventory.md) is the 1-page summary; full reconciliation plan in [packages/eris/EXTRACTION_PLAN.md](./packages/eris/EXTRACTION_PLAN.md). If your change touches a file marked `INTENTIONALLY DIFFERENT` or `ACCIDENTAL DRIFT` (`personality.js`, `longmemory.js`, `firewall.js`, `twinSign.js`, `bumpReminder*`), talk to the maintainer first
+4. **Check the twin boundary** — if your change touches code that exists in both bots (`personality.js`, `longmemory.js`, `firewall.js`, bump reminder modules, or shared utilities), confirm whether the other bot needs the same change
 
 ## Branching and commits
 
@@ -66,7 +63,7 @@ Inside each `packages/<bot>/`:
 Examples from history:
 - `feat(eris): /roulette — European single-zero wheel`
 - `fix(irene): truncation + topic-drift in AI replies`
-- `docs: add DEPLOY_MIGRATION.md for Render service cutover`
+- `docs: update Render deployment notes`
 - `chore: unify + pin shared dep ranges across workspaces (phase D)`
 
 **Body (optional):** explain *why*, not what. Reference the issue or incident that prompted it.
@@ -77,7 +74,7 @@ Examples from history:
 
 - **Title** in the same format as a commit message
 - **Body** under 200 words covering: what changed, why, and a one-line test plan
-- **Smoke-test plan** if your change affects production behavior — see [DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md) for the existing manual checklist (slash commands, mentions, embeds, twin API)
+- **Smoke-test plan** if your change affects production behavior — include slash commands, mentions, embeds, and twin API behavior when relevant
 
 There's no staging environment. Reviews are stricter for changes that touch the AI pipeline or twin coordination than for additive features.
 
@@ -128,7 +125,7 @@ Both bots use **vitest**. From the repo root:
 | `npm run test:irene` | Irene suite (~218 tests across 19 files) |
 | `npm test` | both |
 | `npm run dev:eris` / `npm run dev:irene` | run the bot with file-watch (faster inner loop than `start:*`) |
-| `npm run lint:version-sync` | guards that both bots pin identical shared dep versions (a real bug we hit on 2026-04-24, see `DEPLOY_MIGRATION.md`) |
+| `npm run lint:version-sync` | guards that both bots pin identical shared dep versions |
 
 **Critical paths with thin coverage** — good places to add tests when you touch them:
 - `ai/executor.js` (Irene's is 1663 lines, currently no direct tests)
@@ -166,7 +163,7 @@ If your change touches `presence.js`, `twinSign.js`, `ask_irene`, `ask_eris`, or
 
 Both bots auto-deploy from `main` via Render. There is **no staging environment**. Smoke-test in your dev guild before merging.
 
-For deploy procedure, env-var management on Render, and rollback steps: **[DEPLOY_MIGRATION.md](./DEPLOY_MIGRATION.md)**.
+Render deploys use the root [render.yaml](./render.yaml). Keep env vars managed in Render and smoke-test in a dev guild after deployment.
 
 ## Getting help
 
@@ -174,9 +171,8 @@ For deploy procedure, env-var management on Render, and rollback steps: **[DEPLO
 |---|---|
 | How does the AI pipeline work? | [docs/ai-pipeline-eris.md](docs/ai-pipeline-eris.md) / [docs/ai-pipeline-irene.md](docs/ai-pipeline-irene.md) |
 | What does the twin REST surface look like? | [docs/presence-api.md](docs/presence-api.md) |
-| Why does X exist in both bots? | [docs/drift-inventory.md](docs/drift-inventory.md) (1-page summary) — full plan in [packages/eris/EXTRACTION_PLAN.md](packages/eris/EXTRACTION_PLAN.md) |
+| Why does X exist in both bots? | Check the matching files in `packages/eris` and `packages/irene`, then decide whether the difference is intentional before editing both |
 | What slash commands does each bot have? | [packages/eris/COMMANDS.md](packages/eris/COMMANDS.md) / [packages/irene/COMMANDS.md](packages/irene/COMMANDS.md) |
 | How do I set up a dev guild? | [docs/dev-guild-workflow.md](docs/dev-guild-workflow.md) |
-| What features have shipped recently? | `packages/<bot>/FEATURES.md` |
-| How do I deploy? | [DEPLOY_MIGRATION.md](DEPLOY_MIGRATION.md) |
+| How do I deploy? | Root [render.yaml](render.yaml), plus [docs/self-hosting.md](docs/self-hosting.md) for non-Render installs |
 | Where do I add a tool / command / event? | This file → "Your first contribution" |

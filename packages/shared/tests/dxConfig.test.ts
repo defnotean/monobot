@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 //   - the dev loop must use `node --watch index.js` (the file that ships),
 //     not the old `tsx --watch index.ts` (index.ts never existed → broke on
 //     every clean checkout);
-//   - all render blueprints must build with `npm ci` so deploys honour the
+//   - the render blueprint must build with `npm ci` so deploys honour the
 //     committed lockfile;
 //   - the CI workflow the README badge points at must exist and only
 //     reference npm scripts that actually exist.
@@ -41,11 +41,7 @@ describe("dev loop scripts", () => {
 });
 
 describe("render blueprints", () => {
-  for (const blueprint of [
-    "render.yaml",
-    "packages/eris/render.yaml",
-    "packages/irene/render.yaml",
-  ]) {
+  for (const blueprint of ["render.yaml"]) {
     it(`${blueprint} builds with npm ci, never npm install`, () => {
       const text = readText(blueprint);
       const buildLines = text

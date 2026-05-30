@@ -72,7 +72,7 @@ Terminal execution. Filesystem browsing. App launching. Process management. GitH
 | **Social** | `/boss` `/duel` `/marry` |
 | **Pets** | `/pet` |
 | **Last.fm** | `/fm` `/fmalbum` `/fmartist` `/fmchart` `/fmcrowns` `/fmgenre` `/fmprofile` `/fmrecent` `/fmset` `/fmstreak` `/fmtaste` `/fmtrack` `/fmwhoknows` `/fmyear` + 8 more |
-| **Utility** | `/about` `/help` `/mood` `/ping` `/tutorial` `/karaoke` `/gamewatch` `/bumps` `/bumpathon` `/bumpconfig` |
+| **Utility** | `/about` `/help` `/mood` `/ping` `/tutorial` `/gamewatch` `/bumps` `/bumpathon` `/bumpconfig` |
 
 Most of Eris's 170+ tools are called conversationally, not through slash commands. Just talk to her.
 
@@ -87,8 +87,6 @@ Most of Eris's 170+ tools are called conversationally, not through slash command
 - Per-user tool rate limits
 - HMAC-signed twin API (request signing, not just bearer)
 - AI action denylist on `schedule_task` — no recursive scheduling
-
-See **[FEATURES.md](FEATURES.md)** for the full security inventory and everything we've shipped.
 
 ## Tech Stack
 
@@ -121,7 +119,3 @@ npm start
 ```bash
 npm test
 ```
-
----
-
-**Roadmap:** see **[FEATURES.md](FEATURES.md)** — what's shipped, what's planned, what's explicitly skipped (and why).

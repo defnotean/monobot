@@ -12,7 +12,7 @@ Three workspace packages under `packages/*`:
 | `@defnotean/irene` | Discord bot focused on moderation / server config / music / tickets / presence API. No economy tools. | ~95k JS |
 | `@defnotean/shared` | Cross-bot utilities published only to the workspace (HMAC twin signing, LRU cache, role categorizer, SSRF-safe fetch, rate limiter, firewall core). | ~5k JS |
 
-The shared package is a workspace dependency only — both bots import via subpath exports declared in [packages/shared/package.json:8-20](packages/shared/package.json#L8-L20), e.g. `import { LRUCache } from "@defnotean/shared/LRUCache"`. Per-bot copies of extracted modules have been removed (see [docs/drift-inventory.md](docs/drift-inventory.md) for what is and isn't shared today).
+The shared package is a workspace dependency only — both bots import via subpath exports declared in [packages/shared/package.json:8-20](packages/shared/package.json#L8-L20), e.g. `import { LRUCache } from "@defnotean/shared/LRUCache"`. Bot-specific adapters remain where dependencies differ.
 
 **Twin-bot mode.** Both bots run as independent processes and coordinate over HTTPS via the HMAC-signed "twin protocol" hosted by Irene's HTTP server. Eris delegates moderation to Irene via `ask_irene`; Irene fires confiscation signals at Eris via `firePunishSignal`; both bots can read the other's mood for context.
 
@@ -216,7 +216,7 @@ Tunables (cooldowns, history budgets, embed colors, request timeouts) live in th
 
 ### A. Render multi-service (canonical)
 
-The shipped `render.yaml` describes two web services in one repo, each pinned to the monorepo root so the workspace dependency on `@defnotean/shared` resolves. See [DEPLOY_MIGRATION.md](DEPLOY_MIGRATION.md) for the runbook and known hoisting gotchas.
+The root `render.yaml` describes two web services in one repo, each pinned to the monorepo root so the workspace dependency on `@defnotean/shared` resolves.
 
 - `eris-bot` — `plan: free`, `npm install && npm run start:eris`, healthcheck `/`.
 - `irene-bot` — `plan: standard`, `npm install && npm run start:irene`, healthcheck `/api/health`.
@@ -250,7 +250,7 @@ Where to cut into the system without spreading change across the codebase:
 **Hard boundaries** (don't try to merge these):
 - Personality, mood, long-term-memory schemas — each bot owns its tables, prefixed `eris_*` / `irene_*`.
 - Tool surfaces — Eris has no moderation tools, Irene has no economy tools, by design.
-- `dual.js` per bot — the AI orchestration loop is shaped for each bot's tool surface; the [drift inventory](docs/drift-inventory.md) marks this `INTENTIONALLY DIFFERENT`.
+- `dual.js` per bot — the AI orchestration loop is shaped for each bot's tool surface.
 
 **What is *not* in the codebase** (might be expected, isn't):
 - No CI other than the version-sync linter.

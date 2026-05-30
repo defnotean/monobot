@@ -289,15 +289,3 @@ describe("runMemoryMaintenance", () => {
     expect(result.pruned).toBe(1);
   });
 });
-
-// ─── Backwards-compat alias ────────────────────────────────────────────────
-
-describe("cleanupTrivialMemories (legacy alias)", () => {
-  it("still prunes old exchange-type memories", async () => {
-    fakeSupabase._tables.eris_episodic_memories.push(
-      { id: "old", bot_id: "b1", user_id: "u1", type: "exchange", content: "x", created_at: DAYS_AGO(60) },
-    );
-    await semantic.cleanupTrivialMemories();
-    expect(fakeSupabase._tables.eris_episodic_memories).toHaveLength(0);
-  });
-});

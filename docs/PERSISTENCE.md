@@ -100,10 +100,9 @@ defaults to `0`).
 
 The intent — documented inline in the database modules
 (`packages/irene/database.js` lines 50-54) — is **fail-fast on missing DB**
-so a silent in-memory fallback never reaches production. Render deploys ship
-with this set on the production service (`packages/eris/render.yaml` line 48,
-`packages/irene/render.yaml` line 46) so a misconfigured Supabase secret kills
-boot rather than silently burning user state on every redeploy.
+so a silent in-memory fallback never reaches production. Production deploys
+should set this on both services so a misconfigured Supabase secret kills boot
+rather than silently burning user state on every redeploy.
 
 Even with the flag off, Eris's economy already refuses to mutate without a DB
 (`packages/eris/database.js` lines 901-906) — that's the load-bearing guard

@@ -216,7 +216,7 @@ Examples lifted from `git log`:
 - `feat(eris): /roulette — European single-zero wheel`
 - `fix(irene): truncation + topic-drift in AI replies`
 - `fix(ai): cap Brave web search latency`
-- `docs: add DEPLOY_MIGRATION.md for Render service cutover`
+- `docs: update Render deployment notes`
 - `chore: unify + pin shared dep ranges across workspaces (phase D)`
 
 **Body (optional, ≥1 blank line after subject):** explain *why*, reference the incident or PR number. Wrap at ~72 chars.
@@ -233,11 +233,11 @@ A reviewer will look at every PR for these. Self-check before requesting review:
 - [ ] **Style matches the file.** JS modules, ESM, double-quoted strings, `//` comments. If the file already disagrees with this doc, you copied the file's style, not the doc's.
 - [ ] **No `Co-Authored-By` or other AI-tool attribution** in commits, the PR body, or commit trailers. Repo policy (see `CONTRIBUTING.md` §"Branching and commits").
 - [ ] **Tests pass.** `npm run test:eris`, `npm run test:irene`, and `npm test` (root) green. New tool / new bug fix has a new test ([CONTRIBUTING.md §Testing](../CONTRIBUTING.md#testing)).
-- [ ] **Drift inventory checked.** If your change touches a file marked `INTENTIONALLY DIFFERENT` or `ACCIDENTAL DRIFT` in [drift-inventory.md](./drift-inventory.md) (`personality.js`, `longmemory.js`, `firewall.js`, `twinSign.js`, `bumpReminder*`), you confirmed the change is intentional and noted whether the twin needs a matching update.
+- [ ] **Twin boundary checked.** If your change touches a duplicated or shared-sensitive file (`personality.js`, `longmemory.js`, `firewall.js`, `twinSign.js`, `bumpReminder*`), you confirmed the change is intentional and noted whether the twin needs a matching update.
 - [ ] **Logs are tagged.** New `log(...)` / `console.*` calls have a `[SCOPE]` prefix and don't spam in hot paths.
 - [ ] **Error handling matches the layer.** Tool executors return strings, not throws. Validators return `{ error }` objects. Persistence helpers may throw on structural failure (no DB).
 - [ ] **Lock invariants preserved.** Any new `*Unsafe` call is inside an active `withUserLock` / `withGameLock` block. Any new read-modify-write on user state is inside one.
-- [ ] **`version-sync` clean.** Both bots still pin identical `@defnotean/shared` ranges — `npm run lint:version-sync` is the guard (see [DEPLOY_MIGRATION.md](../DEPLOY_MIGRATION.md) for the 2026-04-24 incident this caught).
+- [ ] **`version-sync` clean.** Both bots still pin identical `@defnotean/shared` ranges — `npm run lint:version-sync` is the guard.
 - [ ] **No secrets, no hardcoded owner / guild / Discord IDs, no deploy URLs.** Everything env-loaded via `config.js`. See `SECURITY.md` and the open-source-release note in the repo.
 - [ ] **PR body** under 200 words: what, why, one-line smoke-test plan. Title in commit-message format.
 

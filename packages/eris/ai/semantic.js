@@ -859,12 +859,3 @@ export async function runMemoryMaintenance(opts = {}) {
     consolidationSkipped: consolidationResult.skipped,
   };
 }
-
-/**
- * Backwards-compatible alias. Older call sites import cleanupTrivialMemories;
- * route them through the new prune path so nothing else has to change.
- */
-export async function cleanupTrivialMemories() {
-  const { deleted } = await pruneMemories();
-  return deleted;
-}

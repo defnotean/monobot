@@ -220,7 +220,7 @@ If you can't figure out where to edit:
 
 ## When you SHOULDN'T edit something
 
-These files are marked drift-sensitive in [drift-inventory.md](./drift-inventory.md). Don't edit without coordinating with the maintainer:
+These files are drift-sensitive. Don't edit without checking whether the matching bot needs the same change:
 - `ai/personality.js` (intentional schema divergence)
 - `ai/longmemory.js` (cross-bot migration coordination needed)
 - `ai/firewall.js` (canonical lives in Eris; mind `ownerId`/`userId`)

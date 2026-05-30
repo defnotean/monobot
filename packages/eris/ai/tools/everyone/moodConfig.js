@@ -8,10 +8,9 @@
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
-// EVERYONE TOOLS — MOOD, GAME TRACKING, KARAOKE, CHANNEL CONFIG, PRICES
+// EVERYONE TOOLS — MOOD, GAME TRACKING, CHANNEL CONFIG, PRICES
 // get_mood / get_relationship — introspection
 // track_game / untrack_game / list_game_watches — Steam patch-note watcher
-// start_karaoke / stop_karaoke — synced lyrics in nickname (Irene only)
 // set_event_channels / set_chat_channels / test_fire_event — server config
 // watch_price / check_prices / unwatch_price — product price monitoring
 // ═══════════════════════════════════════════════════════════════════════════
@@ -71,25 +70,6 @@ export const MOOD_CONFIG_TOOLS = [
     name: "list_game_watches",
     description:
       "Show all active game update watches for this server. Use when someone asks 'what games are being tracked', 'show game watches', 'list tracked games'.",
-    input_schema: { type: "object", properties: {} },
-  },
-  {
-    name: "start_karaoke",
-    description:
-      "Start a karaoke session — your nickname will display synced song lyrics line-by-line. Use when someone says 'sing X', 'karaoke X', 'start karaoke for X'. Lyrics fetched from LRCLIB. Irene-only feature.",
-    input_schema: {
-      type: "object",
-      properties: {
-        song:   { type: "string", description: "Song title or search query" },
-        artist: { type: "string", description: "Artist name for the karaoke track" },
-      },
-      required: ["song", "artist"],
-    },
-  },
-  {
-    name: "stop_karaoke",
-    description:
-      "Stop the current karaoke session and restore your normal nickname. Use when someone says 'stop karaoke', 'stop singing', 'shut up'. Irene-only.",
     input_schema: { type: "object", properties: {} },
   },
   {

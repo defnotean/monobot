@@ -52,9 +52,6 @@ export async function buildPromptHints({ cleanMessage, client, isAwaitedReply })
   if (/\b(track|watch|follow)\s+(updates?|patches?|patchnotes?|news)\b|\b(game\s+updates?|patch\s+notes?)\b/i.test(cleanMessage)) {
     hints += "\n[CONTEXT: user wants to set up game update tracking. Call track_game with the game name (and optional rss_url for non-Steam). Patch notes will then auto-post here every 10 minutes via the game watcher.]";
   }
-  if (/\b(sing|karaoke|lyrics?)\b/i.test(cleanMessage) && client.user.username.toLowerCase().includes("irene")) {
-    hints += "\n[CONTEXT: user wants karaoke (Irene-only feature). If they named a song + artist, call start_karaoke with both. If they said 'stop singing' / 'shut up' / 'stop karaoke', call stop_karaoke. Karaoke makes your nickname display synced lyrics line-by-line as the song plays.]";
-  }
   if (isAwaitedReply) {
     hints += "\n[CONTEXT: this is a follow-up reply to your previous question. whatever they just said IS the answer. call the appropriate tool immediately using their response — do NOT ask again.]";
   }

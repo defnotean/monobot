@@ -189,7 +189,7 @@ Also check:
 The 2026-04-24 incident: tests passed because they ran against the same hoisted `discord.js` version as prod, so both were "broken" in the same matching way.
 
 - **Run `npm run lint:version-sync`** — catches divergent dep ranges across workspaces.
-- **Smoke-test in dev guild before merging** — `/ping` + an embed-sending command + a moderation command. See [DEPLOY_MIGRATION.md](../DEPLOY_MIGRATION.md) for the full checklist.
+- **Smoke-test in dev guild before merging** — `/ping` + an embed-sending command + a moderation command.
 - **Compare `[Bot] N commands loaded` count to last known good** — if it dropped, a command file failed to load silently. (This is what missed Irene on 2026-04-24.)
 
 ## Twin state endpoint 429s

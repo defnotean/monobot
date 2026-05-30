@@ -505,6 +505,6 @@ For prompt changes, the prompt loader caches at boot, so a clean restart is requ
 - Don't reformat
 - Don't add backwards-compat shims
 - Don't write `// this saves the note` style comments — only WHY-comments
-- Don't touch `personality.js`, `longmemory.js`, `firewall.js`, `bumpReminder*.js` without coordinating (see [drift-inventory.md](./drift-inventory.md))
+- Don't touch `personality.js`, `longmemory.js`, `firewall.js`, or `bumpReminder*.js` without checking whether the matching bot needs the same change.
 - Don't skip writing a test for a new tool — it's mentioned in CONTRIBUTING for a reason
 - Don't deploy without smoke-testing in your dev guild — there's no staging

@@ -13,7 +13,6 @@ import { log } from "../../utils/logger.js";
 import { resolveMember } from "../../utils/discord.js";
 import { isOwner, canCustomize, denyMessage } from "../../utils/permissions.js";
 import { searchSteam, addWatch, removeWatch, getWatches } from "../gameWatcher.js";
-import { isIrene, startKaraoke, stopKaraoke } from "../karaoke.js";
 
 // Note: poker / stock_market / lottery moved to casinoExecutor.js — those
 // three moonshot features share the hardened atomic-economy primitives and
@@ -26,7 +25,7 @@ const HANDLED = new Set([
   "check_prices", "unwatch_price", "territory_claim", "territory_map",
   "territory_collect", "pet_adopt", "pet_feed", "pet_status", "pet_rename",
   "minion_status", "minion_collect", "minion_name",
-  "start_karaoke", "stop_karaoke", "test_fire_event", "set_event_channels",
+  "test_fire_event", "set_event_channels",
   "set_chat_channels",
 ]);
 
@@ -172,27 +171,6 @@ export async function execute(toolName, input, message, _context) {
         const src = w.steamAppId ? `Steam app ${w.steamAppId}` : `RSS`;
         return `• **${w.gameName}** → <#${w.channelId}> (${src}) — id: \`${w.id}\``;
       }).join("\n");
-    }
-
-    case "start_karaoke": {
-      if (!isIrene(message.client)) return "karaoke is only available on Irene";
-      if (!message.guild) return "karaoke only works in servers";
-      const song   = input.song || input.track || input.name;
-      const artist = input.artist || input.artist_name;
-      if (!song || !artist) return "i need both a song title and artist";
-      const r = await startKaraoke(message.client, message.guild.id, {
-        trackName: song, artistName: artist, requesterId: message.author.id,
-      });
-      return r.ok
-        ? `🎤 starting karaoke: **${r.trackName}** by **${r.artistName}** (${r.lineCount} lyric lines)`
-        : `couldn't start karaoke: ${r.reason}`;
-    }
-
-    case "stop_karaoke": {
-      if (!isIrene(message.client)) return "karaoke is only available on Irene";
-      if (!message.guild) return "karaoke only works in servers";
-      const r = await stopKaraoke(message.guild.id, "user requested");
-      return r.ok ? `🛑 stopped karaoke (${r.trackName})` : r.reason;
     }
 
     case "set_event_channels": {

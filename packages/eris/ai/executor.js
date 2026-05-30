@@ -95,8 +95,6 @@ export const TOOL_ALIASES = {
   track_game: "track_game", watch_game: "track_game", game_updates: "track_game", follow_game: "track_game",
   untrack_game: "untrack_game", unwatch_game: "untrack_game", stop_tracking: "untrack_game",
   game_watches: "list_game_watches", tracked_games: "list_game_watches",
-  sing: "start_karaoke", karaoke: "start_karaoke", lyrics: "start_karaoke",
-  stop_singing: "stop_karaoke", shut_up: "stop_karaoke", end_karaoke: "stop_karaoke",
   fishing: "fish", go_fish: "fish", cast: "fish",
   hunting: "hunt", go_hunt: "hunt",
   digging: "dig", excavate: "dig", treasure: "dig",

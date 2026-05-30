@@ -110,11 +110,9 @@ afterEach(() => {
 });
 
 describe("schedule_task privilege boundaries", () => {
-  // save_directive / remove_directive were reclassified from EVERYONE_TOOLS to
-  // ADMIN_TOOLS (SECURITY_AUDIT_2026-05-29.md Finding 5). Once they're admin
-  // tools, isAdminToolName() catches them here — closing the schedule_task
-  // laundering path. On the pre-fix code these names were everyone-tools, so
-  // the scheduler let a non-admin queue them and this expectation fails.
+  // save_directive / remove_directive must remain ADMIN_TOOLS. That lets
+  // isAdminToolName() catch them here and closes the schedule_task laundering
+  // path for non-admin users.
   it.each(["trust_user", "trust", "set_log_channel", "save_directive", "remove_directive"])(
     "rejects non-admin attempts to schedule admin-only tool %s",
     async (toolName) => {
