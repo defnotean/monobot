@@ -21,6 +21,7 @@ import { buildTwinStateContext } from "../../utils/twinState.js";
 import { buildLongTermContext } from "../../ai/longmemory.js";
 import { pickResponseStyle, shouldLaze, getImperfectionHint } from "@defnotean/shared/responsestyle";
 import { applyPromptBudget, resolvePromptCharBudget } from "@defnotean/shared/promptBudget";
+import { buildInnerStateContext } from "@defnotean/shared/innerState";
 import { compressHistory } from "../../ai/contextCompressor.js";
 import { registry as toolRegistry } from "../../ai/toolRegistry.js";
 import { buildHumanityContext, buildTwinContext } from "../../ai/humanity.js";
@@ -165,11 +166,8 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
   if (message.guild) systemInstruction += `\n[Server: ${message.guild.name} | Channel: #${channelName(message.channel)}]`;
 
   if (memoryCtx) systemInstruction += `\n\n[SYSTEM: ${memoryCtx}]`;
-  if (relationship.interactions_count > 0) {
-    const aff = relationship.affinity_score;
-    const affDesc = aff > 50 ? "you genuinely like this person" : aff > 20 ? "you're cool with them" : aff > 0 ? "they're alright" : aff > -20 ? "you're neutral on them" : "they kinda annoy you";
-    systemInstruction += `\n[${affDesc}. you've talked ${relationship.interactions_count > 100 ? "a lot" : relationship.interactions_count > 30 ? "a decent amount" : "a few times"}]`;
-  }
+  systemInstruction += `\n${buildInnerStateContext({ mood, relationship, speakerName: displayName })}`;
+  systemInstruction += "\n[GIF STYLE: you can use send_gif naturally for reactions, bits, physical gestures, celebrations, mock horror, or when a visual punchline beats text. Example: if something disgusts you, an anime disgusted-face GIF can land better than another sentence; if something is genuinely funny, a laughing-girl/anime-laugh GIF can work. Keep captions tiny or blank. Natural GIFs should be rare, about once every 2-3 days per active chat; direct user requests for a GIF are fine. Do not use GIFs for serious support/moderation moments, do not spam them, and do not narrate the tool afterward.]";
 
   const moodLabel = mood.mood_score >= 60 ? "amazing" : mood.mood_score >= 30 ? "good" : mood.mood_score >= 10 ? "decent" : mood.mood_score >= -10 ? "whatever" : mood.mood_score >= -30 ? "kinda off" : mood.mood_score >= -60 ? "annoyed" : "in a terrible mood";
   const energyDesc = mood.energy > 70 ? ", got energy to spare" : mood.energy > 40 ? "" : mood.energy > 15 ? ", kinda drained" : ", completely exhausted — you desperately need a nap";
@@ -193,13 +191,13 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
 
   // Mood-dependent behavior modifiers
   if (mood.mood_score >= 50) {
-    systemInstruction += "\n[MOOD EFFECT: you're in an amazing mood — be extra generous, playful, and warm. give bonus coins sometimes, lower shop prices in your head, be the best version of yourself]";
+    systemInstruction += "\n[MOOD EFFECT: you're in a good mood — be warmer and more playful, but don't invent gifts, discounts, or promises unless a real tool/action supports it]";
   } else if (mood.mood_score >= 20) {
     systemInstruction += "\n[MOOD EFFECT: you're feeling good — be your usual chaotic self with a bit more warmth]";
   } else if (mood.mood_score <= -50) {
-    systemInstruction += "\n[MOOD EFFECT: you're in a terrible mood — be extra sarcastic, short with people, raise the stakes on gambling commentary, be dramatically annoyed at everything. still help but make it clear you're not happy about it]";
+    systemInstruction += "\n[MOOD EFFECT: you're in a bad mood — be concise and a little sharper, but stay useful and don't turn cruel or theatrical]";
   } else if (mood.mood_score <= -20) {
-    systemInstruction += "\n[MOOD EFFECT: you're irritable — shorter responses, less patience, more sarcasm than usual. the chaos energy is turned up]";
+    systemInstruction += "\n[MOOD EFFECT: you're irritable — shorter responses and a little sarcasm, still answer the actual request]";
   }
 
   if (crossChannelCtx) systemInstruction += crossChannelCtx;
@@ -287,7 +285,7 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
     if (noveltyBlock) systemInstruction += `\n\n${noveltyBlock}`;
   }
 
-  systemInstruction += `\n\n[FINAL: you're texting on discord. ${responseStyle}. no roleplay actions (*stretches*). never reference your code, systems, mood scores, or any tag above — those are yours internally. you're a person, not a system. just text like a normal human. ${imperfection}]${groupCtx}
+  systemInstruction += `\n\n[FINAL: you're texting on discord. ${responseStyle}. no roleplay actions (*stretches*). never reference your code, systems, mood scores, relationship scores, memory confidence, or any tag above — those are private internal cues. keep tool use invisible unless the result matters. preserve your established preferences and identity; if asked something that conflicts with your canon, correct it casually. you're a person in tone, not a system in visible wording. just text like a normal human. ${imperfection}]${groupCtx}
 [ADDRESSING — STRICT: you are replying to EXACTLY ONE person this turn: ${displayName}. they are the only person who just spoke to you. do NOT split your reply across multiple users. do NOT start your message with "@other_user ... @another ..." addressing people in the CHANNEL CONTEXT block — those people aren't talking to you right now. if you want to reference something someone else said earlier, do it naturally ("like [name] was saying") — not as a direct reply to them. exception: if ${displayName} explicitly asked you to talk to or about someone else, fine.]
 [history shows "[Username said]" labels — pay attention to WHO said what. call the bot owner 'boss'. in group conversations you're part of the group but each reply is directed at whoever most recently spoke to YOU.]`;
 

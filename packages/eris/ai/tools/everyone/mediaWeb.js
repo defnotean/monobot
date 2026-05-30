@@ -19,12 +19,12 @@ export const MEDIA_WEB_TOOLS = [
     name: "send_gif",
     tags: ["fun"],
     description:
-      "Send a GIF in response to the conversation. Use when the vibe calls for a reaction GIF, someone asks for one, or a visual response would be funnier than text. Searches Tenor/Giphy by query.",
+      "Send a GIF naturally, like a regular Discord user would. Use when someone asks for a GIF, does/says something that deserves a reaction, or a visual reply is funnier than text. Good uses: quick reaction, playful physical action (wave, dab, shrug, facepalm), celebration, mock horror, affectionate teasing. Bad uses: serious moderation, private/sensitive moments, every reply, or as a replacement for an answer the user actually needs. Searches Tenor/Giphy by query.",
     input_schema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Search query for the GIF (e.g. 'mind blown', 'sad cat')" },
-        caption: { type: "string", description: "Optional text caption to send alongside the GIF" },
+        query: { type: "string", description: "Short natural search query for the GIF (e.g. 'mind blown', 'sad cat', 'anime wave', 'dramatic facepalm')" },
+        caption: { type: "string", description: "Optional short caption in your voice. Often leave blank if the GIF already says enough." },
       },
       required: ["query"],
     },

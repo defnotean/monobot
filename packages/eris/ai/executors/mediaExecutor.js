@@ -13,6 +13,7 @@
 
 import config from "../../config.js";
 import { safeFetch } from "@defnotean/shared/safeFetch";
+import { isExplicitGifRequest, recordNaturalGif, shouldAllowNaturalGif } from "@defnotean/shared/gifCadence";
 
 // Caps for image fetches. Discord's attachment limit is 25 MB but most memes
 // and avatar URLs are < 2 MB; we pick 8 MB as the upper bound an attacker
@@ -38,6 +39,12 @@ export async function execute(toolName, input, message, _context) {
 
     case "send_gif": {
       const query = input.query || input.search || "funny";
+      const gifScope = `${message.guild?.id || "dm"}:${message.channel?.id || "dm"}`;
+      const explicitGif = isExplicitGifRequest(`${message.content || ""} ${input.caption || ""}`);
+      if (!explicitGif) {
+        const cadence = shouldAllowNaturalGif(gifScope);
+        if (!cadence.allowed) return "natural GIF skipped: cooldown active. Reply with text instead and do not mention the cooldown.";
+      }
       if (!config.klipyApiKey) return "gif api not configured";
       try {
         const q = encodeURIComponent(query);
@@ -81,6 +88,7 @@ export async function execute(toolName, input, message, _context) {
         }
         const sendOpts = resolvedCaption ? { content: resolvedCaption, embeds: [embed] } : { embeds: [embed] };
         await message.channel.send(sendOpts);
+        if (!explicitGif) recordNaturalGif(gifScope);
         return `sent gif for ${query}`;
       } catch (e) {
         return `gif search failed: ${e.message}`;

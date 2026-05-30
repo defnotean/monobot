@@ -1,7 +1,9 @@
 // ─── Irene's Persistent Memory System ────────────────────────────────────────
 // Stores facts about users for context injection into the AI system prompt
 
-// Structure: Map<guildId, Map<userId, Array<{fact, addedAt, addedBy}>>>
+import { compareMemoryPriority, rankMemoryFact } from "@defnotean/shared/innerState";
+
+// Structure: Map<guildId, Map<userId, Array<{fact, addedAt, addedBy, importance, confidence}>>>
 const memoryStore = new Map();
 
 const MAX_MEMORIES_PER_USER = 20;
@@ -18,6 +20,7 @@ export function addMemory(guildId, userId, fact, importance = "normal") {
   const userMemories = guildMemories.get(userId);
 
   const trimmedFact = fact.trim();
+  const meta = rankMemoryFact(trimmedFact, importance);
 
   // Validate fact length
   if (trimmedFact.length > MAX_FACT_LENGTH) {
@@ -38,10 +41,16 @@ export function addMemory(guildId, userId, fact, importance = "normal") {
 
   // Check user memory limit
   if (userMemories.length >= MAX_MEMORIES_PER_USER) {
-    return {
-      success: false,
-      message: `max 20 memories per user (you already have ${userMemories.length})`,
-    };
+    const lowest = [...userMemories].sort(compareMemoryPriority)[0];
+    const lowestMeta = rankMemoryFact(lowest?.fact, lowest?.importance);
+    if (meta.weight <= lowestMeta.weight) {
+      return {
+        success: false,
+        message: `max 20 memories per user (only important/core facts can replace low-priority memories)`,
+      };
+    }
+    const idx = userMemories.indexOf(lowest);
+    if (idx >= 0) userMemories.splice(idx, 1);
   }
 
   // Check guild memory limit
@@ -57,6 +66,8 @@ export function addMemory(guildId, userId, fact, importance = "normal") {
     fact: trimmedFact,
     addedAt: new Date().toISOString(),
     addedBy: userId,
+    importance: meta.importance,
+    confidence: meta.confidence,
   };
 
   userMemories.push(memory);
@@ -167,7 +178,11 @@ export function initMemoryData(loaded) {
     for (const [guildId, guildData] of Object.entries(loaded)) {
       const guildMap = new Map();
       for (const [userId, memories] of Object.entries(guildData)) {
-        guildMap.set(userId, Array.isArray(memories) ? memories : []);
+        guildMap.set(userId, Array.isArray(memories) ? memories.map(m => ({
+          ...m,
+          importance: rankMemoryFact(m?.fact, m?.importance).importance,
+          confidence: m?.confidence ?? rankMemoryFact(m?.fact, m?.importance).confidence,
+        })) : []);
       }
       memoryStore.set(guildId, guildMap);
     }
@@ -195,10 +210,14 @@ export function buildMemoryContext(guildId, userIds) {
   for (const userId of userIds) {
     const memories = guildMemories.get(userId);
     if (memories && memories.length > 0) {
-      const facts = memories.map((m) => m.fact).join(", ");
+      const facts = memories.map((m) => {
+        const meta = rankMemoryFact(m.fact, m.importance);
+        const prefix = meta.importance === "core" ? "core: " : meta.importance === "important" ? "important: " : meta.importance === "trivial" ? "tentative: " : "";
+        return `${prefix}${m.fact}`;
+      }).join(", ");
       lines.push(`What I remember about <@${userId}>: ${facts}`);
     }
   }
 
-  return lines.length > 0 ? lines.join("\n") : "";
+  return lines.length > 0 ? `[MEMORY RULE: memories are useful but not perfect. Treat tentative memories as low confidence; do not overstate them, and ask/hedge if precision matters.]\n${lines.join("\n")}` : "";
 }

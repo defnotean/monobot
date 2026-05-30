@@ -166,6 +166,11 @@ export const MOOD_DEFAULTS = Object.freeze({
 export const RELATIONSHIP_DEFAULTS = Object.freeze({
   affinity_score: 0,
   interactions_count: 0,
+  trust_score: 0,
+  familiarity_score: 0,
+  playfulness_score: 0,
+  irritation_score: 0,
+  respect_score: 0,
 });
 
 // ─── Ticket config (returned by getTicketConfig) ─────────────────────────────

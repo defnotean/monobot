@@ -357,7 +357,7 @@ export function startPresenceAPI(client) {
 
       // ── Relationships
       } else if (path === "/api/relationships") {
-        const rels = db.getAllRelationships();
+        const rels = /** @type {any[]} */ (db.getAllRelationships());
         for (const r of rels) {
           const user = client.users?.cache.get(r.user_id);
           r.username = user?.username || `User ${r.user_id}`;

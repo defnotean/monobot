@@ -63,11 +63,11 @@ export async function runAnalytics({
   // Creator boost — boss always maxes out affection
   const isCreator = message.author.id === config.ownerId;
   if (isCreator) {
-    db.updateRelationship(message.author.id, 10); // big affinity boost every message
+    db.updateRelationship(message.author.id, 10, { isOwner: true, sentiment: 0.8, dampen: true }); // big affinity boost every message
     db.shiftMood(10, 10); // mood + energy — boss makes her happy and energized
   } else {
     const affinityDelta = sentimentScore > 0.3 ? 2 : sentimentScore < -0.3 ? -1 : 1;
-    db.updateRelationship(message.author.id, affinityDelta);
+    db.updateRelationship(message.author.id, affinityDelta, { sentiment: sentimentScore, dampen: true });
     const moodDelta = Math.round(sentimentScore * 3);
     db.shiftMood(moodDelta, 2);
   }

@@ -138,7 +138,7 @@ export async function getFacts(userId, limit = 20) {
   // facts from context immediately, even before the prune cron sweeps the row.
   // The column may not exist pre-migration-006; PostgREST silently omits it and
   // the filter below is a no-op in that case.
-  const { data: rows } = await supabase.from("eris_facts").select("id, fact_text, sensitivity, expires_at").eq("user_id", userId).order("created_at", { ascending: false }).limit(limit);
+  const { data: rows } = await supabase.from("eris_facts").select("id, fact_text, sensitivity, importance, expires_at, created_at").eq("user_id", userId).order("created_at", { ascending: false }).limit(limit);
   return _filterExpiredFacts(rows);
 }
 
@@ -188,7 +188,7 @@ export async function getFactsGlobal(userId, limit = 20) {
   // expires_at keeps this consistent with getFacts so a future caller that
   // builds context off getFactsGlobal can't surface already-expired sensitive
   // facts. No-op pre-migration-006 (PostgREST omits the missing column).
-  const { data: rows } = await supabase.from("eris_facts").select("id, fact_text, sensitivity, expires_at").eq("user_id", userId).order("created_at", { ascending: true }).limit(limit);
+  const { data: rows } = await supabase.from("eris_facts").select("id, fact_text, sensitivity, importance, expires_at, created_at").eq("user_id", userId).order("created_at", { ascending: true }).limit(limit);
   return _filterExpiredFacts(rows);
 }
 

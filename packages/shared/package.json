@@ -22,6 +22,8 @@
     "./webSearchEngine": "./src/ai/webSearchEngine.js",
     "./webSearchEngine.js": "./src/ai/webSearchEngine.js",
     "./memoryQuirks": "./src/ai/memoryQuirks.js",
+    "./innerState": "./src/ai/innerState.js",
+    "./gifCadence": "./src/ai/gifCadence.js",
     "./temporal": "./src/ai/temporal.js",
     "./responsestyle": "./src/ai/responsestyle.js",
     "./promptBudget": "./src/ai/promptBudget.js",

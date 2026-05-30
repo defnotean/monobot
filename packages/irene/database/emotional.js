@@ -10,6 +10,7 @@
 
 import { data, save, withUserLock } from "./core.js";
 import { MOOD_DEFAULTS, RELATIONSHIP_DEFAULTS, withDefaults } from "./schemas.js";
+import { normalizeRelationship, shiftRelationship, shiftMoodWithInertia } from "@defnotean/shared/innerState";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // EMOTIONAL STATE — global mood/energy + per-user relationship affinity
@@ -30,7 +31,8 @@ export function updateMood(score, energy) {
 }
 
 export function shiftMood(delta, energyDelta = 0) {
-  updateMood(data.mood.mood_score + delta, data.mood.energy + energyDelta);
+  const next = shiftMoodWithInertia(data.mood, delta, energyDelta);
+  updateMood(next.mood_score, next.energy);
 }
 
 export function moodLabel(score) {
@@ -48,19 +50,16 @@ export function moodLabel(score) {
 export function getRelationship(userId) {
   // Merge defaults so a missing/partial row still yields the full
   // RELATIONSHIP_DEFAULTS shape (affinity_score: 0, interactions_count: 0).
-  return withDefaults(RELATIONSHIP_DEFAULTS, data.relationships[userId]);
+  return normalizeRelationship(withDefaults(RELATIONSHIP_DEFAULTS, data.relationships[userId]));
 }
 
 // Synchronous read-modify-write. Safe to call directly when no `await` sits
 // between a caller's read of the relationship and this mutation — JS is
 // single-threaded so a purely-sync RMW can't interleave. Use
 // updateRelationshipLocked when the caller's sequence spans an await.
-export function updateRelationship(userId, affinityDelta) {
+export function updateRelationship(userId, affinityDelta, options = {}) {
   const current = getRelationship(userId);
-  data.relationships[userId] = {
-    affinity_score: Math.max(-100, Math.min(100, current.affinity_score + affinityDelta)),
-    interactions_count: current.interactions_count + 1,
-  };
+  data.relationships[userId] = shiftRelationship(current, affinityDelta, options);
   save("relationships");
 }
 
@@ -78,5 +77,5 @@ export function updateRelationshipLocked(userId, affinityDelta) {
 }
 
 export function getAllRelationships() {
-  return Object.entries(data.relationships).map(([uid, r]) => ({ user_id: uid, ...r }));
+  return Object.entries(data.relationships).map(([uid, r]) => ({ user_id: uid, ...normalizeRelationship(r) }));
 }

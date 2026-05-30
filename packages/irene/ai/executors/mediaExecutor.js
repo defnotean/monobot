@@ -6,6 +6,7 @@
 
 import { EmbedBuilder } from "discord.js";
 import { safeFetch } from "@defnotean/shared/safeFetch";
+import { isExplicitGifRequest, recordNaturalGif, shouldAllowNaturalGif } from "@defnotean/shared/gifCadence";
 import { getGuildSettings, setGifEmbed } from "../../database.js";
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
@@ -23,6 +24,12 @@ export async function execute(toolName, input, message, ctx) {
     case "send_gif": {
       const klipyKey = process.env.KLIPY_API_KEY;
       if (!klipyKey) return "GIF feature not set up — add KLIPY_API_KEY to environment variables";
+      const gifScope = `${guild?.id || "dm"}:${message.channel?.id || "dm"}`;
+      const explicitGif = isExplicitGifRequest(`${message.content || ""} ${input.caption || ""}`);
+      if (!explicitGif) {
+        const cadence = shouldAllowNaturalGif(gifScope);
+        if (!cadence.allowed) return "natural GIF skipped: cooldown active. Reply with text instead and do not mention the cooldown.";
+      }
       const q = encodeURIComponent(input.query || "meme");
       const res = await fetch(`https://api.klipy.com/api/v1/${klipyKey}/gifs/search?q=${q}&per_page=20&content_filter=medium&customer_id=${message.author.id}`);
       if (!res.ok) return `Klipy API error: ${res.status}`;
@@ -57,6 +64,7 @@ export async function execute(toolName, input, message, ctx) {
           await message.channel.send(fallback).catch(() => {});
         }
       }
+      if (!explicitGif) recordNaturalGif(gifScope);
       return `sent GIF for "${input.query}"`;
     }
 

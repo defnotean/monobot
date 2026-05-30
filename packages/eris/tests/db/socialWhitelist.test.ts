@@ -153,7 +153,7 @@ describe("social.js — mood (in-memory, clamped)", () => {
   it("shiftMood applies a relative delta on top of current state", () => {
     db.updateMood(0, 50);
     db.shiftMood(30, -10);
-    expect(db.getMood()).toEqual({ mood_score: 30, energy: 40 });
+    expect(db.getMood()).toMatchObject({ mood_score: 10, energy: 40 });
   });
 
   it("getMood returns a copy, not the live object", () => {
@@ -165,7 +165,7 @@ describe("social.js — mood (in-memory, clamped)", () => {
 
 describe("social.js — relationships (in-memory)", () => {
   it("getRelationship returns a zeroed default for an unknown user", () => {
-    expect(db.getRelationship("nobody")).toEqual({ affinity_score: 0, interactions_count: 0 });
+    expect(db.getRelationship("nobody")).toMatchObject({ affinity_score: 0, interactions_count: 0, trust_score: 0 });
   });
 
   it("updateRelationship accumulates interactions and clamps affinity", () => {
@@ -174,6 +174,7 @@ describe("social.js — relationships (in-memory)", () => {
     const r = db.getRelationship("u1");
     expect(r.affinity_score).toBe(100);
     expect(r.interactions_count).toBe(2);
+    expect(r.familiarity_score).toBe(2);
   });
 
   it("affinity floor clamps at -100", () => {

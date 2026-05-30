@@ -136,9 +136,14 @@ describe("schemas — default constant shapes", () => {
   });
 
   it("RELATIONSHIP_DEFAULTS starts neutral with zero interactions", () => {
-    expect(RELATIONSHIP_DEFAULTS).toEqual({
+    expect(RELATIONSHIP_DEFAULTS).toMatchObject({
       affinity_score: 0,
       interactions_count: 0,
+      trust_score: 0,
+      familiarity_score: 0,
+      playfulness_score: 0,
+      irritation_score: 0,
+      respect_score: 0,
     });
   });
 
@@ -224,7 +229,7 @@ describe("getRelationship — schema-default integration", () => {
   it("returns the default shape for a user with no stored row", () => {
     const userId = uid("user-no-rel");
     const rel = db.getRelationship(userId);
-    expect(rel).toEqual({ affinity_score: 0, interactions_count: 0 });
+    expect(rel).toMatchObject({ affinity_score: 0, interactions_count: 0, trust_score: 0 });
   });
 
   it("merges over defaults when stored row is partial", () => {

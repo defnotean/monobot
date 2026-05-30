@@ -11,6 +11,7 @@
  */
 import { getSupabase, data, save } from "./core.js";
 import { log } from "../utils/logger.js";
+import { normalizeRelationship, shiftRelationship, shiftMoodWithInertia } from "@defnotean/shared/innerState";
 
 // ─── MOOD (in-memory + debounced sync) ───
 export function getMood() {
@@ -24,20 +25,18 @@ export function updateMood(score, energy) {
 }
 
 export function shiftMood(delta, energyDelta = 0) {
-  updateMood(data.mood.mood_score + delta, data.mood.energy + energyDelta);
+  const next = shiftMoodWithInertia(data.mood, delta, energyDelta);
+  updateMood(next.mood_score, next.energy);
 }
 
 // ─── RELATIONSHIPS (in-memory + debounced sync) ───
 export function getRelationship(userId) {
-  return data.relationships[userId] || { affinity_score: 0, interactions_count: 0 };
+  return normalizeRelationship(data.relationships[userId]);
 }
 
-export function updateRelationship(userId, affinityDelta) {
+export function updateRelationship(userId, affinityDelta, options = {}) {
   const current = getRelationship(userId);
-  data.relationships[userId] = {
-    affinity_score: Math.max(-100, Math.min(100, current.affinity_score + affinityDelta)),
-    interactions_count: current.interactions_count + 1,
-  };
+  data.relationships[userId] = shiftRelationship(current, affinityDelta, options);
   save("relationships");
 }
 
@@ -54,10 +53,10 @@ export async function getAllRelationships() {
 
   // Override with in-memory data (always fresher)
   for (const [uid, r] of Object.entries(data.relationships)) {
-    merged[uid] = { user_id: uid, ...r };
+    merged[uid] = { user_id: uid, ...normalizeRelationship(r) };
   }
 
-  return Object.values(merged).sort((a, b) => b.affinity_score - a.affinity_score);
+  return Object.values(merged).map(r => ({ ...r, ...normalizeRelationship(r) })).sort((a, b) => b.affinity_score - a.affinity_score);
 }
 
 // ─── ANALYTICS ───

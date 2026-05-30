@@ -178,12 +178,12 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "send_gif",
-    description: "Search for a GIF and send it in the channel. Use this for memes, reactions, jokes, internet culture — e.g. 'dab', 'kiss', 'hug', 'slap', '6 9 meme', 'rizz', 'npc', 'sigma', 'trollface', 'rickroll', 'yes chad', etc. Always use this when someone wants a meme reaction or asks you to 'do' something physical/expressive.",
+    description: "Search for a GIF and send it in the channel, naturally like a regular Discord user would. Use this for memes, reactions, jokes, playful physical actions, quick emotional beats, or when a visual response is funnier than text — e.g. 'dab', 'wave', 'shrug', 'facepalm', 'anime hug', '6 9 meme', 'rickroll', 'yes chad'. Do not spam GIFs, do not use them for serious moderation/sensitive support, and do not replace an actual answer with a GIF unless the user asked for one.",
     input_schema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Search terms for the GIF (keep it short and specific, e.g. 'dab dance', 'anime kiss', '6 9 meme')" },
-        caption: { type: "string", description: "Optional message to send with the GIF (e.g. mentioning the target user)" },
+        query: { type: "string", description: "Short specific GIF search query (e.g. 'dab dance', 'anime wave', 'dramatic facepalm', '6 9 meme')" },
+        caption: { type: "string", description: "Optional short caption in your voice. Often leave blank if the GIF already says enough." },
       },
       required: ["query"],
     },

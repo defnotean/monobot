@@ -38,7 +38,8 @@ export async function execute(toolName, input, message, ctx) {
         }
       }
 
-      addMemory(guild.id, target.id, input.fact, message.author.id);
+      const result = addMemory(guild.id, target.id, input.fact, input.importance || "normal");
+      if (!result.success) return result.message;
       return `remembered "${input.fact}" about ${target.user.username}`;
     }
 
