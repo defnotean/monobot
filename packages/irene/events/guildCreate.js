@@ -12,17 +12,22 @@ const WELCOME_CHANNEL_NAMES = [
   "welcome-channel", "greetings", "introductions",
 ];
 
-// ─── Owner-only gatekeep ────────────────────────────────────────────────────
+// ─── Owner-only gatekeep (UNIFIED whitelist — shared with Eris) ─────────────
 // The bot will only stay in servers that meet ONE of:
 //   1. Bot owner is the server owner
 //   2. Bot owner is a member of the server
-//   3. Server is in the database whitelist (managed via AI tools)
+//   3. Server is in the shared database whitelist (canonical store is the
+//      bot_data row id="main"; both twins read/write the SAME entries, managed
+//      via the whitelist_server AI tool). See packages/irene/database.js.
+//
+// isWhitelisted is async (it reads the canonical bot_data:main row), so this
+// gatekeep is async too — its only caller (execute) already awaits.
 
-function isGuildAllowed(guild) {
+async function isGuildAllowed(guild) {
   // Always allow if the bot owner is the server owner
   if (guild.ownerId === config.ownerId) return true;
-  // Allow servers in the database whitelist
-  if (isWhitelisted(guild.id)) return true;
+  // Allow servers in the shared database whitelist
+  if (await isWhitelisted(guild.id)) return true;
   // Check if the bot owner is a member (they invited it themselves)
   const ownerMember = guild.members.cache.get(config.ownerId);
   if (ownerMember) return true;
@@ -37,7 +42,7 @@ export async function execute(guild) {
   // ── Gatekeep: leave if bot owner didn't authorize this server ──────────
   // Fetch members first so we can check if the bot owner is present
   await guild.members.fetch({ user: config.ownerId }).catch(() => {});
-  if (!isGuildAllowed(guild)) {
+  if (!(await isGuildAllowed(guild))) {
     log(`[GATEKEEP] Unauthorized server "${guild.name}" (${guild.id}) — owner: ${guild.ownerId}. Leaving.`);
     // Try to DM the person who added it
     try {
@@ -54,11 +59,12 @@ export async function execute(guild) {
     return;
   }
 
-  // Auto-track in whitelist — boss wants the whitelist to be a complete record
-  // of every server the bot is currently in (not just an entry-control list).
-  // Skip if already present so we don't clobber the original invited_by/added_at.
-  if (!isWhitelisted(guild.id)) {
-    addToWhitelist(guild.id, {
+  // Auto-track in the shared whitelist (bot_data:main) — boss wants the
+  // whitelist to be a complete record of every server the bot is currently in
+  // (not just an entry-control list). Skip if already present so we don't
+  // clobber the original invited_by/added_at.
+  if (!(await isWhitelisted(guild.id))) {
+    await addToWhitelist(guild.id, {
       name:       guild.name,
       icon_url:   guild.iconURL?.({ size: 128 }) ?? null,
       members:    guild.memberCount ?? null,

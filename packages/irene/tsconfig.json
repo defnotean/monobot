@@ -6,16 +6,29 @@
     "outDir": "./dist",
     "rootDir": ".",
     "allowJs": true,
-    "checkJs": false,
+    "checkJs": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
     "strict": true,
+    // checkJs is enabled to use TS as an enforced safety net over the JS sources.
+    // noImplicitAny is relaxed for the JS glue layer (Discord.js / Supabase / AI
+    // tool payloads are heavily dynamic — thousands of untyped callback params
+    // carry no real safety signal). The high-value checks stay ON via strict:
+    // strictNullChecks, property-existence (TS2339), type mismatches, and
+    // arg-count checks all remain enforced. Mirrors the eris-typesafety config.
+    "noImplicitAny": false,
+    // Treat catch-clause variables as `any` rather than `unknown` (pre-TS4.4
+    // behavior). The codebase consistently does `catch (e) { log(e.message) }`
+    // against dynamic Supabase/Discord error shapes; forcing `unknown` here adds
+    // many narrowing casts with no real safety win. strictNullChecks remains on.
+    "useUnknownInCatchVariables": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "types": ["node"]
   },
   "include": ["**/*.ts", "**/*.js"],
   "exclude": ["node_modules", "dist", "Dropship"]

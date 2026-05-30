@@ -55,7 +55,8 @@ async function _persist(dream, history) {
 async function _getRecentSignal() {
   try {
     const longmemory = await import("./longmemory.js");
-    const humanity = await import("./humanity.js");
+    // Cast to any: isBadDay is an optional twin-compat export probed below.
+    const humanity = /** @type {any} */ (await import("./humanity.js"));
     const { getMood } = await import("../database.js");
 
     const monologue = longmemory.getMonologue?.() ?? [];

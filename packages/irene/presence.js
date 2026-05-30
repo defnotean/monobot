@@ -52,6 +52,9 @@ export function addTtsCache(id, entry) {
 
 let _cachedPresenceJson = "{}";
 
+/**
+ * @type {{ status: string, activities: any[], spotify: any, active_on_desktop: boolean, active_on_mobile: boolean, active_on_web: boolean, last_updated: string | null }}
+ */
 let cachedPresence = {
   status: "offline",
   activities: [],
@@ -258,7 +261,7 @@ export function startPresenceAPI(client) {
       const apiOrigin = req.headers.origin;
       const selfUrl = process.env.EXTERNAL_URL || process.env.RENDER_EXTERNAL_URL;
       const allowedOrigins = [selfUrl, process.env.DASHBOARD_URL].filter(Boolean);
-      if (apiOrigin && allowedOrigins.some(o => { try { return new URL(apiOrigin).hostname === new URL(o).hostname; } catch { return false; } })) {
+      if (apiOrigin && allowedOrigins.some(o => { try { return new URL(apiOrigin).hostname === new URL(/** @type {string} */ (o)).hostname; } catch { return false; } })) {
         res.setHeader("Access-Control-Allow-Origin", apiOrigin);
       }
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
@@ -721,7 +724,7 @@ export function startPresenceAPI(client) {
   // the bot — uncaughtException now fail-fast exits(1), so handle it locally:
   // log and keep running (Discord/music/core still work; only the presence/
   // dashboard HTTP surface is down until the port frees and the process restarts).
-  server.on("error", (e) => {
+  server.on("error", (/** @type {NodeJS.ErrnoException} */ e) => {
     if (e.code === "EADDRINUSE") {
       log(`⚠ Presence API port ${config.port} already in use — a stale instance may still be bound. Continuing WITHOUT the HTTP server (presence/health/tts/dashboard/twin unavailable). Free the port and restart to restore them.`);
     } else {

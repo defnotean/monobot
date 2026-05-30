@@ -13,6 +13,7 @@ export async function execute(interaction) {
   await interaction.deferReply();
 
   const guild = interaction.guild;
+  /** @type {{ categories: string[], channels: string[], roles: string[] }} */
   const created = { categories: [], channels: [], roles: [] };
 
   try {

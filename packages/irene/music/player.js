@@ -21,7 +21,8 @@ let shoukaku = null;
 // Per-guild mutex — prevents race conditions in queue operations (skip, stop, play)
 const _queueLocks = new Map();
 async function withQueueLock(guildId, fn) {
-  let release;
+  /** @type {(value?: any) => void} */
+  let release = () => {};
   const current = new Promise((r) => (release = r));
   // Set lock BEFORE awaiting — prevents race where two calls see same prev
   const prev = _queueLocks.get(guildId) ?? Promise.resolve();
@@ -115,12 +116,26 @@ function isQueueLive(queue) {
   return !!queue && !queue._destroyed && queues.get(queue.guildId) === queue;
 }
 
+/**
+ * @typedef {Object} Song
+ * @property {string} [title]
+ * @property {string} [artist]
+ * @property {string} [url]
+ * @property {number} [duration]
+ * @property {string} [thumbnail]
+ * @property {*} [lavalinkTrack]
+ * @property {string} [requestedBy]
+ * @property {boolean} [isTTS]
+ * @property {number} [resumePos]
+ */
+
 export function createQueue(guildId, voiceChannel, textChannel) {
   const queue = {
     guildId,
     voiceChannel,
     textChannel,
     player: null,       // Shoukaku Player — set by connectToChannel
+    /** @type {Song[]} */
     songs: [],
     volume: 80,
     playing: false,
@@ -608,7 +623,7 @@ export async function playSong(queue, _retries = 0) {
 import getPreview from "spotify-url-info";
 import fetch from "node-fetch";
 import { safeFetch } from "@defnotean/shared/safeFetch";
-const spotifyExt = getPreview(fetch);
+const spotifyExt = /** @type {any} */ (getPreview)(fetch);
 
 // Strict allowlist for the Spotify HTML-scrape fallback. The old check was a
 // bare `.includes('spotify.com')`, which `evil.com/spotify.com` (or
@@ -711,7 +726,7 @@ export async function searchSong(query) {
     if ((result?.loadType === "empty" || result?.loadType === "NO_MATCHES" || result?.loadType === "error" || result?.loadType === "LOAD_FAILED" || !result) && isSpotifyHost(resolveQuery)) {
       try {
         const res = await safeFetch(resolveQuery);
-        const html = res.text;
+        const html = res.text || "";
         const match = html.match(/<title>(.*?)<\/title>/);
         if (match) {
           let title = match[1].replace(/ \| Spotify/gi, "").trim();
@@ -787,7 +802,7 @@ export function saveAllQueues() {
 /**
  * Restore saved queues after bot restart.
  * Rejoins VCs and starts playing from the next song.
- * @param {Client} client - Discord.js client
+ * @param {import("discord.js").Client} client - Discord.js client
  */
 export async function restoreQueues(client) {
   const saved = getSavedQueues();
@@ -810,7 +825,7 @@ export async function restoreQueues(client) {
       if (!guild) continue;
 
       const vc = guild.channels.cache.get(queueData.voiceChannelId);
-      const tc = guild.channels.cache.get(queueData.textChannelId);
+      const tc = /** @type {import("discord.js").TextChannel | undefined} */ (guild.channels.cache.get(queueData.textChannelId));
       if (!vc) {
         log(`[Music] Cannot restore queue for ${guildId} — voice channel no longer exists`);
         if (tc) tc.send("⚠️ Your music queue couldn't be restored — the voice channel was deleted while I was restarting.").catch(() => {});
@@ -916,9 +931,9 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
       const piperBin = config.local?.piperBin || `${process.env.HOME}/.local/piper/piper/piper`;
       const voicePath = config.local?.piperVoice || `${process.env.HOME}/.local/piper/voice.onnx`;
       const tmpPath = `/tmp/irene-tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`;
-      await new Promise((resolve, reject) => {
+      await new Promise(/** @param {(value?: any) => void} resolve @param {(reason?: any) => void} reject */ (resolve, reject) => {
         const proc = spawn(piperBin, ["--model", voicePath, "--output_file", tmpPath]);
-        proc.stderr.on("data", (c) => log(`[TTS] piper: ${c.toString().trim()}`));
+        proc.stderr?.on("data", (c) => log(`[TTS] piper: ${c.toString().trim()}`));
         proc.on("error", reject);
         proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`piper exit ${code}`)));
         proc.stdin.write(text.slice(0, 500));
@@ -928,7 +943,10 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
       safeDiscordSync(`tts.unlinkTmp path=${tmpPath}`, () => unlinkSync(tmpPath));
       log(`[TTS] piper produced ${audioBuffer.length} bytes`);
     } else {
-      // Use exact format from Google's TTS docs
+      // Use exact format from Google's TTS docs. `client` is guaranteed
+      // non-null in this branch (localTts is false → getTtsClient() ran, and
+      // the early return above bailed when it produced no client).
+      if (!client) return;
       const transcript = `Say naturally: ${text.slice(0, 500)}`;
 
       let response;
@@ -965,7 +983,7 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
       // Find the audio part — might not be the first part
       const parts = response.candidates?.[0]?.content?.parts ?? [];
       const audioPart = parts.find((p) => p.inlineData?.data);
-      if (!audioPart) { log("[TTS] No audio data in response"); return; }
+      if (!audioPart?.inlineData?.data) { log("[TTS] No audio data in response"); return; }
 
       const mimeType = audioPart.inlineData.mimeType ?? "audio/L16;rate=24000";
       const rawBuffer = Buffer.from(audioPart.inlineData.data, "base64");

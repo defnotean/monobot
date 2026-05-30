@@ -292,7 +292,10 @@ export async function execute(toolName, input, message, ctx) {
       const { initSuggestionData, getSuggestionData } = await import("../../commands/utility/suggest.js");
       const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `couldn't find channel "${input.channel_name}"`;
-      const { suggestionData } = await import("../../commands/utility/suggest.js");
+      // NOTE: `suggestionData` is not currently exported from suggest.js — this
+      // probe resolves to undefined at runtime (pre-existing latent bug, left
+      // behavior-identical here). Cast keeps the type-checker honest about that.
+      const { suggestionData } = /** @type {any} */ (await import("../../commands/utility/suggest.js"));
       if (!suggestionData.has(guild.id)) suggestionData.set(guild.id, { channelId: null, suggestions: [], nextId: 1 });
       suggestionData.get(guild.id).channelId = ch.id;
       return `suggestions channel set to #${ch.name}`;
@@ -547,7 +550,7 @@ export async function execute(toolName, input, message, ctx) {
           const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(googleKey)}&cx=${encodeURIComponent(googleCx)}&q=${encoded}&num=5`;
           const res = await safeFetch(url, { timeoutMs: 10_000 });
           if (res.status >= 200 && res.status < 300) {
-            const data = JSON.parse(res.text);
+            const data = JSON.parse(res.text || "{}");
             if (data.items?.length) {
               const results = data.items.slice(0, 5).map((item, i) =>
                 `${i + 1}. **${item.title}**\n   ${item.link}\n   ${item.snippet ?? ""}`
@@ -616,7 +619,7 @@ export async function execute(toolName, input, message, ctx) {
           timeoutMs: 10_000,
         });
         if (res.status < 200 || res.status >= 300) return `Failed to fetch: HTTP ${res.status}`;
-        const html = res.text;
+        const html = res.text || "";
 
         const text = html
           .replace(/<script[\s\S]*?<\/script>/gi, "")

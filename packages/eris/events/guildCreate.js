@@ -2,11 +2,15 @@ import { log } from "../utils/logger.js";
 import config from "../config.js";
 import { isWhitelisted, addToWhitelist } from "../database.js";
 
-// ─── Owner-only gatekeep (shared whitelist with Irene) ─────────────────
+// ─── Owner-only gatekeep (UNIFIED whitelist — shared with Irene) ───────
 // The bot stays in a server only if ONE of these is true:
 //   1. The bot owner is the server owner
 //   2. The bot owner is already a member of the server (they invited it)
-//   3. The server is in the database whitelist (managed via AI tools)
+//   3. The server is in the shared database whitelist (managed via AI tools)
+//
+// The whitelist is unified: both twins read/write the SAME canonical
+// bot_data row id="main" (data.server_whitelist), so a server whitelisted by
+// either bot is honored by both. See packages/eris/database.js#getWhitelist.
 
 async function isGuildAllowed(guild) {
   if (guild.ownerId === config.ownerId) return true;

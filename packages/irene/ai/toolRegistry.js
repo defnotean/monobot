@@ -33,6 +33,11 @@ class ToolRegistry {
 
   // ─── Selection ───
 
+  /**
+   * @param {string} text
+   * @param {{ isAdmin?: boolean, channelKey?: string|null, adminTools?: Array<{name: string, description?: string}>, everyoneTools?: Array<{name: string, description?: string}> }} [opts]
+   * @returns {{ tier1: any[], tier2Catalog: string }}
+   */
   selectByMessage(text, { isAdmin = false, channelKey = null, adminTools = [], everyoneTools = [] } = {}) {
     const lower = (text || "").toLowerCase();
     const tier1Names = new Set([...this._alwaysInclude]);

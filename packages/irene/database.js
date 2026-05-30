@@ -148,6 +148,37 @@ async function _getSaga() {
 
 // ─── In-memory cache ─────────────────────────────────────────────────────────
 
+/**
+ * Loosely-typed in-memory cache row. The cache mirrors heterogeneous Supabase
+ * rows / JSON blobs, so element access stays dynamic (mirrors eris database.js).
+ * @typedef {Record<string, any>} Row
+ */
+
+/**
+ * @typedef {object} CacheData
+ * @property {Record<string, any>} scrim_stats
+ * @property {Row[]} warnings
+ * @property {Record<string, any>} guild_settings
+ * @property {Record<string, any>} custom_commands
+ * @property {string[]} dm_optout
+ * @property {number} _nextWarningId
+ * @property {Record<string, any>} conversations
+ * @property {Row[]} reminders
+ * @property {number} _nextReminderId
+ * @property {Row[]} scheduled_tasks
+ * @property {number} _nextScheduledTaskId
+ * @property {Record<string, any>} starboard_entries
+ * @property {Row[]} birthdays
+ * @property {Record<string, any>} birthday_announced
+ * @property {Record<string, any>} saved_queues
+ * @property {Row[]} giveaways
+ * @property {Record<string, any>} highlights
+ * @property {{ mood_score: number, energy: number }} mood
+ * @property {Record<string, any>} relationships
+ * @property {Record<string, any>} temp_vcs
+ */
+
+/** @type {CacheData} */
 let data = {
   scrim_stats: {},
   warnings: [],
@@ -163,7 +194,9 @@ let data = {
   starboard_entries: {},
   birthdays: [],
   birthday_announced: {},
-  server_whitelist: {},
+  // server_whitelist intentionally absent — the whitelist is UNIFIED and lives
+  // in the canonical bot_data:main row (see getWhitelist/isWhitelisted/etc.).
+  // Irene no longer keeps a local copy or persists one to its id="irene" blob.
   saved_queues: {},
   giveaways: [],
   highlights: {},
@@ -241,7 +274,9 @@ export async function initDatabase() {
         if (loaded.starboard_entries) data.starboard_entries = loaded.starboard_entries;
         if (loaded.birthdays) data.birthdays = loaded.birthdays;
         if (loaded.birthday_announced) data.birthday_announced = loaded.birthday_announced;
-        if (loaded.server_whitelist) data.server_whitelist = loaded.server_whitelist;
+        // server_whitelist deliberately NOT loaded from the id="irene" blob — the
+        // whitelist is now unified in bot_data:main. The old id="irene" copy (if
+        // any) is dead; migration 008 merges its entries into main one time.
         if (loaded.saved_queues) data.saved_queues = loaded.saved_queues;
         if (loaded.scrim_stats) data.scrim_stats = loaded.scrim_stats;
         if (loaded.giveaways) data.giveaways = loaded.giveaways;
@@ -291,8 +326,10 @@ const _PERSISTED_SLICES = [
   "scrim_stats", "warnings", "guild_settings", "custom_commands", "dm_optout",
   "_nextWarningId", "conversations", "reminders", "_nextReminderId",
   "scheduled_tasks", "_nextScheduledTaskId", "starboard_entries", "birthdays",
-  "birthday_announced", "server_whitelist", "saved_queues", "giveaways",
+  "birthday_announced", "saved_queues", "giveaways",
   "highlights", "mood", "relationships", "temp_vcs",
+  // NOTE: server_whitelist intentionally omitted — the whitelist is unified in
+  // bot_data:main and never persisted to Irene's own blob.
 ];
 
 let _saveTimer = null;
@@ -401,7 +438,7 @@ export async function withUserLock(key, fn) {
 const _GLOBAL_STATE_SLICES = [
   "_nextWarningId", "_nextReminderId", "_nextScheduledTaskId", "dm_optout",
   "warnings", "reminders", "scheduled_tasks", "birthdays", "birthday_announced",
-  "server_whitelist", "giveaways", "highlights", "temp_vcs", "conversations",
+  "giveaways", "highlights", "temp_vcs", "conversations",
 ];
 
 // Dual-write fanout — splits the sanitized blob into per-entity writes when
@@ -458,7 +495,6 @@ async function _dualWriteFanout(snapshot, dirty, dirtyEntities) {
       scheduled_tasks: snapshot.scheduled_tasks,
       birthdays: snapshot.birthdays,
       birthday_announced: snapshot.birthday_announced,
-      server_whitelist: snapshot.server_whitelist,
       giveaways: snapshot.giveaways,
       highlights: snapshot.highlights,
       temp_vcs: snapshot.temp_vcs,
@@ -631,7 +667,7 @@ export function addWarning(guildId, userId, moderatorId, reason) {
 export function getWarnings(guildId, userId) {
   return data.warnings
     .filter((w) => w.guild_id === guildId && w.user_id === userId)
-    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 }
 
 export function deleteWarning(id, guildId) {
@@ -685,6 +721,9 @@ export function setGuildSetting(guildId, key, value) {
 export function getDirectives(guildId) {
   return ensureGuild(guildId).directives || [];
 }
+/**
+ * @returns {{ success: true, index: number } | { success: false, reason: string }}
+ */
 export function addDirective(guildId, text, channelId = null, addedBy = null) {
   const g = ensureGuild(guildId);
   if (!g.directives) g.directives = [];
@@ -734,6 +773,9 @@ export function getRules(guildId) {
   return data.guild_settings[guildId]?.rules ?? [];
 }
 
+/**
+ * @returns {{ success: true, rule: { number: number, text: string, severity: string, addedBy: string|null, addedAt: number } } | { success: false, reason: string }}
+ */
 export function addRule(guildId, text, severity, addedBy) {
   const g = ensureGuild(guildId);
   if (!g.rules) g.rules = [];
@@ -799,6 +841,15 @@ export function getExemptions(guildId) {
   return data.guild_settings[guildId]?.rule_exemptions ?? [];
 }
 
+/**
+ * @param {string} guildId
+ * @param {string} userId
+ * @param {number|null} [ruleNumber]
+ * @param {string|null} [reason]
+ * @param {string|null} [addedBy]
+ * @param {number|null} [expiresAt]
+ * @returns {{ success: true, exemption: Record<string, any> } | { success: false, reason: string }}
+ */
 export function addExemption(guildId, userId, ruleNumber, reason, addedBy, expiresAt = null) {
   const g = ensureGuild(guildId);
   if (!g.rule_exemptions) g.rule_exemptions = [];
@@ -983,6 +1034,10 @@ export function setTicketPingRoles(guildId, roleIds) {
 
 // Welcome embed (shown INSIDE each new ticket channel). null = default.
 // color accepts hex strings with or without #; stored as integer or null.
+/**
+ * @param {string} guildId
+ * @param {{ title?: any, description?: any, color?: any }} [opts]
+ */
 export function setTicketWelcome(guildId, { title, description, color } = {}) {
   const gs = ensureGuild(guildId);
   if (title !== undefined) gs.ticket_welcome_title = title ? String(title).slice(0, 256) : null;
@@ -995,6 +1050,10 @@ export function setTicketWelcome(guildId, { title, description, color } = {}) {
 // channel). null on any field = fall back to the default for that field.
 // button_label + button_emoji are bundled here because they ship with the
 // embed as one unit.
+/**
+ * @param {string} guildId
+ * @param {{ title?: any, description?: any, color?: any, button_label?: any, button_emoji?: any }} [opts]
+ */
 export function setTicketPanel(guildId, { title, description, color, button_label, button_emoji } = {}) {
   const gs = ensureGuild(guildId);
   if (title        !== undefined) gs.ticket_panel_title        = title        ? String(title).slice(0, 256)   : null;
@@ -1839,26 +1898,68 @@ export function wasBirthdayAnnounced(userId, guildId) {
   return data.birthday_announced?.[key] === true;
 }
 
-// ─── Server Whitelist ──────────────────────────────────────────────────────
+// ─── Server Whitelist (UNIFIED — canonical store is bot_data:main) ───────────
+// Both twins (Eris AND Irene) share ONE server whitelist living in the
+// bot_data row id="main" under data.server_whitelist. Irene used to keep its
+// own copy in the id="irene" blob (data.server_whitelist), which silently
+// drifted from Eris's. These helpers now read/write the SAME canonical row as
+// packages/eris/database.js, mutating it through the atomic bot_whitelist_add /
+// bot_whitelist_remove RPCs (migrations/007_atomic_whitelist.sql) so concurrent
+// writers from either bot can't clobber each other's entries. Reads come
+// straight off bot_data:main.data.server_whitelist. Irene no longer persists a
+// server_whitelist copy in its own blob (see _PERSISTED_SLICES / save snapshot).
+//
+// All four helpers are async (a DB round-trip per read/write) — every caller
+// (events/guildCreate.js, events/ready.js, ai/executor.js) already runs in an
+// async context. This mirrors the Eris implementation exactly.
 
-export function getWhitelist() {
-  return data.server_whitelist ?? {};
+export async function getWhitelist() {
+  if (!supabase) { log(`[WHITELIST] getWhitelist: supabase not configured`); return {}; }
+  const { data: row, error } = await supabase.from("bot_data").select("data").eq("id", "main").single();
+  if (error && error.code !== "PGRST116") { // PGRST116 = no rows found
+    log(`[WHITELIST] getWhitelist failed: ${error.message} (code=${error.code})`);
+    return {};
+  }
+  return row?.data?.server_whitelist || {};
 }
 
-export function isWhitelisted(guildId) {
-  return !!data.server_whitelist?.[guildId];
+export async function isWhitelisted(guildId) {
+  const wl = await getWhitelist();
+  return !!wl[guildId];
 }
 
-export function addToWhitelist(guildId, info) {
-  if (!data.server_whitelist) data.server_whitelist = {};
-  data.server_whitelist[guildId] = {
+export async function addToWhitelist(guildId, info) {
+  if (!supabase) { log(`[WHITELIST] addToWhitelist: supabase not configured`); return false; }
+  const entry = {
     name:       info.name       ?? "Unknown",
     icon_url:   info.icon_url   ?? null,
     members:    info.members    ?? null,
     invited_by: info.invited_by ?? null,
     added_at:   new Date().toISOString(),
   };
-  save("server_whitelist");
+  // Atomic single-key merge (migration 007). Both twins write the shared
+  // bot_data:main blob (auto-track on every boot + whitelist_server), so a
+  // read-modify-write upsert here races and silently loses entries. The RPC
+  // mutates one jsonb path in a single statement so concurrent writers can't
+  // collide. Mirrors packages/eris/database.js#addToWhitelist.
+  const { error: rpcErr } = await supabase.rpc("bot_whitelist_add", { p_guild_id: guildId, p_info: entry });
+  if (!rpcErr) return true;
+  log(`[WHITELIST] bot_whitelist_add RPC unavailable (${rpcErr.message}) — falling back to read-modify-write`);
+  // Fallback (pre-migration-007): whole-blob read-modify-write (lossy under concurrency).
+  const { data: row, error: selectErr } = await supabase.from("bot_data").select("data").eq("id", "main").single();
+  if (selectErr && selectErr.code !== "PGRST116") {
+    log(`[WHITELIST] addToWhitelist select failed: ${selectErr.message} (code=${selectErr.code})`);
+    return false;
+  }
+  const botData = row?.data || {};
+  if (!botData.server_whitelist) botData.server_whitelist = {};
+  botData.server_whitelist[guildId] = entry;
+  const { error: upsertErr } = await supabase.from("bot_data").upsert({ id: "main", data: botData });
+  if (upsertErr) {
+    log(`[WHITELIST] addToWhitelist upsert failed for ${guildId}: ${upsertErr.message} (code=${upsertErr.code})`);
+    return false;
+  }
+  return true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2096,10 +2197,27 @@ export function setTtsVoice(guildId, voice) {
   save("guild_settings");
 }
 
-export function removeFromWhitelist(guildId) {
-  if (!data.server_whitelist?.[guildId]) return false;
-  delete data.server_whitelist[guildId];
-  save("server_whitelist");
+// Removes from the shared canonical store (bot_data:main). Atomic single-key
+// delete via migration 007; mirrors packages/eris/database.js#removeFromWhitelist.
+export async function removeFromWhitelist(guildId) {
+  if (!supabase) { log(`[WHITELIST] removeFromWhitelist: supabase not configured`); return false; }
+  const { error: rpcErr } = await supabase.rpc("bot_whitelist_remove", { p_guild_id: guildId });
+  if (!rpcErr) return true;
+  log(`[WHITELIST] bot_whitelist_remove RPC unavailable (${rpcErr.message}) — falling back to read-modify-write`);
+  const { data: row, error: selectErr } = await supabase.from("bot_data").select("data").eq("id", "main").single();
+  if (selectErr && selectErr.code !== "PGRST116") {
+    log(`[WHITELIST] removeFromWhitelist select failed: ${selectErr.message} (code=${selectErr.code})`);
+    return false;
+  }
+  const botData = row?.data || {};
+  if (botData.server_whitelist?.[guildId]) {
+    delete botData.server_whitelist[guildId];
+    const { error: upsertErr } = await supabase.from("bot_data").upsert({ id: "main", data: botData });
+    if (upsertErr) {
+      log(`[WHITELIST] removeFromWhitelist upsert failed for ${guildId}: ${upsertErr.message} (code=${upsertErr.code})`);
+      return false;
+    }
+  }
   return true;
 }
 
@@ -2411,7 +2529,7 @@ export const _internal = {
       dm_optout: [], _nextWarningId: 1, conversations: {}, reminders: [],
       _nextReminderId: 1, scheduled_tasks: [], _nextScheduledTaskId: 1,
       starboard_entries: {}, birthdays: [], birthday_announced: {},
-      server_whitelist: {}, saved_queues: {}, giveaways: [], highlights: {},
+      saved_queues: {}, giveaways: [], highlights: {},
       mood: { mood_score: 0, energy: 50 }, relationships: {}, temp_vcs: {},
     };
   },

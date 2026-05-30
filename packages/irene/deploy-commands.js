@@ -34,7 +34,7 @@ const rest = new REST({ version: "10" }).setToken(config.token);
 try {
   console.log(`\nRegistering ${commands.length} commands globally...`);
 
-  const data = await rest.put(Routes.applicationCommands(config.clientId), { body: commands });
+  const data = /** @type {any[]} */ (await rest.put(Routes.applicationCommands(config.clientId), { body: commands }));
 
   console.log(`Successfully registered ${data.length} commands!`);
   console.log("\nNote: Global commands may take up to 1 hour to appear in all servers.");

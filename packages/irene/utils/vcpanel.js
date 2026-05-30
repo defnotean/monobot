@@ -334,7 +334,7 @@ export async function handlePanelInteraction(interaction) {
       .setCustomId(`vc_modal:rename:${vcId}`)
       .setTitle("Rename Voice Channel")
       .addComponents(
-        new ActionRowBuilder().addComponents(
+        /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(
           new TextInputBuilder()
             .setCustomId("new_name")
             .setLabel("New channel name")
@@ -342,7 +342,7 @@ export async function handlePanelInteraction(interaction) {
             .setValue(vc.name)
             .setMaxLength(100)
             .setRequired(true),
-        ),
+        )),
       );
     await interaction.showModal(modal);
     return;
@@ -630,7 +630,7 @@ export async function handlePanelSelect(interaction) {
         .setCustomId(`vc_modal:limit:${vcId}`)
         .setTitle("Custom Slot Limit")
         .addComponents(
-          new ActionRowBuilder().addComponents(
+          /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(
             new TextInputBuilder()
               .setCustomId("limit_value")
               .setLabel("Number of slots (0 = no limit, max 99)")
@@ -638,7 +638,7 @@ export async function handlePanelSelect(interaction) {
               .setPlaceholder("e.g. 7")
               .setMaxLength(2)
               .setRequired(true),
-          ),
+          )),
         );
       await interaction.showModal(modal);
       return;

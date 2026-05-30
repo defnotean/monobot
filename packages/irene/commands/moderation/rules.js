@@ -48,6 +48,9 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((s) => s.setName("exemptions")
     .setDescription("List active rule exemptions in this server"));
 
+/**
+ * @param {{ title: string, description?: string, color?: number, footer?: string }} opts
+ */
 function emb({ title, description, color = COLOR, footer }) {
   const e = new EmbedBuilder().setColor(color).setTitle(title);
   if (description) e.setDescription(description);

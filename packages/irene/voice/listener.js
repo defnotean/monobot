@@ -168,7 +168,9 @@ export async function startListening(voiceChannel, textChannel, options = {}) {
       userCooldowns: new Map(), // userId → timestamp
       startedAt: Date.now(),
       lastAudioAt: Date.now(),
+      /** @type {ReturnType<typeof setTimeout> | null} */
       sessionTimer: null,
+      /** @type {ReturnType<typeof setInterval> | null} */
       idleTimer: null,
     };
 
@@ -338,7 +340,9 @@ function startCapturingUser(state, userId, receiver) {
     decoder,
     chunks: pcmChunks,
     startTime,
+    /** @type {ReturnType<typeof setTimeout> | null} */
     silenceTimer: null,
+    /** @type {ReturnType<typeof setTimeout> | null} */
     maxTimer: null,
   };
 
@@ -373,9 +377,16 @@ function startCapturingUser(state, userId, receiver) {
     const wavBuffer = pcmToWav(pcmBuffer, 48000, 2, 16);
     log(`[VoiceListen] Captured ${pcmBuffer.length} PCM bytes (${duration}ms) from user ${userId}`);
 
-    // Process with Gemini (or local whisper if LOCAL_STT=1 — frames passed for prism decode)
+    // Process with Gemini. NOTE: `pcmChunks` here are ALREADY-DECODED 48kHz
+    // stereo PCM frames (decoded by the prism Opus decoder above). The Gemini
+    // path uses only `wavBuffer`, so it is correct. The LOCAL_STT/whisper path
+    // (processAudio → _whisperTranscribe → _opusFramesToWav16kMono) instead
+    // re-feeds these into a FRESH prism Opus decoder via decoder.write(frame),
+    // which expects raw OPUS packets, not PCM — so LOCAL_STT remains
+    // non-functional. Fixing it (capture the raw opusStream frames separately
+    // or skip the re-decode) is a behavior change tracked outside this stream.
     try {
-      await processAudio(state, userId, wavBuffer, audioChunks);
+      await processAudio(state, userId, wavBuffer, pcmChunks);
     } catch (err) {
       log(`[VoiceListen] Error processing audio from ${userId}: ${err.message}`);
     }
@@ -472,6 +483,9 @@ async function processAudio(state, userId, wavBuffer, opusFrames) {
     if (localStt) {
       transcript = await _whisperTranscribe(opusFrames);
     } else {
+      // `client` is guaranteed non-null here: the early return above bailed
+      // when (!localStt && !client), so in this !localStt branch client is set.
+      if (!client) return;
       // Step 1: Send audio to Gemini for transcription + wake word check.
       // We send a real WAV container (decoded from Opus → PCM, wrapped with a
       // RIFF/WAVE header) — Gemini cannot decode raw Opus frames, which is why
@@ -515,8 +529,10 @@ async function processAudio(state, userId, wavBuffer, opusFrames) {
 
     log(`[VoiceListen] Wake word detected! User request: "${userMessage}"`);
 
-    // Step 4: Get AI response via Gemini
-    const aiResponse = await client.models.generateContent({
+    // Step 4: Get AI response via Gemini. `client` is non-null on the Gemini
+    // path; assert it for the type checker (runtime behavior is unchanged — a
+    // null client here would throw exactly as before).
+    const aiResponse = await /** @type {NonNullable<typeof client>} */ (client).models.generateContent({
       model: config.geminiFastModel || "gemini-2.5-flash-preview-04-17",
       contents: [
         {

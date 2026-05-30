@@ -493,6 +493,7 @@ export async function execute(message) {
   compressHistory(history, config.historyCharBudget || 8000);
 
   // Status message is created lazily — only when tools are actually called
+  /** @type {import("discord.js").Message | null | undefined} */
   let statusMsg = null;
 
   try {
@@ -508,6 +509,7 @@ export async function execute(message) {
     }
 
     log(`[Exec] Starting for: ${userText.slice(0, 80)}`);
+    /** @type {import("discord.js").Message | null | undefined} */
     let ackMsg = null; // quick acknowledgment message for tasks
 
     // ── DUAL AI: Fast conversation AI + Background worker AI ────────────
@@ -598,7 +600,7 @@ export async function execute(message) {
                 statusMsg = ackMsg;
                 ackMsg = null;
               } else if (!statusMsg && !isDM) {
-                statusMsg = await message.channel.send(displayStatus.slice(0, 1990)).catch(() => null);
+                statusMsg = /** @type {import("discord.js").Message | null} */ (await /** @type {any} */ (message.channel).send(displayStatus.slice(0, 1990)).catch(() => null));
               } else {
                 await statusMsg?.edit(displayStatus.slice(0, 1990)).catch(() => {});
               }
@@ -632,11 +634,15 @@ export async function execute(message) {
     // Track AI usage for /stats
     trackAiUsage(guild);
 
-    // Clean up: delete ack/status messages — the final reply replaces them
-    await statusMsg?.delete().catch(() => {});
-    if (ackMsg && toolsUsed) await ackMsg.delete().catch(() => {});
+    // Clean up: delete ack/status messages — the final reply replaces them.
+    // statusMsg/ackMsg are mutated inside the streaming callback above; TS's
+    // control-flow analysis can't see closure writes, so re-widen via cast.
+    const _statusMsg = /** @type {import("discord.js").Message | null | undefined} */ (statusMsg);
+    const _ackMsg = /** @type {import("discord.js").Message | null | undefined} */ (ackMsg);
+    await _statusMsg?.delete().catch(() => {});
+    if (_ackMsg && toolsUsed) await _ackMsg.delete().catch(() => {});
     // If no tools were used and ack was sent, delete it since the full reply replaces it
-    if (ackMsg && !toolsUsed) await ackMsg.delete().catch(() => {});
+    if (_ackMsg && !toolsUsed) await _ackMsg.delete().catch(() => {});
 
     // Conversation is persisted AFTER the firewall gate clears (below) so a
     // blocked turn doesn't leak the AI's response into next-turn history.
@@ -703,7 +709,7 @@ export async function execute(message) {
     // Auto-assign the Irene access role if configured or a role named "Irene" exists
     await autoAssignAccessRole({ isDM, message, guild });
   } catch (error) {
-    await statusMsg?.delete().catch(() => {});
+    await /** @type {import("discord.js").Message | null | undefined} */ (statusMsg)?.delete().catch(() => {});
     const errMsg = error?.message ?? String(error);
     const errStatus = error?.status ?? "";
     const errDetail = error?.error?.error?.message ?? error?.error?.message ?? "";

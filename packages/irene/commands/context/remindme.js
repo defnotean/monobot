@@ -59,7 +59,7 @@ export async function execute(interaction) {
     .setRequired(true)
     .setMaxLength(20);
 
-  modal.addComponents(new ActionRowBuilder().addComponents(durationInput));
+  modal.addComponents(/** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(durationInput)));
   await interaction.showModal(modal);
 }
 

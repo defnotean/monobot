@@ -25,7 +25,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── Discord Client ─────────────────────────────────────────────────────────
 
-export const client = new Client({
+// discord.js's Client has no slot for our command registry / http server, so
+// cast to include the custom props we attach below (mirrors eris index.js).
+export const client = /** @type {import("discord.js").Client & { commands: import("discord.js").Collection<string, any>, _commandDirs: Map<string, string>, _httpServer?: any }} */ (new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildPresences,
@@ -42,14 +44,17 @@ export const client = new Client({
     GatewayIntentBits.AutoModerationConfiguration,
     GatewayIntentBits.AutoModerationExecution,
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.DirectMessage],
+  // Partials.DirectMessage was removed: it does not exist on the v14 Partials
+  // enum (it resolved to `undefined` and was a no-op). DM channels are already
+  // covered by Partials.Channel.
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
   // Keep up to 500 messages per channel in cache (default is 200)
   // This reduces how often delete/edit events arrive as uncached partials during quiet periods
   makeCache: Options.cacheWithLimits({
     ...Options.DefaultMakeCacheSettings,
     MessageManager: 500,
   }),
-});
+}));
 
 client.commands = new Collection();
 client._commandDirs = new Map(); // command name → directory (for help auto-categorization)
@@ -92,14 +97,16 @@ function setupLavalink() {
   });
   shoukaku.on("error", (name, error) => log(`[Lavalink] Node "${name}" error: ${error.message}`));
   shoukaku.on("close", (name, code, reason) => log(`[Lavalink] Node "${name}" closed: ${code} ${reason}`));
-  shoukaku.on("disconnect", async (name, players, moved) => {
+  // shoukaku v4 types the disconnect handler as (name, count); the legacy 3-arg
+  // shape (name, players, moved) is preserved here, so cast the listener.
+  shoukaku.on("disconnect", /** @type {any} */ (async (/** @type {string} */ name, /** @type {any} */ players, /** @type {any} */ moved) => {
     if (moved) return;
-    log(`[Lavalink] Node "${name}" disconnected — ${players.size} players affected. Shoukaku will auto-reconnect (reconnectTries: 999). NOT deleting queues.`);
+    log(`[Lavalink] Node "${name}" disconnected — ${players?.size} players affected. Shoukaku will auto-reconnect (reconnectTries: 999). NOT deleting queues.`);
     // Don't delete queues — Shoukaku's built-in reconnect (reconnectTries: 999)
     // will re-establish the node. Deleting queues here was killing music on
     // every brief Lavalink hiccup. Queues are cleaned up if reconnect ultimately
     // fails via the player "closed" event.
-  });
+  }));
 
   initMusic(shoukaku);
 }
@@ -382,7 +389,7 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 // or an upstream provider's echoed error body — redact() scrubs token-shaped
 // substrings BEFORE the logger sees them, and the logger truncates anything
 // past MAX_LOG_LINE_BYTES to prevent a runaway stack from filling bot.log.
-process.on("unhandledRejection", (reason) => {
+process.on("unhandledRejection", (/** @type {any} */ reason) => {
   log(`[UNHANDLED REJECTION] ${redact(reason?.stack ?? reason)}`);
   // Alert but stay alive — a rejected promise doesn't mean undefined process
   // state the way a sync throw does. sendAlert de-dupes a flapping handler.

@@ -36,8 +36,9 @@ export async function paginate(interaction, { items, itemsPerPage = 10, formatPa
     return formatPage(pageItems, currentPage, totalPages);
   }
 
+  /** @returns {ActionRowBuilder<ButtonBuilder>} */
   function getButtons() {
-    return new ActionRowBuilder().addComponents(
+    return /** @type {ActionRowBuilder<ButtonBuilder>} */ (new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId("page_first")
         .setEmoji("⏮️")
@@ -63,7 +64,7 @@ export async function paginate(interaction, { items, itemsPerPage = 10, formatPa
         .setEmoji("⏭️")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(currentPage === totalPages - 1)
-    );
+    ));
   }
 
   const opts = { embeds: [getPage()], components: [getButtons()] };
@@ -91,13 +92,13 @@ export async function paginate(interaction, { items, itemsPerPage = 10, formatPa
 
   collector.on("end", async () => {
     // Disable all buttons when the collector expires
-    const disabledRow = new ActionRowBuilder().addComponents(
+    const disabledRow = /** @type {ActionRowBuilder<ButtonBuilder>} */ (new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("page_first").setEmoji("⏮️").setStyle(ButtonStyle.Secondary).setDisabled(true),
       new ButtonBuilder().setCustomId("page_prev").setEmoji("◀️").setStyle(ButtonStyle.Secondary).setDisabled(true),
       new ButtonBuilder().setCustomId("page_indicator").setLabel(`${currentPage + 1} / ${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
       new ButtonBuilder().setCustomId("page_next").setEmoji("▶️").setStyle(ButtonStyle.Secondary).setDisabled(true),
       new ButtonBuilder().setCustomId("page_last").setEmoji("⏭️").setStyle(ButtonStyle.Secondary).setDisabled(true)
-    );
+    ));
     await message.edit({ components: [disabledRow] }).catch(() => {});
   });
 

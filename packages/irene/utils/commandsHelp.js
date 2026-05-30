@@ -29,9 +29,10 @@ export function formatCommandLine(name, command) {
  */
 export function buildCommandsContext(commands) {
   if (!commands) return "";
-  const entries = typeof commands.entries === "function"
-    ? [...commands.entries()]
-    : Array.from(commands ?? []);
+  const _cmds = /** @type {any} */ (commands);
+  const entries = typeof _cmds.entries === "function"
+    ? [..._cmds.entries()]
+    : Array.from(_cmds ?? []);
   if (entries.length === 0) return "";
 
   const lines = entries

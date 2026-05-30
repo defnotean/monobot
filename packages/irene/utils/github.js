@@ -143,7 +143,7 @@ async function checkGuildGithubFeeds(guild) {
       }
 
       // Check the most recent commit
-      const latestCommit = feedData.items[0];
+      const latestCommit = /** @type {any} */ (feedData.items[0]);
       // Extract commit hash from the entry ID (format: urn:uuid:... or URL)
       const commitId = latestCommit.id || latestCommit.link;
 

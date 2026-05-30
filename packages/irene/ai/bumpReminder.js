@@ -425,6 +425,10 @@ async function generateAiReminder({ guild, serviceKey, settings, quiet, wasOffli
       // Prefer a fast model. Reuse the existing key pool if available.
       (async () => ({
         getConvClientForBump: async () => {
+          // Optional probe for a key-pool module that isn't present in this
+          // package. The .catch() makes the missing module a graceful no-op
+          // that falls through to the single-key path.
+          // @ts-ignore -- intentional import of a non-existent optional module
           const mod = await import("../ai/keyPool.js").catch(() => null);
           if (mod?.getGeminiClient) return mod.getGeminiClient();
           // Fallback: spin up a client from the first key.
@@ -610,7 +614,9 @@ async function payFirstBumperBonus(guildId, serviceKey, userId, client) {
 
   // Only Eris has the economy. Call the balance function if it exists.
   try {
-    const db = await import("../database.js");
+    // Twin compatibility: updateBalance only exists on the eris database
+    // module; probe for it at runtime and no-op on irene.
+    const db = /** @type {any} */ (await import("../database.js"));
     if (typeof db.updateBalance !== "function") return false;
     await db.updateBalance(userId, FIRST_BUMPER_BONUS_COINS, "bump_first_bonus", serviceKey);
 
@@ -765,6 +771,7 @@ async function postCountdownEmbed(client, guildId, serviceKey, channelId, schedu
   const prev = _activeCountdowns.get(key);
   if (prev?.interval) clearInterval(prev.interval);
 
+  /** @type {{ messageId: string, channelId: string, interval: ReturnType<typeof setInterval> | null }} */
   const state = { messageId: msg.id, channelId, interval: null };
   _activeCountdowns.set(key, state);
 
@@ -777,7 +784,7 @@ async function postCountdownEmbed(client, guildId, serviceKey, channelId, schedu
       const remaining = scheduledAt - now;
       const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = await import("discord.js");
       if (remaining <= 0) {
-        clearInterval(state.interval);
+        clearInterval(state.interval ?? undefined);
         _activeCountdowns.delete(key);
         const { embed } = buildCountdownEmbed({ svc, scheduledAt, startedAt, durationMs, EmbedBuilder, done: true });
         const bumpNowRow = new ActionRowBuilder().addComponents(

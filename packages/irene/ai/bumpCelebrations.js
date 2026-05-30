@@ -299,6 +299,10 @@ export async function detectStreakLost({ guildId, service = "disboard" }) {
  * Best (lowest) rank in the given time window. Null if no ranks have been
  * captured — most bump services don't surface rank in their confirm message.
  */
+/**
+ * @param {string} guildId
+ * @param {{ periodDays?: number, service?: string|null, bumpsTable?: string }} [opts]
+ */
 export async function getBestRankInPeriod(guildId, { periodDays = 7, service = null, bumpsTable = "irene_bumps" } = {}) {
   try {
     const { getSupabase } = await import("../database.js");
@@ -346,7 +350,7 @@ function _isoWeekKey(d = new Date()) {
   const dayNum = (t.getUTCDay() + 6) % 7;
   t.setUTCDate(t.getUTCDate() - dayNum + 3);
   const firstThu = new Date(Date.UTC(t.getUTCFullYear(), 0, 4));
-  const week = 1 + Math.round(((t - firstThu) / 86400000 - 3 + ((firstThu.getUTCDay() + 6) % 7)) / 7);
+  const week = 1 + Math.round(((t.getTime() - firstThu.getTime()) / 86400000 - 3 + ((firstThu.getUTCDay() + 6) % 7)) / 7);
   return `${t.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 

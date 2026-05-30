@@ -69,7 +69,7 @@ function currentCount(key, today) {
  * never opt in.
  *
  * @param {{ userId?: string, guildId?: string|null }} ids
- * @returns {{ exceeded: boolean, scope: "user"|"guild"|null }}
+ * @returns {{ exceeded: true, scope: "user"|"guild" } | { exceeded: false, scope: null }}
  */
 export function checkBudget({ userId, guildId } = {}) {
   const userCap = readCap("AI_DAILY_USER_CAP");

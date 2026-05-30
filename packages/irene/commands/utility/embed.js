@@ -88,11 +88,11 @@ export async function execute(interaction) {
     .setPlaceholder("e.g.\nField 1|This is field 1\nField 2|This is field 2");
 
   modal.addComponents(
-    new ActionRowBuilder().addComponents(titleInput),
-    new ActionRowBuilder().addComponents(descInput),
-    new ActionRowBuilder().addComponents(colorInput),
-    new ActionRowBuilder().addComponents(imageInput),
-    new ActionRowBuilder().addComponents(footerInput),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(titleInput)),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(descInput)),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(colorInput)),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(imageInput)),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(footerInput)),
   );
 
   await interaction.showModal(modal);

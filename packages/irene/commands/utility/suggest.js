@@ -67,7 +67,7 @@ async function handleIdea(interaction) {
   const cooldownCheck = checkCooldown("suggest", interaction.user.id, SUGGESTION_COOLDOWN_MS);
   if (cooldownCheck.onCooldown) {
     return interaction.reply({
-      embeds: [errorEmbed("On Cooldown", `please wait ${Math.ceil(cooldownCheck.remaining / 1000)}s before submitting another suggestion`)],
+      embeds: [errorEmbed("On Cooldown", `please wait ${Math.ceil((cooldownCheck.remaining ?? 0) / 1000)}s before submitting another suggestion`)],
       flags: 64,
     });
   }

@@ -143,8 +143,10 @@ function _schedule(table, keyColumn, keyValue, data) {
     existing.latestData = data;
     return existing.pending;
   }
-  let resolveOuter;
+  /** @type {(value?: any) => void} */
+  let resolveOuter = () => {};
   const pending = new Promise((resolve) => { resolveOuter = resolve; });
+  /** @type {{ timer: ReturnType<typeof setTimeout> | null, latestData: any, pending: Promise<any>, resolve: (value?: any) => void, keyColumn: any }} */
   const entry = {
     timer: null,
     latestData: data,

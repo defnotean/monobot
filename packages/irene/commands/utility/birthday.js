@@ -86,7 +86,7 @@ export async function execute(interaction) {
     const today = new Date();
     const bDate = new Date(today.getFullYear(), bday.month - 1, bday.day);
     if (bDate < today) bDate.setFullYear(today.getFullYear() + 1);
-    const daysLeft = Math.ceil((bDate - today) / 86_400_000);
+    const daysLeft = Math.ceil((bDate.getTime() - today.getTime()) / 86_400_000);
     const label = daysLeft === 0 ? "🎉 **Today!**" : daysLeft === 1 ? "tomorrow!" : `in **${daysLeft}** days`;
 
     return interaction.reply({
@@ -108,7 +108,7 @@ export async function execute(interaction) {
     function daysUntil(month, day) {
       const bDate = new Date(today.getFullYear(), month - 1, day);
       if (bDate < today) bDate.setFullYear(today.getFullYear() + 1);
-      return Math.ceil((bDate - today) / 86_400_000);
+      return Math.ceil((bDate.getTime() - today.getTime()) / 86_400_000);
     }
 
     const sorted = [...all].sort((a, b) => daysUntil(a.month, a.day) - daysUntil(b.month, b.day));

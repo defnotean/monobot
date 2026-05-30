@@ -317,6 +317,35 @@ function checkPatternsSync(text) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-instance firewall factory
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Pluggable sliding-window backend (split-payload detection). Both
+ * `InMemoryWindowStore` (default) and `RedisWindowStore` satisfy this contract,
+ * as does any object exposing the same methods. `clear` is optional because the
+ * firewall always calls it via `windowStore.clear?.(...)`.
+ * @typedef {object} WindowStore
+ * @property {(userId: string, text: string) => Promise<void>} add Record a message in the user's window.
+ * @property {(userId: string) => Promise<string|null>} concat Last-N concatenated text, or null.
+ * @property {(userId?: string) => Promise<void>} [clear] Drop one user's (or all) window state.
+ */
+
+/**
+ * Options for {@link createFirewall}. Every field is optional — the factory is
+ * safe to call with no arguments — but supplying `ownerId`/`voyageApiKey`
+ * enables the owner bypass and the L3 Voyage semantic layer respectively.
+ * @typedef {object} FirewallOptions
+ * @property {string} [ownerId] Discord user ID that bypasses the firewall (must be strictly equal to the message author).
+ * @property {string} [voyageApiKey] Voyage AI API key; when set, enables the L3 embedding/pgvector semantic layer.
+ * @property {(msg: string) => void} [log] Single-arg log sink (defaults to a no-op). Always invoked with a string.
+ * @property {string} [modelDir] Filesystem path to the local Prompt Guard 2 ONNX model directory.
+ * @property {WindowStore} [windowStore] Sliding-window backend (defaults to a process-local InMemoryWindowStore).
+ */
+
+/**
+ * Construct a per-bot firewall instance with its own caches, sliding window,
+ * and verdict log.
+ * @param {FirewallOptions} [options]
+ */
 export function createFirewall({
   ownerId,
   voyageApiKey,

@@ -420,7 +420,7 @@ function armSessionTimeout(session) {
  * @param {string} opts.artistName
  * @param {string} opts.requesterId
  * @param {"message"|"nickname"} [opts.mode="message"]
- * @param {string} [opts.channelId] — required for message mode
+ * @param {string} [opts.channelId] - required for message mode
  */
 export async function startKaraoke(client, guildId, opts) {
   const { trackName, artistName, requesterId, mode = "message", channelId } = opts;
@@ -576,6 +576,12 @@ export async function onTrackEnd(client, guildId) {
   // In message mode, leave the last lyrics showing — new track will send a new message
 }
 
+/**
+ * @param {*} client
+ * @param {string} guildId
+ * @param {string} requesterId
+ * @param {{ mode?: "message"|"nickname", channelId?: string }} [opts]
+ */
 export async function enableAutoMode(client, guildId, requesterId, { mode = "message", channelId } = {}) {
   if (_sessions.has(guildId)) await stopKaraoke(guildId, "replaced by auto");
 

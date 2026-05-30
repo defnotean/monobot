@@ -116,7 +116,7 @@ export async function execute(client) {
   log(`[WHITELIST] startup sweep — ${client.guilds.cache.size} guilds in cache`);
   for (const guild of client.guilds.cache.values()) {
     const ownerIsGuildOwner = guild.ownerId === config.ownerId;
-    const whitelisted       = isWhitelisted(guild.id);
+    const whitelisted       = await isWhitelisted(guild.id);
     // Fetch bot owner member to check if they're in this guild
     const ownerMember       = guild.members.cache.get(config.ownerId)
       ?? await guild.members.fetch(config.ownerId).catch(() => null);
@@ -129,7 +129,7 @@ export async function execute(client) {
     // Backfill — boss wants the whitelist to track every server the bot is
     // currently in, including ones grandfathered in via boss-as-member.
     if (!whitelisted) {
-      addToWhitelist(guild.id, {
+      await addToWhitelist(guild.id, {
         name:       guild.name,
         icon_url:   guild.iconURL?.({ size: 128 }) ?? null,
         members:    guild.memberCount ?? null,
@@ -581,7 +581,9 @@ export async function execute(client) {
   // ═══════════════════════════════════════════════════════════════════════════
 
   let _cumulativeImportance = 0;
+  /** @type {{ short: string[], medium: string[], long: string[] }} */
   const _goals = { short: [], medium: [], long: [] };
+  /** @type {Array<{ text: string, at: number }>} */
   const _reflections = [];
 
   try {

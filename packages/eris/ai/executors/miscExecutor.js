@@ -323,7 +323,10 @@ export async function execute(toolName, input, message, _context) {
     }
 
     case "check_prices": {
-      const watches = await db.getPriceWatches();
+      // Scope to the caller — getPriceWatches now requires a userId and only
+      // returns that user's watches. Passing nothing here previously listed
+      // every user's watches (cross-user leak).
+      const watches = await db.getPriceWatches(message.author.id);
       if (!watches.length) return "no active price watches";
       return watches.map((w, i) => `${i + 1}. [${w.id}] ${w.product_name} \u2014 target: $${w.target_price}\n   ${w.url}`).join("\n");
     }

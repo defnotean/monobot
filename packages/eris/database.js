@@ -813,7 +813,10 @@ export async function getDashboardStats() {
 // ═══════════════════════════════════════════════════════════════════════════
 // WATCHES & SHARED WHITELIST — long-poll subscriptions for prices, news
 // topics, deploy status; recent dream log; and the cross-twin server
-// whitelist (read from Irene's bot_data row so both bots stay in sync).
+// whitelist. The whitelist is UNIFIED: the canonical store is the bot_data row
+// id="main" (data.server_whitelist), and BOTH twins (Eris + Irene) read and
+// write the SAME row through the atomic bot_whitelist_add/remove RPCs, so they
+// can never drift. See packages/irene/database.js for the matching helpers.
 // ═══════════════════════════════════════════════════════════════════════════
 // ─── PRICE WATCHES ───
 export async function addPriceWatch(userId, channelId, url, productName, targetPrice) {
@@ -822,15 +825,18 @@ export async function addPriceWatch(userId, channelId, url, productName, targetP
   return !error;
 }
 /**
- * Fetch price watches. NOTE: `_userId` is currently ignored — this returns ALL
- * watches across users (one caller passes a user id expecting per-user scoping;
- * see openConcerns). Param kept optional so both call shapes type-check without
- * changing the (pre-existing) all-users behavior.
- * @param {string} [_userId]
+ * Fetch a SINGLE user's price watches. `userId` is REQUIRED and scopes the query
+ * to that user — both the `check_prices` and `unwatch_price` tools pass
+ * `message.author.id`, so a missing/empty id must return [] rather than leaking
+ * every user's watches (their URLs, product names, target prices) cross-user.
+ * The `removePriceWatch` delete is already `.eq("user_id", userId)`-scoped, so
+ * scoping the read here closes the matching read-side leak.
+ * @param {string} userId Discord user id whose watches to return. Required.
+ * @returns {Promise<Row[]>}
  */
-export async function getPriceWatches(_userId) {
-  if (!supabase) return [];
-  const { data: rows } = await supabase.from("eris_price_watches").select("*");
+export async function getPriceWatches(userId) {
+  if (!supabase || !userId) return [];
+  const { data: rows } = await supabase.from("eris_price_watches").select("*").eq("user_id", userId);
   return rows || [];
 }
 export async function removePriceWatch(userId, id) {
@@ -884,8 +890,11 @@ export async function getDeployWatches() {
   return rows || [];
 }
 
-// ─── SHARED WHITELIST (reads from Irene's bot_data table) ───
-// Both twins share the same server whitelist so they stay in sync
+// ─── SHARED WHITELIST (canonical store: bot_data row id="main") ───
+// UNIFIED whitelist — both twins (Eris + Irene) read and write the SAME
+// bot_data:main row (data.server_whitelist) via the atomic bot_whitelist_add/
+// remove RPCs, so the two bots can never drift. Irene's matching helpers live
+// in packages/irene/database.js.
 export async function getWhitelist() {
   if (!supabase) { log(`[WHITELIST] getWhitelist: supabase not configured`); return {}; }
   const { data: row, error } = await supabase.from("bot_data").select("data").eq("id", "main").single();

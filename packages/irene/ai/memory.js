@@ -62,7 +62,8 @@ export function addMemory(guildId, userId, fact, importance = "normal") {
   userMemories.push(memory);
 
   // Throttle cleanup to once per hour per guild instead of every addMemory call
-  const _lastCleanup = cleanupOldMemories._lastRun ?? (cleanupOldMemories._lastRun = new Map());
+  const _cleanupFn = /** @type {any} */ (cleanupOldMemories);
+  const _lastCleanup = _cleanupFn._lastRun ?? (_cleanupFn._lastRun = new Map());
   const lastRun = _lastCleanup.get(guildId) ?? 0;
   if (Date.now() - lastRun > 60 * 60_000) {
     cleanupOldMemories(guildId);

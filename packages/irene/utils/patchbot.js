@@ -212,6 +212,12 @@ function buildPatchEmbed(data, feedName, feedColor, feedMeta) {
 // offset=0 → latest, offset=1 → one before that, offset=2 → two before, etc.
 // search → find by text in title (e.g. "12.03")
 
+/**
+ * @param {string} feedUrl
+ * @param {string} feedName
+ * @param {number} feedColor
+ * @param {{ offset?: number, search?: string|null }} [opts]
+ */
 export async function fetchLatestPost(feedUrl, feedName, feedColor, { offset = 0, search = null } = {}) {
   const meta = Object.values(KNOWN_FEEDS).find((f) => (f.url ?? f.listingUrl) === feedUrl || f.name === feedName);
 

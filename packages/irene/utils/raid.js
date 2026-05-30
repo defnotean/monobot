@@ -30,7 +30,7 @@ const DEFAULT_SETTINGS = {
 
 /**
  * Check if a new member join triggers a raid
- * @returns { isRaid, joinCount, timeWindow }
+ * @returns {{ isRaid: boolean, joinCount: number, timeWindow: number, trusted?: boolean }}
  */
 export function checkRaid(guild, member) {
   const guildId = guild.id;

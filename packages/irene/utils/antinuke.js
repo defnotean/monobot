@@ -65,11 +65,10 @@ async function _exemptReason(guild, userId, settings) {
  * @param {string} guildId
  * @param {string} userId
  * @param {string} actionType - "channel_delete" | "role_delete" | "ban" | "kick"
- * @param {Guild}  guild      - the Discord.js Guild object. Needed to
- *                              check ownerId and Administrator perm so
- *                              the server owner / admins don't get
- *                              stripped for doing legitimate cleanup.
- * @returns { triggered, count, action, severity, exempt? }
+ * @param {import("discord.js").Guild} [guild] - the Discord.js Guild object.
+ *   Needed to check ownerId and Administrator perm so the server owner /
+ *   admins don't get stripped for doing legitimate cleanup.
+ * @returns {Promise<{ triggered: boolean, count: number, action: string, severity: string, exempt?: string }>}
  */
 export async function trackAction(guildId, userId, actionType, guild) {
   const now = Date.now();
@@ -129,8 +128,8 @@ export async function trackAction(guildId, userId, actionType, guild) {
 
 /**
  * Execute the nuke response — based on severity level.
- * @param {Guild} [guildParam] — passed from trackAction; falls back to
- *   importing the client if not supplied (legacy call paths).
+ * @param {import("discord.js").Guild} [guildParam] - passed from trackAction;
+ *   falls back to importing the client if not supplied (legacy call paths).
  */
 async function executeNukeResponse(guildId, userId, actionType, count, severity, settings, guildParam) {
   let guild = guildParam;

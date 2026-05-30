@@ -669,6 +669,7 @@ export async function execute(oldState, newState) {
       userLimit: defaultLimit > 0 ? defaultLimit : undefined,
       permissionOverwrites: (() => {
         const verRoleId = getVerificationRole(guild.id);
+        /** @type {import("discord.js").OverwriteResolvable[]} */
         const overwrites = [
           // Owner — full control
           {

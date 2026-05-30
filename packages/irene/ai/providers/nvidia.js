@@ -225,7 +225,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
       });
       if (!res.ok) {
         const errText = await res.text().catch(() => "");
-        const httpErr = new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+        const httpErr = /** @type {Error & { status?: number }} */ (new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`));
         httpErr.status = res.status;
         throw httpErr;
       }

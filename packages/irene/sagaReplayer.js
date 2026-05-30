@@ -104,7 +104,7 @@ export async function createSaga(entityType, entityId, payload) {
  *   failed; we don't crash the write path because of it).
  * @param {"primary"|"secondary"} leg
  * @param {"applied"|"failed"} status
- * @param {string} [errorMessage] — captured on failures for the operator.
+ * @param {string} [errorMessage] - captured on failures for the operator.
  */
 export async function markSagaLeg(sagaId, leg, status, errorMessage) {
   if (!sagaId) return;
@@ -112,6 +112,7 @@ export async function markSagaLeg(sagaId, leg, status, errorMessage) {
   const supabase = getSupabase();
   if (!supabase) return;
   const col = leg === "primary" ? "primary_status" : "secondary_status";
+  /** @type {Record<string, string>} */
   const update = { [col]: status };
   if (status === "failed" && errorMessage) {
     update.last_error = String(errorMessage).slice(0, 1000);
@@ -168,7 +169,8 @@ async function _replaySecondary(saga) {
     scheduled_tasks: payload.scheduled_tasks,
     birthdays: payload.birthdays,
     birthday_announced: payload.birthday_announced,
-    server_whitelist: payload.server_whitelist,
+    // server_whitelist removed — the whitelist is unified in bot_data:main and
+    // no longer part of Irene's per-entity fanout (see database.js).
     giveaways: payload.giveaways,
     highlights: payload.highlights,
     temp_vcs: payload.temp_vcs,

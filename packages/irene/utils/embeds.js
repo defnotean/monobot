@@ -235,8 +235,28 @@ export function formatMeta(entries) {
 }
 
 /**
+ * @typedef {object} LogEventOptions
+ * @property {string} [kind]
+ * @property {string} [title]
+ * @property {string} [description]
+ * @property {*} [actor]
+ * @property {*} [target]
+ * @property {*} [reason]
+ * @property {*} [channel]
+ * @property {*} [meta]
+ * @property {*} [fields]
+ * @property {*} [thumbnail]
+ * @property {*} [image]
+ * @property {*} [url]
+ * @property {string} [footerNote]
+ * @property {number} [color]
+ * @property {*} [author]
+ */
+
+/**
  * Build a log-channel embed for a specific kind of event. See the big comment
  * block above for usage.
+ * @param {LogEventOptions} options
  */
 export function logEvent({
   kind,

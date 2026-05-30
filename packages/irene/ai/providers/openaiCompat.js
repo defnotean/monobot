@@ -109,7 +109,7 @@ async function postChatWithKey(body, timeoutMs, apiKey) {
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
-    const error = new Error(`HTTP ${res.status}: ${errText.slice(0, 300)}`);
+    const error = /** @type {Error & { status?: number }} */ (new Error(`HTTP ${res.status}: ${errText.slice(0, 300)}`));
     error.status = res.status;
     throw error;
   }
@@ -338,6 +338,9 @@ function toMessages(systemInstruction, history, userMessage) {
   return messages;
 }
 
+/**
+ * @param {{ model: any, messages: any, tools?: any }} args
+ */
 function buildBody({ model, messages, tools }) {
   const body = { model, messages, stream: false };
   if (Number.isFinite(OC.maxTokens) && OC.maxTokens > 0) body.max_tokens = OC.maxTokens;

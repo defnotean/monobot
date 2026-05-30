@@ -539,7 +539,7 @@ export async function executeTool(toolName, input, message, opts = {}) {
   if (userId) {
     const rateCheck = checkToolRateLimit(userId, toolName);
     if (!rateCheck.allowed) {
-      const secs = Math.ceil(rateCheck.retryAfterMs / 1000);
+      const secs = Math.ceil((rateCheck.retryAfterMs ?? 0) / 1000);
       return `chill — you're using ${toolName} too fast. try again in ${secs}s`;
     }
   }
@@ -1276,7 +1276,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
       const today = new Date();
       const nextBday = new Date(today.getFullYear(), m - 1, d);
       if (nextBday <= today) nextBday.setFullYear(today.getFullYear() + 1);
-      const daysUntil = Math.ceil((nextBday - today) / 86_400_000);
+      const daysUntil = Math.ceil((nextBday.getTime() - today.getTime()) / 86_400_000);
       if (daysUntil === 0) extra += " — that's today! 🎉";
       else if (daysUntil === 1) extra += " — that's tomorrow!";
       else extra += ` — ${daysUntil} days away`;
@@ -1306,7 +1306,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
       }
       const nextBday = new Date(today.getFullYear(), bday.month - 1, bday.day);
       if (nextBday <= today) nextBday.setFullYear(today.getFullYear() + 1);
-      const daysUntil = Math.ceil((nextBday - today) / 86_400_000);
+      const daysUntil = Math.ceil((nextBday.getTime() - today.getTime()) / 86_400_000);
       const countdown = daysUntil === 0 ? " — that's TODAY! 🎉" : daysUntil === 1 ? " — that's TOMORROW!" : ` — ${daysUntil} days away`;
       return `${targetName}'s birthday is ${dateStr}${ageInfo}${countdown} 🎂`;
     }
@@ -1320,7 +1320,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
       function daysUntil(month, day) {
         const bDate = new Date(today.getFullYear(), month - 1, day);
         if (bDate < today) bDate.setFullYear(today.getFullYear() + 1);
-        return Math.ceil((bDate - today) / 86_400_000);
+        return Math.ceil((bDate.getTime() - today.getTime()) / 86_400_000);
       }
       const sorted = [...all].sort((a, b) => daysUntil(a.month, a.day) - daysUntil(b.month, b.day));
       const lines = sorted.slice(0, 20).map((b) => {
@@ -1691,10 +1691,10 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
       // Source 1: Wikipedia — search for the best page, then grab its lead image.
       try {
         const sr = await safeFetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${q}&srlimit=1&format=json&origin=*`, fetchOpts);
-        const title = JSON.parse(sr.text)?.query?.search?.[0]?.title;
+        const title = JSON.parse(sr.text || "{}")?.query?.search?.[0]?.title;
         if (title) {
           const pr = await safeFetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=pageimages&piprop=original%7Cthumbnail&pithumbsize=800&format=json&origin=*`, fetchOpts);
-          const pages = JSON.parse(pr.text)?.query?.pages || {};
+          const pages = JSON.parse(pr.text || "{}")?.query?.pages || {};
           const page = Object.values(pages)[0];
           const candidate = page?.original?.source || page?.thumbnail?.source || null;
           if (candidate && !/\.svg(\?|$)/i.test(candidate)) { imageUrl = candidate; source = "wikipedia"; }
@@ -1708,7 +1708,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
       if (!imageUrl) {
         try {
           const or = await safeFetch(`https://api.openverse.org/v1/images/?q=${q}&page_size=5&mature=false`, fetchOpts);
-          const item = (JSON.parse(or.text)?.results || []).find((r) => r.url && !/\.svg(\?|$)/i.test(r.url));
+          const item = (JSON.parse(or.text || "{}")?.results || []).find((/** @type {any} */ r) => r.url && !/\.svg(\?|$)/i.test(r.url));
           if (item) { imageUrl = item.url || item.thumbnail; source = "openverse"; }
         } catch (e) {
           // Best-effort: no image found is handled below.
@@ -1769,6 +1769,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
       try {
         const imgRes = await safeFetch(url, { binary: true, maxBytes: 8_000_000, timeoutMs: 10_000 });
         if (imgRes.status < 200 || imgRes.status >= 300) return `couldn't fetch the image: ${imgRes.status}`;
+        if (!imgRes.bytes) return "couldn't read the image data";
         const inB64 = imgRes.bytes.toString("base64");
         const inMime = imgRes.headers.get("content-type") || "image/png";
 
@@ -1791,7 +1792,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
             if (imgPart) { outImg = imgPart.inlineData; break; }
           } catch (err) { lastErr = err; if (!/NOT_FOUND|404|not found|not supported/i.test(err?.message || "")) break; }
         }
-        if (!outImg) return `couldn't edit the image${lastErr ? ` (${lastErr.message})` : ""} — the image model may not be available on this key (set GEMINI_IMAGE_MODEL)`;
+        if (!outImg?.data) return `couldn't edit the image${lastErr ? ` (${lastErr.message})` : ""} — the image model may not be available on this key (set GEMINI_IMAGE_MODEL)`;
         const { AttachmentBuilder } = await import("discord.js");
         const ext = (outImg.mimeType || "image/png").split("/")[1] || "png";
         const attachmentOut = new AttachmentBuilder(Buffer.from(outImg.data, "base64"), { name: `edited.${ext}` });
@@ -2030,7 +2031,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
           const g = invite.guild;
           if (!g) return "Couldn't resolve a server from that invite.";
 
-          addToWhitelist(g.id, {
+          await addToWhitelist(g.id, {
             name:       g.name,
             icon_url:   g.iconURL?.({ size: 128 }) ?? null,
             members:    invite.memberCount ?? g.memberCount ?? null,
@@ -2050,7 +2051,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
 
       if (/^\d{17,20}$/.test(raw)) {
         const existingGuild = message.client.guilds.cache.get(raw);
-        addToWhitelist(raw, {
+        await addToWhitelist(raw, {
           name:       existingGuild?.name ?? "Unknown (ID-only)",
           icon_url:   existingGuild?.iconURL?.({ size: 128 }) ?? null,
           members:    existingGuild?.memberCount ?? null,
@@ -2079,7 +2080,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
       let targetName = null;
       let wasOnWhitelist = false;
 
-      const wl = getWhitelist();
+      const wl = await getWhitelist();
       if (/^\d{17,20}$/.test(raw)) {
         if (wl[raw]) { targetId = raw; targetName = wl[raw].name; wasOnWhitelist = true; }
         else {
@@ -2098,7 +2099,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
 
       if (!targetId) return `No whitelisted server matching "${raw}", and the bot isn't in any server with that name/ID.`;
 
-      if (wasOnWhitelist) removeFromWhitelist(targetId);
+      if (wasOnWhitelist) await removeFromWhitelist(targetId);
 
       const targetGuild = message.client.guilds.cache.get(targetId);
       if (targetGuild) {
@@ -2117,7 +2118,7 @@ async function _executeToolInner(toolName, input, message, opts = {}) {
         log(`[WHITELIST] denied list_whitelist — author=${message.author.id} userId=${config.ownerId}`);
         return "Only the bot owner can view the whitelist.";
       }
-      const wl = getWhitelist();
+      const wl = await getWhitelist();
       log(`[WHITELIST] list_whitelist read — ${Object.keys(wl).length} entries: [${Object.keys(wl).join(", ") || "(empty)"}]`);
       const entries = Object.entries(wl);
       if (!entries.length) return "Whitelist is empty — the bot will only stay in servers you're a member of.";

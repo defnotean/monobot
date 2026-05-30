@@ -145,9 +145,9 @@ export function getCurrentSeasonName() {
 
 /**
  * Update all seasonal color roles in a guild to match the current palette.
- * @param {Guild} guild — Discord.js Guild object
- * @param {string[]} colorRoleIds — array of role IDs for slots 1-8
- * @returns {{ updated: number, season: string }}
+ * @param {import("discord.js").Guild} guild - Discord.js Guild object
+ * @param {string[]} colorRoleIds - array of role IDs for slots 1-8
+ * @returns {Promise<{ updated: number, season: string, emoji: string }>}
  */
 export async function rotateSeasonalColors(guild, colorRoleIds) {
   const palette = getCurrentPalette();

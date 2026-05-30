@@ -110,7 +110,7 @@ export function quickSentiment(text) {
   for (let i = 0; i < bigramWords.length - 1; i++) {
     const pair = bigramWords[i] + " " + bigramWords[i + 1];
     if (BIGRAM_OVERRIDES.has(pair)) {
-      bigramScore += BIGRAM_OVERRIDES.get(pair);
+      bigramScore += BIGRAM_OVERRIDES.get(pair) ?? 0;
       matchedIndices.add(i);
       matchedIndices.add(i + 1);
     }

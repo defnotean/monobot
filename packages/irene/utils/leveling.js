@@ -44,6 +44,12 @@ export function getLevelData() {
 
 // ─── User XP Management ──────────────────────────────────────────────────────
 
+/**
+ * @param {string} guildId
+ * @param {string} userId
+ * @param {number} amount
+ * @param {import("discord.js").GuildMember | null} [member]
+ */
 export function addXp(guildId, userId, amount, member = null) {
   // Initialize if needed
   if (!levelData.users[guildId]) levelData.users[guildId] = {};
@@ -175,6 +181,12 @@ export function getLevelRewards(guildId) {
   })).sort((a, b) => a.level - b.level);
 }
 
+/**
+ * @param {string} guildId
+ * @param {number} level
+ * @param {string} roleId
+ * @param {import("discord.js").Guild | null} [guild]
+ */
 export function setLevelReward(guildId, level, roleId, guild = null) {
   if (!levelData.rewards[guildId]) levelData.rewards[guildId] = {};
 
@@ -258,6 +270,12 @@ export function setGlobalMultiplier(guildId, multiplier) {
   levelData.multipliers[guildId].global = Math.max(0.1, multiplier);
 }
 
+/**
+ * @param {string} guildId
+ * @param {string} roleId
+ * @param {number} multiplier
+ * @param {import("discord.js").Guild | null} [guild]
+ */
 export function setRoleMultiplier(guildId, roleId, multiplier, guild = null) {
   // Validate role exists if guild provided
   if (guild) {

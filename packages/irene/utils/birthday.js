@@ -14,8 +14,10 @@ function ordinal(n) {
 // ─── Shared birthday embed builder ──────────────────────────────────────────
 /**
  * Builds a birthday announcement embed for a member.
- * @param {object} options.bday — the birthday record { month, day, year? } (optional, for age display)
- * Returns { embed, pingContent }.
+ * @param {import("discord.js").GuildMember} member
+ * @param {*} config
+ * @param {Record<string, any> | null} [bday] - the birthday record { month, day, year? } (optional, for age display)
+ * @returns {{ embed: import("discord.js").EmbedBuilder, pingContent: string }}
  */
 export function buildBirthdayEmbed(member, config, bday) {
   // Calculate real-world age if birth year is known

@@ -569,9 +569,9 @@ function _buildWelcomeModal(guild) {
   if (typeof cfg.welcome_color === "number") colorInput.setValue(_hex(cfg.welcome_color) || "");
 
   modal.addComponents(
-    new ActionRowBuilder().addComponents(titleInput),
-    new ActionRowBuilder().addComponents(descInput),
-    new ActionRowBuilder().addComponents(colorInput),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(titleInput)),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(descInput)),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(colorInput)),
   );
   return modal;
 }
@@ -628,11 +628,11 @@ function _buildPanelModal(guild) {
   if (cfg.panel_button_emoji) emojiInput.setValue(cfg.panel_button_emoji.slice(0, 64));
 
   modal.addComponents(
-    new ActionRowBuilder().addComponents(titleInput),
-    new ActionRowBuilder().addComponents(descInput),
-    new ActionRowBuilder().addComponents(colorInput),
-    new ActionRowBuilder().addComponents(labelInput),
-    new ActionRowBuilder().addComponents(emojiInput),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(titleInput)),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(descInput)),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(colorInput)),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(labelInput)),
+    /** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(emojiInput)),
   );
   return modal;
 }

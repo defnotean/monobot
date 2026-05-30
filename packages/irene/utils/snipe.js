@@ -79,7 +79,7 @@ export function cacheEditedMessage(oldMessage, newMessage) {
 /**
  * Get sniped (deleted) messages for a channel.
  * @param {string} channelId
- * @param {number} [index=0] — 0 = most recent, 1 = second most recent, etc.
+ * @param {number} [index=0] - 0 = most recent, 1 = second most recent, etc.
  * @returns {object|null}
  */
 export function getSnipedMessage(channelId, index = 0) {

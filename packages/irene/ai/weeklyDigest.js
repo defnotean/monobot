@@ -123,8 +123,9 @@ export async function postDigest(guild, client, opts = {}) {
   // Stamp BEFORE the send so even a transient failure won't spam retries
   // within the same 12:xx window.
   try {
-    const r = setGuildSetting(guild.id, "digest_last_posted_at", Date.now());
-    if (r && typeof r.then === "function") await r;
+    // setGuildSetting is sync today but tolerate a Promise-returning variant.
+    const r = /** @type {unknown} */ (setGuildSetting(guild.id, "digest_last_posted_at", Date.now()));
+    if (r && typeof (/** @type {any} */ (r).then) === "function") await r;
   } catch {}
 
   try {

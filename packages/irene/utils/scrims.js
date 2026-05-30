@@ -230,7 +230,7 @@ export async function manageScrimInteraction(interaction) {
   } else if (action === "score") {
     if (scrim.host !== userId) return interaction.reply({ content: "Only the host can set the score.", ephemeral: true });
     const modal = new ModalBuilder().setCustomId(`scrim_modal:score:${scrim.id}`).setTitle("Final Match Score");
-    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("score").setLabel("Final Score (e.g. 13-5)").setStyle(TextInputStyle.Short).setRequired(true)));
+    modal.addComponents(/** @type {ActionRowBuilder<TextInputBuilder>} */ (new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("score").setLabel("Final Score (e.g. 13-5)").setStyle(TextInputStyle.Short).setRequired(true))));
     await interaction.showModal(modal);
   } else if (action === "finalize") {
     if (scrim.host !== userId && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {

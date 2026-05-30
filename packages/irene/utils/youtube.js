@@ -134,7 +134,7 @@ async function checkGuildYoutubeFeeds(guild) {
       }
 
       // Check the most recent video
-      const latestVideo = feedData.items[0];
+      const latestVideo = /** @type {any} */ (feedData.items[0]);
       const videoId = latestVideo.id?.split("yt:video:")[1] || latestVideo.link?.split("v=")[1];
 
       // Only notify on new video

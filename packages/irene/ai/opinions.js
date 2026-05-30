@@ -73,6 +73,7 @@ function describeAge(ms) {
  * Record a new opinion. If an existing opinion covers the same topic, it's
  * updated instead of duplicated — and if the stance flipped, the previous
  * stance is preserved in `previousStance` so the bot can acknowledge growth.
+ * @param {{ topic?: string, stance?: string, reason?: string|null, strength?: number }} [args]
  */
 export async function recordOpinion({ topic, stance, reason = null, strength = 0.5 } = {}) {
   if (!topic || !stance) return { ok: false, error: "topic and stance required" };

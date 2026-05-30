@@ -63,8 +63,8 @@ async function _safeEditReply(interaction, payload) {
 
 async function _persistSetting(guildId, key, value) {
   try {
-    const r = setGuildSetting(guildId, key, value);
-    if (r && typeof r.then === "function") await r;
+    const r = /** @type {unknown} */ (setGuildSetting(guildId, key, value));
+    if (r && typeof (/** @type {any} */ (r).then) === "function") await r;
     return { ok: true };
   } catch (err) {
     log(`[SetupWizard] save failed for ${key}: ${err?.message || err}`);
@@ -74,8 +74,8 @@ async function _persistSetting(guildId, key, value) {
 
 async function _persistWelcomeChannel(guildId, channelId, message) {
   try {
-    const r = setWelcomeChannel(guildId, channelId, message);
-    if (r && typeof r.then === "function") await r;
+    const r = /** @type {unknown} */ (setWelcomeChannel(guildId, channelId, message));
+    if (r && typeof (/** @type {any} */ (r).then) === "function") await r;
     return { ok: true };
   } catch (err) {
     log(`[SetupWizard] save welcome failed: ${err?.message || err}`);
@@ -85,8 +85,8 @@ async function _persistWelcomeChannel(guildId, channelId, message) {
 
 async function _persistLogChannel(guildId, channelId) {
   try {
-    const r = setLogChannel(guildId, channelId);
-    if (r && typeof r.then === "function") await r;
+    const r = /** @type {unknown} */ (setLogChannel(guildId, channelId));
+    if (r && typeof (/** @type {any} */ (r).then) === "function") await r;
     return { ok: true };
   } catch (err) {
     log(`[SetupWizard] save modlog failed: ${err?.message || err}`);
@@ -272,7 +272,7 @@ function renderCategory(kind, guild) {
         .setMinValues(1)
         .setMaxValues(1);
     }
-    rows.push(new ActionRowBuilder().addComponents(picker));
+    rows.push(new ActionRowBuilder().addComponents(/** @type {any} */ (picker)));
   }
   if (page.extraButtons?.length) {
     rows.push(new ActionRowBuilder().addComponents(
