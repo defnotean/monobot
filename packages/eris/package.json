@@ -28,7 +28,7 @@
     "cheerio": "^1.2.0",
     "discord.js": "14.26.3",
     "dotenv": "^17.4.0",
-    "googleapis": "^171.4.0",
+    "googleapis": "^173.0.0",
     "voyageai": "0.2.1"
   },
   "devDependencies": {
