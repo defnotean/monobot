@@ -145,6 +145,10 @@ export function getWatches(guildId) {
   return Array.isArray(s.game_watches) ? s.game_watches : [];
 }
 
+/**
+ * @param {string} guildId
+ * @param {{ channelId: string, gameName: string, steamAppId?: string | number | null, rssUrl?: string | null, addedBy?: string }} watch
+ */
 export function addWatch(guildId, { channelId, gameName, steamAppId = null, rssUrl = null, addedBy }) {
   const watches = getWatches(guildId);
   const id = `gw_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;

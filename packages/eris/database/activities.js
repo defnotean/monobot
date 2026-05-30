@@ -178,6 +178,18 @@ async function _withBossLock(bossId, fn) {
 export async function damageBoss(bossId, userId, damage) {
   const supabase = getSupabase();
   if (!supabase) return null;
+  if (typeof supabase.rpc === "function") {
+    try {
+      const { data, error } = await supabase.rpc("eris_damage_boss", {
+        p_boss_id: String(bossId),
+        p_user_id: userId,
+        p_damage: damage,
+      });
+      if (!error && data) return Array.isArray(data) ? data[0] : data;
+    } catch (e) {
+      log(`[DB] damageBoss rpc fallback: ${e.message}`);
+    }
+  }
   return _withBossLock(bossId, async () => {
     try {
     const { data: boss } = await supabase.from("eris_boss_battles").select("*").eq("id", bossId).single();
@@ -408,7 +420,8 @@ export async function createAuction(sellerId, itemName, startingPrice, guildId, 
     // Capture the item's original category as we escrow it out, so refunds (here
     // or at no-bid expiry) restore it under its real type rather than a lifecycle
     // string. Fall back to "auction" if the row carried no type.
-    const itemType = (await removeFromInventory(sellerId, itemName)) || "auction";
+    const itemType = await removeFromInventory(sellerId, itemName);
+    if (!itemType) return null;
     const endsAt = new Date(Date.now() + durationMs).toISOString();
     const baseRow = { seller_id: sellerId, item_name: itemName, starting_price: startingPrice, current_bid: startingPrice, ends_at: endsAt, guild_id: guildId };
     // Persist item_type on the row (migration 005) so closeExpiredAuctions can
@@ -463,6 +476,7 @@ export async function bidOnAuction(auctionId, bidderId, amount) {
       try {
         const { data } = await sb.from("eris_auctions").select("*").eq("id", auctionId).single();
         if (!data || data.status !== "active" || amount <= data.current_bid) return false;
+        if (data.seller_id === bidderId) return false;
         const lastSeen = data.current_bid;
         const prevBidderId = data.current_bidder_id || null;
 

@@ -17,6 +17,13 @@ vi.mock("../../database.js", () => ({
     id: "boss-1", boss_name: "Goblin", boss_hp: 1000, max_hp: 1000, phase: 1, participants: {},
   })),
   getBalance: vi.fn(async (uid: string) => ({ balance: balances.get(uid) ?? 0 })),
+  tryDeductBalance: vi.fn(async (uid: string, amount: number) => {
+    const balance = balances.get(uid) ?? 0;
+    if (balance < amount) return { ok: false, reason: "insufficient", balance };
+    debited.push({ user: uid, delta: -amount });
+    balances.set(uid, balance - amount);
+    return { ok: true, newBalance: balance - amount };
+  }),
   updateBalance: vi.fn(async (uid: string, delta: number) => {
     debited.push({ user: uid, delta });
     balances.set(uid, (balances.get(uid) ?? 0) + delta);

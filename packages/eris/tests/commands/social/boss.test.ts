@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../../../database.js", () => ({
   getBalance: vi.fn(),
+  tryDeductBalance: vi.fn(),
   updateBalance: vi.fn(),
   getActiveBoss: vi.fn(),
   spawnBoss: vi.fn(),
@@ -45,7 +46,17 @@ import { execute } from "../../../commands/social/boss.js";
 const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
 describe("boss command", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.updateBalance.mockResolvedValue(0);
+    m.tryDeductBalance.mockImplementation(async (uid: string, amount: number, type: string, detail: string) => {
+      const wallet = await m.getBalance(uid);
+      const balance = wallet?.balance ?? 0;
+      if (balance < amount) return { ok: false, reason: "insufficient", balance };
+      await m.updateBalance(uid, -amount, type, detail);
+      return { ok: true, newBalance: balance - amount };
+    });
+  });
 
   it("rejects use outside a server (no guild)", async () => {
     const interaction: any = makeInteraction({ guild: null, subcommand: "status" });

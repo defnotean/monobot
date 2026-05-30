@@ -63,6 +63,7 @@ const AUDIT_LOG_TYPES = {
 const TOOL_PERMISSIONS = {
   create_invite: PermissionFlagsBits.CreateInstantInvite,
   list_invites: PermissionFlagsBits.ManageGuild,
+  invite_stats: PermissionFlagsBits.ManageGuild,
   delete_invite: PermissionFlagsBits.ManageGuild,
   set_server_settings: PermissionFlagsBits.ManageGuild,
   set_server_icon: PermissionFlagsBits.ManageGuild,
@@ -83,10 +84,10 @@ function getHeader(headers, name) {
 
 function imageTypeFromUrl(rawUrl) {
   let path = "";
-  try { path = new URL(rawUrl).pathname; }
+  try { path = new URL(String(rawUrl || "")).pathname; }
   catch { path = String(rawUrl).split("?")[0]; }
   const ext = path.toLowerCase().split(".").pop();
-  return IMAGE_EXT_TO_TYPE.get(ext) || null;
+  return IMAGE_EXT_TO_TYPE.get(ext || "") || null;
 }
 
 async function fetchServerIcon(url) {
@@ -116,6 +117,9 @@ async function fetchServerIcon(url) {
   if (!contentType || !ALLOWED_IMAGE_TYPES.has(contentType)) {
     throw new Error("image must be PNG, JPG, GIF, or WebP");
   }
+  if (!res.bytes) {
+    throw new Error("image download returned no bytes");
+  }
 
   return { bytes: res.bytes, contentType };
 }
@@ -134,6 +138,14 @@ export async function execute(toolName, input, message, ctx) {
     case "create_invite": {
       const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const actorPerms = ch.permissionsFor?.(message.member);
+      if (!actorPerms?.has?.(PermissionFlagsBits.ViewChannel) || !actorPerms?.has?.(PermissionFlagsBits.CreateInstantInvite)) {
+        return "You need View Channel and Create Invite in that channel.";
+      }
+      const botPerms = ch.permissionsFor?.(guild.members?.me);
+      if (!botPerms?.has?.(PermissionFlagsBits.ViewChannel) || !botPerms?.has?.(PermissionFlagsBits.CreateInstantInvite)) {
+        return "I need View Channel and Create Invite in that channel.";
+      }
       const invite = await ch.createInvite({
         maxUses: input.max_uses || 0,
         maxAge: input.max_age ?? 0,

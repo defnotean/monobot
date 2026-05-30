@@ -80,7 +80,7 @@ function imageTypeFromUrl(rawUrl) {
   try { path = new URL(rawUrl).pathname; }
   catch { path = String(rawUrl).split("?")[0]; }
   const ext = path.toLowerCase().split(".").pop();
-  return IMAGE_EXT_TO_TYPE.get(ext) || null;
+  return IMAGE_EXT_TO_TYPE.get(ext || "") || null;
 }
 
 async function fetchPersonalizationImage(imageUrl) {

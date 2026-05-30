@@ -31,6 +31,70 @@ export function getGrindingMultiplier() {
 
 export function isShopInflated() { return isModifierActive("inflation"); }
 
+function participants() {
+  if (!globalThis._eventParticipants) globalThis._eventParticipants = new Map();
+  return globalThis._eventParticipants;
+}
+
+export function registerCoinRainEvent(messageId, amount, ttlMs = 120_000) {
+  participants().set(`claim_${messageId}`, { amount, expiresAt: Date.now() + ttlMs, claimed: new Set() });
+}
+
+export function claimCoinRainEvent(messageId, userId, amount) {
+  const state = participants().get(`claim_${messageId}`);
+  if (!state || Date.now() > state.expiresAt) return { ok: false, reason: "expired" };
+  if (Number(amount) !== Number(state.amount)) return { ok: false, reason: "invalid" };
+  if (state.claimed.has(userId)) return { ok: false, reason: "duplicate" };
+  state.claimed.add(userId);
+  return { ok: true, amount: state.amount };
+}
+
+export function registerQuickDrawEvent(messageId, ttlMs = 30_000) {
+  participants().set(`quickdraw_${messageId}`, { expiresAt: Date.now() + ttlMs, claimedBy: null });
+}
+
+export function claimQuickDrawEvent(messageId, userId) {
+  const key = `quickdraw_${messageId}`;
+  const state = participants().get(key);
+  if (!state || Date.now() > state.expiresAt) return { ok: false, reason: "expired" };
+  if (state.claimedBy) return { ok: false, reason: "claimed" };
+  state.claimedBy = userId;
+  return { ok: true };
+}
+
+export function registerRollEvent(messageId, ttlMs = 60_000) {
+  participants().set(`roll_${messageId}`, { expiresAt: Date.now() + ttlMs, rolls: new Map() });
+}
+
+export function recordRollEvent(messageId, userId) {
+  const state = participants().get(`roll_${messageId}`);
+  if (!state || Date.now() > state.expiresAt) return { ok: false, reason: "expired" };
+  if (state.rolls.has(userId)) return { ok: false, reason: "duplicate", roll: state.rolls.get(userId) };
+  const roll = Math.floor(Math.random() * 100) + 1;
+  state.rolls.set(userId, roll);
+  return { ok: true, roll };
+}
+
+export async function finalizeRollEvent(messageId, channel, db) {
+  const key = `roll_${messageId}`;
+  const state = participants().get(key);
+  participants().delete(key);
+  const rolls = state?.rolls;
+  if (!rolls || rolls.size === 0) {
+    await channel?.send?.("🎲 nobody rolled... coins stay in the vault i guess").catch(() => {});
+    return { ok: false, reason: "empty" };
+  }
+  let best = { userId: null, roll: 0 };
+  for (const [uid, r] of rolls) {
+    if (r > best.roll) best = { userId: uid, roll: r };
+  }
+  if (best.userId && db) {
+    await db.updateBalance(best.userId, 500, "event_reward", "everyone_roll");
+    await channel?.send?.(`🏆 **<@${best.userId}> wins the roll with a ${best.roll}!** +500 coins`).catch(() => {});
+  }
+  return { ok: true, best };
+}
+
 const EVENTS = [
   // ── Positive ──
   {
@@ -45,9 +109,11 @@ const EVENTS = [
         new ButtonBuilder().setCustomId(`event_claim_${amount}`).setLabel(`Claim ${amount} coins`).setEmoji("💰").setStyle(ButtonStyle.Success)
       );
       const msg = await channel.send({ embeds: [embed], components: [row] });
+      registerCoinRainEvent(msg.id, amount, 120_000);
       // Auto-expire after 2 minutes
       setTimeout(async () => {
         try { await msg.edit({ components: [] }).catch(() => {}); } catch {}
+        participants().delete(`claim_${msg.id}`);
       }, 120_000);
       return { claimable: true, amount };
     },
@@ -146,6 +212,7 @@ const EVENTS = [
         new ButtonBuilder().setCustomId("event_quickdraw").setLabel("DRAW!").setEmoji("🎯").setStyle(ButtonStyle.Danger)
       );
       const msg = await channel.send({ embeds: [embed], components: [row] });
+      registerQuickDrawEvent(msg.id, 30_000);
       // Auto-expire after 30s if nobody clicked
       setTimeout(async () => {
         try {
@@ -156,6 +223,7 @@ const EVENTS = [
             await channel.send("🎯 nobody was fast enough... 300 coins go unclaimed");
           }
         } catch {}
+        participants().delete(`quickdraw_${msg.id}`);
       }, 30_000);
       return { interactive: true, reward: 300 };
     },
@@ -171,36 +239,16 @@ const EVENTS = [
         new ButtonBuilder().setCustomId("event_roll").setLabel("Roll d100").setEmoji("🎲").setStyle(ButtonStyle.Primary)
       );
       const msg = await channel.send({ embeds: [embed], components: [row] });
+      registerRollEvent(msg.id, 60_000);
 
       // Auto-end after 60 seconds — pick winner and pay out.
       // Atomically remove the entry FIRST so a duplicate-fire of this timeout
       // (extremely rare but possible if the event loop hiccups) can't double-pay.
       // The finally block guarantees cleanup even if msg.edit/send rejects.
       setTimeout(async () => {
-        const key = `roll_${msg.id}`;
-        let rolls = null;
-        if (globalThis._eventParticipants) {
-          rolls = globalThis._eventParticipants.get(key);
-          globalThis._eventParticipants.delete(key); // claim before pay
-        }
-
         try {
           await msg.edit({ components: [] }).catch(() => {});
-
-          if (!rolls || rolls.size === 0) {
-            await channel.send("🎲 nobody rolled... coins stay in the vault i guess").catch(() => {});
-            return;
-          }
-
-          let best = { userId: null, roll: 0 };
-          for (const [uid, r] of rolls) {
-            if (r > best.roll) best = { userId: uid, roll: r };
-          }
-
-          if (best.userId && db) {
-            await db.updateBalance(best.userId, 500, "event_reward", "everyone_roll");
-            await channel.send(`🏆 **<@${best.userId}> wins the roll with a ${best.roll}!** +500 coins`).catch(() => {});
-          }
+          await finalizeRollEvent(msg.id, channel, db);
         } catch (e) {
           log(`[EVENT] Roll payout error: ${e.message}`);
         }

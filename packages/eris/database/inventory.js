@@ -120,11 +120,29 @@ export async function removeFromInventory(userId, itemName) {
   const supabase = getSupabase();
   if (!supabase) return null;
   try {
-    const { data } = await supabase.from("eris_inventory").select("id, item_type").eq("user_id", userId).eq("item_name", itemName).limit(1).single();
-    if (data) {
-      await supabase.from("eris_inventory").delete().eq("id", data.id);
-      return data.item_type ?? null;
+    const { data: consumed, error: rpcErr } = await supabase.rpc("eris_consume_inventory_item", {
+      p_user_id: userId,
+      p_item_name: itemName,
+    });
+    if (!rpcErr) {
+      const row = Array.isArray(consumed) ? consumed[0] : consumed;
+      if (row) return row.item_type ?? "item";
     }
+    if (rpcErr && !(rpcErr.code === "PGRST202" || /Could not find the function|does not exist/i.test(rpcErr.message || ""))) {
+      throw new Error(rpcErr.message);
+    }
+    const { data } = await supabase.from("eris_inventory").select("id, item_type").eq("user_id", userId).eq("item_name", itemName).limit(1).single();
+    if (!data) return null;
+    const deleteQuery = supabase.from("eris_inventory").delete().eq("id", data.id);
+    if (typeof deleteQuery.select === "function") {
+      const { data: deleted, error: delErr } = await deleteQuery.select("item_type");
+      if (delErr) throw new Error(delErr.message);
+      if (!deleted?.length) return null;
+      return deleted[0].item_type ?? "item";
+    }
+    const { error: delErr } = await deleteQuery;
+    if (delErr) throw new Error(delErr.message);
+    return data.item_type ?? "item";
   } catch (e) { log(`[DB] ${e.message}`); }
   return null;
 }

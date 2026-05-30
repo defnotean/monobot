@@ -86,12 +86,14 @@
 // guard (ChannelType + setCreateVcChannel + findChannel), rate limiting,
 // aliasing, the unknown-tool fallback, and the shared `ctx` helpers it passes
 // to every sub-executor.
-import { ChannelType } from "discord.js";
+import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { setCreateVcChannel } from "../database.js";
 import config from "../config.js";
 import { checkToolRateLimit } from "@defnotean/shared/toolRateLimit";
 import { log } from "../utils/logger.js";
 import { TOOL_ALIASES } from "./toolAliases.js";
+import { ADMIN_TOOLS } from "./tools.js";
+import { isAdminMember } from "../utils/permissions.js";
 import { recordUnknownTool } from "./unknownTools.js";
 import {
   findMember,
@@ -167,6 +169,36 @@ const SUB_EXECUTORS = [
   executeInfo,
   executeWhitelist,
 ];
+const ADMIN_TOOL_NAMES = new Set(ADMIN_TOOLS.map((t) => t.name));
+const ADMIN_TOOL_PERMISSION_OVERRIDES = new Map([
+  ["ban_user", PermissionFlagsBits.BanMembers],
+  ["tempban", PermissionFlagsBits.BanMembers],
+  ["unban_user", PermissionFlagsBits.BanMembers],
+  ["kick_user", PermissionFlagsBits.KickMembers],
+  ["timeout_user", PermissionFlagsBits.ModerateMembers],
+  ["untimeout_user", PermissionFlagsBits.ModerateMembers],
+  ["warn_user", PermissionFlagsBits.ManageMessages],
+  ["remove_warning", PermissionFlagsBits.ManageMessages],
+  ["clear_warnings", PermissionFlagsBits.ManageMessages],
+  ["purge_messages", PermissionFlagsBits.ManageMessages],
+  ["delete_message", PermissionFlagsBits.ManageMessages],
+  ["pin_message", PermissionFlagsBits.ManageMessages],
+  ["unpin_message", PermissionFlagsBits.ManageMessages],
+  ["react_to_message", PermissionFlagsBits.AddReactions],
+  ["remove_reaction", PermissionFlagsBits.ManageMessages],
+  ["create_invite", PermissionFlagsBits.CreateInstantInvite],
+  ["delete_invite", PermissionFlagsBits.ManageGuild],
+  ["list_invites", PermissionFlagsBits.ManageGuild],
+  ["invite_stats", PermissionFlagsBits.ManageGuild],
+  ["list_bans", PermissionFlagsBits.BanMembers],
+  ["view_audit_log", PermissionFlagsBits.ViewAuditLog],
+]);
+
+function canAttemptAdminTool(toolName, member) {
+  if (isAdminMember(member)) return true;
+  const permission = ADMIN_TOOL_PERMISSION_OVERRIDES.get(toolName);
+  return Boolean(permission && member?.permissions?.has?.(permission));
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 // Member/channel/role lookups + the member-name index cache now live in
@@ -222,12 +254,12 @@ const _toolCache = new Map();
 const CACHE_TTL = 15_000; // 15 seconds
 const CACHEABLE_TOOLS = new Set([
   "recall_memories", "get_server_info", "get_user_info",
-  "list_channels", "list_roles", "get_role_permissions", "list_emojis",
-  "list_bans", "count_members", "who_has_role", "random_member",
+  "list_roles", "get_role_permissions", "list_emojis",
+  "count_members", "who_has_role", "random_member",
   "list_custom_commands", "list_auto_responders", "list_trusted_users",
-  "list_whitelist", "music_queue", "now_playing", "vc_info",
-  "get_birthday", "list_birthdays", "voice_leaderboard", "server_milestones",
-  "list_invites", "invite_stats", "list_members", "list_pins", "list_directives",
+  "list_whitelist", "music_queue", "now_playing",
+  "list_birthdays", "voice_leaderboard", "server_milestones",
+  "list_members", "list_directives",
 ]);
 const CACHE_INVALIDATING_TOOLS = new Set([
   "create_channel", "delete_channel", "nuke_channel", "rename_channel",
@@ -349,6 +381,11 @@ export async function executeTool(toolName, input, message, opts = {}) {
   if (TOOL_ALIASES[toolName]) {
     log(`[EXECUTOR] Auto-corrected tool: ${toolName} → ${TOOL_ALIASES[toolName]}`);
     toolName = TOOL_ALIASES[toolName];
+  }
+
+  if (ADMIN_TOOL_NAMES.has(toolName) && !canAttemptAdminTool(toolName, message?.member)) {
+    log(`[SECURITY] Blocked admin tool "${toolName}" for non-admin at executeTool boundary`);
+    return "only admins/mods can set or remove directives";
   }
 
   const userId = message?.author?.id;

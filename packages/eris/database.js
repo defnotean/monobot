@@ -289,6 +289,7 @@ export {
   createHeist,
   getActiveHeist,
   joinHeist,
+  claimHeistExecution,
   resolveHeist,
   createAuction,
   getActiveAuctions,

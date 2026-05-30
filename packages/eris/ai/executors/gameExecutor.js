@@ -220,7 +220,8 @@ export async function execute(toolName, input, message, _context) {
         // Atomic stake transfer: move the stake from loser to winner in one
         // locked operation instead of a credit-then-debit pair (which could
         // mint coins if the loser's debit failed after the winner was paid).
-        await db.transferBalance(loserId, winnerId, resolved.stake, 0, "duel_loss", `duel`);
+        const transfer = await db.transferBalance(loserId, winnerId, resolved.stake, 0, "duel_loss", `duel`);
+        if (!transfer.ok) return `duel couldn't settle because the loser couldn't pay: ${transfer.reason}`;
       }
       const guild = message.guild;
       const winnerName = guild?.members.cache.get(winnerId)?.displayName || "Winner";
@@ -308,9 +309,17 @@ export async function execute(toolName, input, message, _context) {
       if (existing) return `there's already an active boss: ${existing.boss_name} (${existing.boss_hp}/${existing.max_hp} HP)`;
       const { getRandomBoss } = await import("../stocks.js");
       const boss = getRandomBoss();
+      const debit = await db.tryDeductBalance(message.author.id, 500, "boss_spawn", boss.name);
+      if (!debit.ok) {
+        if (debit.reason === "insufficient") return "spawning a boss costs 500 coins";
+        return `couldn't spawn boss: ${debit.reason}`;
+      }
       const expiresAt = new Date(Date.now() + 2 * 3600_000).toISOString();
       const created = await db.createBossBattle(message.guild.id, `${boss.emoji} ${boss.name}`, boss.hp, expiresAt);
-      if (!created) return "couldn't spawn boss";
+      if (!created) {
+        await db.updateBalance(message.author.id, 500, "boss_spawn_refund", boss.name).catch(() => {});
+        return "couldn't spawn boss";
+      }
       return `**${boss.emoji} ${boss.name}** has appeared! HP: ${boss.hp} \u2014 attack it to deal damage (costs 10 coins per attack). defeats in 2 hours or it despawns!`;
     }
 
@@ -318,14 +327,22 @@ export async function execute(toolName, input, message, _context) {
       if (!message.guild) return "boss battles only work in servers";
       const boss = await db.getActiveBoss(message.guild.id);
       if (!boss) return "no active boss \u2014 spawn one first";
-      const econ = await db.getBalance(message.author.id);
-      if (econ.balance < 10) return "attacks cost 10 coins and you're broke";
-      await db.updateBalance(message.author.id, -10, "boss_attack", boss.boss_name);
+      const debit = await db.tryDeductBalance(message.author.id, 10, "boss_attack", boss.boss_name);
+      if (!debit.ok) {
+        if (debit.reason === "insufficient") return "attacks cost 10 coins and you're broke";
+        return `boss attack failed: ${debit.reason}`;
+      }
       const { calculateDamage } = await import("../stocks.js");
       const damage = calculateDamage();
       const result = await db.damageBoss(boss.id, message.author.id, damage);
-      if (!result) return "boss attack failed";
-      if (result.alreadyDead) return "the boss is already dead! someone else got the killing blow";
+      if (!result) {
+        await db.updateBalance(message.author.id, 10, "boss_attack_refund", boss.boss_name).catch(() => {});
+        return "boss attack failed";
+      }
+      if (result.alreadyDead) {
+        await db.updateBalance(message.author.id, 10, "boss_attack_refund", boss.boss_name).catch(() => {});
+        return "the boss is already dead! someone else got the killing blow";
+      }
       if (result.defeated) {
         const loot = Math.floor(boss.max_hp * 0.1);
         const participants = Object.entries(result.participants || {});

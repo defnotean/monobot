@@ -288,7 +288,7 @@ async function toGeminiHistory(history) {
                     }
 
                     const res = await safeFetch(url, { binary: true, maxBytes: 1_000_000, timeoutMs: 5000 });
-                    if (res.ok) {
+                    if (res.ok && res.bytes) {
                       parts.push({ inlineData: { mimeType: res.headers.get("content-type") || "image/png", data: Buffer.from(res.bytes).toString("base64") } });
                     } else {
                       parts.push({ text: "[image failed to load]" });

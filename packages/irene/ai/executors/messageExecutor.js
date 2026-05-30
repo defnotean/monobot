@@ -17,8 +17,8 @@ const HANDLED = new Set([
 function hasChannelPermission(channel, member, permission) {
   if (isGuildOwnerMember(member)) return true;
   const scoped = channel?.permissionsFor?.(member);
-  if (scoped?.has?.(PermissionFlagsBits.Administrator) || scoped?.has?.(permission)) return true;
-  return Boolean(member?.permissions?.has?.(PermissionFlagsBits.Administrator) || member?.permissions?.has?.(permission));
+  if (!scoped && typeof channel?.permissionsFor !== "function") return Boolean(member?.permissions?.has?.(PermissionFlagsBits.Administrator) || member?.permissions?.has?.(permission));
+  return Boolean(scoped?.has?.(PermissionFlagsBits.Administrator) || scoped?.has?.(permission));
 }
 
 function canReadChannel(channel, member) {
@@ -71,6 +71,12 @@ export async function execute(toolName, input, message, ctx) {
           ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
+        if (!canReadChannel(channel, message.member) || !hasChannelPermission(channel, message.member, PermissionFlagsBits.ManageMessages)) {
+          return "You need View Channel, Read Message History, and Manage Messages to delete bot messages there.";
+        }
+        if (!canReadChannel(channel, guild.members?.me) || !hasChannelPermission(channel, guild.members?.me, PermissionFlagsBits.ManageMessages)) {
+          return "I need View Channel, Read Message History, and Manage Messages there.";
+        }
         const target = await channel.messages.fetch(input.message_id).catch(() => null);
         if (!target) return `Couldn't find message ${input.message_id}`;
         if (target.author.id !== client.user.id) return "I can only delete my own messages";
@@ -267,6 +273,12 @@ export async function execute(toolName, input, message, ctx) {
           ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
+        if (!canReadChannel(channel, message.member) || !hasChannelPermission(channel, message.member, PermissionFlagsBits.AddReactions)) {
+          return "You need View Channel, Read Message History, and Add Reactions there.";
+        }
+        if (!canReadChannel(channel, guild.members?.me) || !hasChannelPermission(channel, guild.members?.me, PermissionFlagsBits.AddReactions)) {
+          return "I need View Channel, Read Message History, and Add Reactions there.";
+        }
 
         const target = await channel.messages.fetch(input.message_id);
         if (!target) return `Couldn't find message with ID ${input.message_id}`;
@@ -284,6 +296,12 @@ export async function execute(toolName, input, message, ctx) {
           ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
+        if (!canReadChannel(channel, message.member) || !hasChannelPermission(channel, message.member, PermissionFlagsBits.ManageMessages)) {
+          return "You need View Channel, Read Message History, and Manage Messages to remove reactions there.";
+        }
+        if (!canReadChannel(channel, guild.members?.me) || !hasChannelPermission(channel, guild.members?.me, PermissionFlagsBits.ManageMessages)) {
+          return "I need View Channel, Read Message History, and Manage Messages there.";
+        }
 
         const target = await channel.messages.fetch(input.message_id);
         if (!target) return `Couldn't find message with ID ${input.message_id}`;

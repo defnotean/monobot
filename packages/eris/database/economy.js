@@ -534,6 +534,11 @@ export async function getBankBalance(userId) {
   return { balance: 0, last_interest: null };
 }
 
+/**
+ * @param {string} userId
+ * @param {number} delta
+ * @param {{ maxBalance?: number | null }} [options]
+ */
 export async function updateBankBalance(userId, delta, { maxBalance = null } = {}) {
   const supabase = getSupabase();
   if (!Number.isFinite(delta) || !Number.isInteger(delta)) {
@@ -555,6 +560,7 @@ export async function updateBankBalance(userId, delta, { maxBalance = null } = {
           log(`[DB] eris_add_bank_balance RPC error: ${error.message} — falling back to non-atomic bank update for this call`);
         }
       } else if (Array.isArray(rows) && rows.length === 0) {
+        /** @type {Error & { code?: string }} */
         const err = new Error(delta < 0 ? "insufficient_bank" : "bank_full");
         err.code = err.message;
         throw err;
@@ -564,14 +570,16 @@ export async function updateBankBalance(userId, delta, { maxBalance = null } = {
         return Number(row.balance) || 0;
       }
     } catch (e) {
-      if (e?.code === "insufficient_bank" || e?.code === "bank_full") throw e;
-      log(`[DB] eris_add_bank_balance RPC threw: ${e.message} — falling back to non-atomic bank update for this call`);
+      const err = /** @type {Error & { code?: string }} */ (e);
+      if (err?.code === "insufficient_bank" || err?.code === "bank_full") throw err;
+      log(`[DB] eris_add_bank_balance RPC threw: ${err?.message || e} — falling back to non-atomic bank update for this call`);
     }
   }
 
   const current = await getBankBalance(userId);
   const newBal = Math.max(0, current.balance + delta);
-  if (Number.isFinite(maxBalance) && newBal > maxBalance) {
+  if (typeof maxBalance === "number" && Number.isFinite(maxBalance) && newBal > maxBalance) {
+    /** @type {Error & { code?: string }} */
     const err = new Error("bank_full");
     err.code = "bank_full";
     throw err;

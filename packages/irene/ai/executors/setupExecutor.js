@@ -32,8 +32,8 @@ function hasGuildPermission(member, permission) {
 function hasChannelPermission(channel, member, permission) {
   if (isGuildOwnerMember(member)) return true;
   const scoped = channel?.permissionsFor?.(member);
-  if (scoped?.has?.(PermissionFlagsBits.Administrator) || scoped?.has?.(permission)) return true;
-  return hasGuildPermission(member, permission);
+  if (!scoped && typeof channel?.permissionsFor !== "function") return hasGuildPermission(member, permission);
+  return Boolean(scoped?.has?.(PermissionFlagsBits.Administrator) || scoped?.has?.(permission));
 }
 
 function requireGuildPermission(guild, actor, permission, label) {
@@ -548,6 +548,14 @@ export async function execute(toolName, input, message, ctx) {
       const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}" — try the channel name or #mention.`;
       if (!ch.isTextBased?.()) return `#${ch.name} isn't a text channel.`;
+      if (!hasChannelPermission(ch, message.member, PermissionFlagsBits.ViewChannel)
+        || !hasChannelPermission(ch, message.member, PermissionFlagsBits.ReadMessageHistory)) {
+        return "You need View Channel and Read Message History to learn rules from that channel.";
+      }
+      if (!hasChannelPermission(ch, guild.members?.me, PermissionFlagsBits.ViewChannel)
+        || !hasChannelPermission(ch, guild.members?.me, PermissionFlagsBits.ReadMessageHistory)) {
+        return "I need View Channel and Read Message History in that channel.";
+      }
 
       // Pull last 50 messages — same as the slash-command flow.
       let messages;

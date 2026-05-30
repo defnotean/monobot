@@ -108,6 +108,9 @@ export async function executeEconomyTool(toolName, input, message) {
       // touch the balance. If the balance deduction later fails, we refund the
       // stock.
       let stockReserved = false;
+      const refundReservedStock = async () => {
+        if (stockReserved && item.id) await db.tryIncrementShopStock(item.id).catch(() => {});
+      };
       if (item.limited_stock !== null && item.limited_stock !== undefined) {
         const result = await db.tryDecrementShopStock(item.id);
         if (!result.ok) {
@@ -151,6 +154,7 @@ export async function executeEconomyTool(toolName, input, message) {
         if (!result.success) {
           // Refund if can't hire
           await db.updateBalance(message.author.id, item.price, "refund", item.name);
+          await refundReservedStock();
           return result.error;
         }
         await db.unlockAchievement(message.author.id, "first_purchase");
@@ -163,6 +167,7 @@ export async function executeEconomyTool(toolName, input, message) {
         const result = upgradeSlots(message.author.id);
         if (!result.success) {
           await db.updateBalance(message.author.id, item.price, "refund", item.name);
+          await refundReservedStock();
           return result.error;
         }
         await db.unlockAchievement(message.author.id, "first_purchase");
@@ -330,7 +335,7 @@ export async function executeEconomyTool(toolName, input, message) {
         const supabase = db.getSupabase();
         if (supabase) {
           const { data: rows } = await supabase
-            .from("irene_transactions")
+            .from("eris_transactions")
             .select("amount")
             .eq("user_id", userId)
             .like("type", "gamble%")
@@ -343,7 +348,7 @@ export async function executeEconomyTool(toolName, input, message) {
         const supabase = db.getSupabase();
         if (supabase) {
           const { data: rows } = await supabase
-            .from("irene_transactions")
+            .from("eris_transactions")
             .select("type")
             .eq("user_id", userId)
             .in("type", ["rob_success", "rob_fail", "rob_fine"])
@@ -356,7 +361,7 @@ export async function executeEconomyTool(toolName, input, message) {
         const supabase = db.getSupabase();
         if (supabase) {
           const { data: rows } = await supabase
-            .from("irene_transactions")
+            .from("eris_transactions")
             .select("amount")
             .eq("user_id", userId)
             .gt("amount", 0)

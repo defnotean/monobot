@@ -21,6 +21,7 @@ function buildHarness(memberPermissions: bigint[] = []) {
   const guild = makeGuild({
     channels: [channel],
     ownerId: "owner",
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.CreateInstantInvite],
   });
   guild.invites = { fetch: vi.fn(async () => new Collection()) };
   guild.edit = vi.fn(async () => {});
@@ -34,6 +35,10 @@ function buildHarness(memberPermissions: bigint[] = []) {
     permissions: memberPermissions,
   });
   guild.members.cache.set(member.id, member);
+  channel.permissionsFor = vi.fn((who: any) => {
+    if (who?.id === guild.members.me.id) return makePermissions([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.CreateInstantInvite]);
+    return makePermissions(memberPermissions);
+  });
   const message = {
     guild,
     member,
@@ -63,7 +68,7 @@ describe("serverExecutor security gates", () => {
   });
 
   it("allows create_invite with the exact Discord permission", async () => {
-    const { channel, message, ctx } = buildHarness([PermissionFlagsBits.CreateInstantInvite]);
+    const { channel, message, ctx } = buildHarness([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.CreateInstantInvite]);
 
     const result = await execute("create_invite", { channel_name: "general", max_uses: 1 }, message, ctx);
 

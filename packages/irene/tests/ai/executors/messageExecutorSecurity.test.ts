@@ -83,4 +83,17 @@ describe("messageExecutor security gates", () => {
     expect(result).toMatch(/Create Public Threads/i);
     expect((channel as any).threads.create).not.toHaveBeenCalled();
   });
+
+  it("honors explicit channel overwrite denies over guild-level permissions", async () => {
+    const { channel, message, ctx } = harness({
+      memberPerms: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+      channelPerms: [],
+      botPerms: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+    });
+
+    const result = await execute("send_message", { channel_name: "private", content: "nope" }, message as any, ctx as any);
+
+    expect(result).toMatch(/View Channel and Send Messages/i);
+    expect(channel.send).not.toHaveBeenCalled();
+  });
 });

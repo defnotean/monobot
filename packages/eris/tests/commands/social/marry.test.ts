@@ -8,7 +8,7 @@ vi.mock("../../../database.js", () => ({
   hasItem: vi.fn(),
 }));
 
-import { makeInteraction, makeUser, getLastReplyContent } from "../../_helpers/mockDiscord.js";
+import { makeInteraction, makeUser, getLastReply, getLastReplyContent } from "../../_helpers/mockDiscord.js";
 import * as db from "../../../database.js";
 import { execute } from "../../../commands/social/marry.js";
 
@@ -94,7 +94,7 @@ describe("marry command", () => {
     expect(m.createMarriage).not.toHaveBeenCalled();
   });
 
-  it("charges 500 coins, creates the marriage, and announces it", async () => {
+  it("posts a target-only consent prompt instead of marrying immediately", async () => {
     setHappyPath();
     const interaction: any = makeInteraction({
       user: makeUser({ id: "x", username: "alice" }),
@@ -102,8 +102,12 @@ describe("marry command", () => {
     });
     await execute(interaction);
 
-    expect(m.updateBalance).toHaveBeenCalledWith("x", -500, "marriage", "married bob");
-    expect(m.createMarriage).toHaveBeenCalledWith("x", "y");
-    expect(getLastReplyContent(interaction)).toMatch(/\*\*alice\*\* and \*\*bob\*\* are now married/);
+    expect(m.updateBalance).not.toHaveBeenCalled();
+    expect(m.createMarriage).not.toHaveBeenCalled();
+    expect(getLastReplyContent(interaction)).toMatch(/proposed/i);
+    expect(getLastReply(interaction)?.payload.components?.[0]?.components?.map((c: any) => c.data.custom_id)).toEqual([
+      "marry_accept_x_y",
+      "marry_decline_x_y",
+    ]);
   });
 });

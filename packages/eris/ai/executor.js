@@ -252,6 +252,7 @@ export function validateToolAliases(registry = _toolRegistryNames, opts = {}) {
 const _toolRegistryNames = new Set(
   [...EVERYONE_TOOLS, ...OWNER_TOOLS].map((t) => t.name)
 );
+const _ownerToolNames = new Set(OWNER_TOOLS.map((t) => t.name));
 
 // Boot-time audit. Throws on drift unless ERIS_SKIP_ALIAS_VALIDATION=1 is set,
 // which is the escape hatch for test runs that need to import the module
@@ -363,6 +364,10 @@ export async function executeTool(toolName, input, message) {
   toolName = resolution.name;
 
   const userId = message?.author?.id;
+  if (_ownerToolNames.has(toolName) && userId !== config.ownerId) {
+    log(`[SECURITY] Blocked owner tool "${toolName}" for non-owner ${userId || "unknown"}`);
+    return "owner-only tool";
+  }
 
   // Per-user rate limiting on expensive tools
   if (userId) {

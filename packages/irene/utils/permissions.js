@@ -22,9 +22,9 @@ export function isAdminOrOwner(interaction) {
 // the upstream `isAdmin` flag passed into runGeminiChat.
 export function isAdminMember(member) {
   if (!member) return false;
-  if (member.id === member.guild.ownerId) return true;
+  if (member.guild?.ownerId && member.id === member.guild.ownerId) return true;
   if (member.permissions?.has?.(PermissionFlagsBits.Administrator) || member.permissions?.has?.(PermissionFlagsBits.ManageGuild)) return true;
-  if (getTrustedUsers(member.guild.id).includes(member.id)) return true;
+  if (member.guild?.id && getTrustedUsers(member.guild.id).includes(member.id)) return true;
   return false;
 }
 

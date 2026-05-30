@@ -100,6 +100,45 @@ async function handleGameButton(interaction) {
   const userId = interaction.user.id;
   const channelId = interaction.channel.id;
 
+  if (id.startsWith("marry_accept_") || id.startsWith("marry_decline_")) {
+    const [, action, proposerId, targetId] = id.split("_");
+    if (userId !== targetId) return interaction.reply({ content: "this proposal isn't for you", flags: MessageFlags.Ephemeral });
+    if (action === "decline") {
+      return interaction.update({ content: "proposal declined", components: [], embeds: [] });
+    }
+
+    const [proposerMarriage, targetMarriage, proposerBal, targetBal, hasRing] = await Promise.all([
+      db.getMarriage(proposerId),
+      db.getMarriage(targetId),
+      db.getBalance(proposerId),
+      db.getBalance(targetId),
+      db.hasItem(proposerId, "Wedding Ring"),
+    ]);
+    if (proposerMarriage || targetMarriage) return interaction.update({ content: "proposal expired: one of you is already married", components: [], embeds: [] });
+    if (!hasRing) return interaction.update({ content: "proposal expired: the proposer no longer has a Wedding Ring", components: [], embeds: [] });
+    if (proposerBal.balance < 500 || targetBal.balance < 500) return interaction.update({ content: "proposal expired: both users need 500 coins", components: [], embeds: [] });
+
+    const ringType = await db.removeFromInventory(proposerId, "Wedding Ring");
+    if (!ringType) return interaction.update({ content: "proposal expired: the Wedding Ring was already used", components: [], embeds: [] });
+
+    const proposerDebit = await db.tryDeductBalance(proposerId, 500, "marriage", `married ${targetId}`);
+    if (!proposerDebit.ok) {
+      await db.addToInventory(proposerId, "Wedding Ring", ringType).catch(() => {});
+      return interaction.update({ content: "proposal expired: proposer can't pay anymore", components: [], embeds: [] });
+    }
+    const targetDebit = await db.tryDeductBalance(targetId, 500, "marriage", `married ${proposerId}`);
+    if (!targetDebit.ok) {
+      await db.updateBalance(proposerId, 500, "marriage_refund", targetId).catch(() => {});
+      await db.addToInventory(proposerId, "Wedding Ring", ringType).catch(() => {});
+      return interaction.update({ content: "proposal expired: you can't pay anymore", components: [], embeds: [] });
+    }
+
+    await db.createMarriage(proposerId, targetId);
+    if (!await db.hasAchievement(proposerId, "just_married")) await db.unlockAchievement(proposerId, "just_married");
+    if (!await db.hasAchievement(targetId, "just_married")) await db.unlockAchievement(targetId, "just_married");
+    return interaction.update({ content: `💍 <@${proposerId}> and <@${targetId}> are now married! +10% coin bonus for both`, components: [], embeds: [] });
+  }
+
   // ── Blackjack buttons ─────────────────────────────────────────────────
   // Two-layer defense against rapid-click double-spend:
   //   1. _inflightGameKeys reject the second click immediately so it never
@@ -485,7 +524,10 @@ async function handleGameButton(interaction) {
         const { data: rows } = await query;
         progress = type === "rob_attempt"
           ? (rows || []).length
-          : (rows || []).reduce((sum, r) => sum + (type === "total_wagered" ? Math.abs(r.amount) : r.amount), 0);
+          : (rows || []).reduce((sum, r) => {
+              const amount = "amount" in r ? Number(r.amount) || 0 : 0;
+              return sum + (type === "total_wagered" ? Math.abs(amount) : amount);
+            }, 0);
       }
       verified = progress >= target;
     }
@@ -700,13 +742,13 @@ async function handleGameButton(interaction) {
 
   if (id.startsWith("event_claim_")) {
     const msgId = interaction.message.id;
-    const key = `claim_${msgId}`;
-    if (!globalThis._eventParticipants.has(key)) globalThis._eventParticipants.set(key, new Set());
-    const participants = globalThis._eventParticipants.get(key);
-    if (participants.has(userId)) return interaction.reply({ content: "you already claimed this", flags: MessageFlags.Ephemeral });
-    participants.add(userId);
     const amount = parseInt(id.replace("event_claim_", ""));
-    if (!amount) return interaction.reply({ content: "invalid event", flags: MessageFlags.Ephemeral });
+    const { claimCoinRainEvent } = await import("../ai/randomEvents.js");
+    const claim = claimCoinRainEvent(msgId, userId, amount);
+    if (!claim.ok) {
+      const msg = claim.reason === "duplicate" ? "you already claimed this" : "this event is expired";
+      return interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
+    }
     await db.updateBalance(userId, amount, "event_reward", "coin_rain");
     return interaction.reply({ content: `💰 <@${userId}> claimed **${amount}** coins from the coin rain!` });
   }
@@ -714,12 +756,11 @@ async function handleGameButton(interaction) {
   if (id === "event_quickdraw") {
     // Claim BEFORE the async balance call so two simultaneous clicks can't
     // both pass the claim check and both get paid the 300-coin prize.
-    const qdKey = `quickdraw_${interaction.message.id}`;
-    if (!globalThis._eventParticipants) globalThis._eventParticipants = new Map();
-    if (globalThis._eventParticipants.has(qdKey)) {
+    const { claimQuickDrawEvent } = await import("../ai/randomEvents.js");
+    const claim = claimQuickDrawEvent(interaction.message.id, userId);
+    if (!claim.ok) {
       return interaction.reply({ content: "too slow — someone already drew first", flags: MessageFlags.Ephemeral });
     }
-    globalThis._eventParticipants.set(qdKey, userId);
 
     await db.updateBalance(userId, 300, "event_reward", "quick_draw");
     await interaction.update({ components: [] }).catch(() => {});
@@ -728,26 +769,19 @@ async function handleGameButton(interaction) {
 
   if (id === "event_roll") {
     const msgId = interaction.message.id;
-    const key = `roll_${msgId}`;
-    if (!globalThis._eventParticipants.has(key)) globalThis._eventParticipants.set(key, new Map());
-    const rolls = globalThis._eventParticipants.get(key);
-    if (rolls.has(userId)) return interaction.reply({ content: `you already rolled a **${rolls.get(userId)}**, one roll per person`, flags: MessageFlags.Ephemeral });
-    const roll = Math.floor(Math.random() * 100) + 1;
-    rolls.set(userId, roll);
+    const { finalizeRollEvent, recordRollEvent } = await import("../ai/randomEvents.js");
+    const recorded = recordRollEvent(msgId, userId);
+    if (recorded.reason === "duplicate") return interaction.reply({ content: `you already rolled a **${recorded.roll}**, one roll per person`, flags: MessageFlags.Ephemeral });
+    if (!recorded.ok) return interaction.reply({ content: "🎲 this roll event already ended", flags: MessageFlags.Ephemeral });
+    const roll = recorded.roll;
     // Check if 60 seconds passed since the event message was sent
     const msgTime = interaction.message.createdTimestamp;
     const elapsed = Date.now() - msgTime;
     if (elapsed > 60_000) {
-      // Time's up — find the winner
-      let best = { userId: null, roll: 0 };
-      for (const [uid, r] of rolls) {
-        if (r > best.roll) best = { userId: uid, roll: r };
-      }
-      if (best.userId) {
-        await db.updateBalance(best.userId, 500, "event_reward", "everyone_roll");
-        await interaction.update({ components: [] });
-        return interaction.followUp({ content: `🎲 <@${userId}> rolled **${roll}**!\n\n🏆 **<@${best.userId}> wins with a ${best.roll}!** +500 coins` });
-      }
+      await interaction.update({ components: [] });
+      const result = await finalizeRollEvent(msgId, interaction.channel, db);
+      if (result.ok) return interaction.followUp({ content: `🎲 <@${userId}> rolled **${roll}**!` });
+      return interaction.followUp({ content: "🎲 this roll event already ended" });
     }
     return interaction.reply({ content: `🎲 <@${userId}> rolled **${roll}**!` });
   }
@@ -829,6 +863,9 @@ async function handleGameButton(interaction) {
     const parts = id.split("_"); // activity_event_dig_cave_enter_userId
     const eventUserId = parts[parts.length - 1];
     if (userId !== eventUserId) return interaction.reply({ content: "this event isn't for you", flags: MessageFlags.Ephemeral });
+    if (Date.now() - (interaction.message?.createdTimestamp || 0) > 30 * 60_000) {
+      return interaction.reply({ content: "this event expired", flags: MessageFlags.Ephemeral });
+    }
 
     const eventKey = `activity:${interaction.message?.id || id}:${userId}`;
     if (_claimedActivityEvents.has(eventKey)) {
@@ -1037,6 +1074,10 @@ async function handleSelectMenu(interaction) {
     const allItems = getItemsForCategory(catKey);
     const item = allItems.find(i => i.name.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 40) === safeItemId);
     if (!item) return interaction.reply({ content: "item not found", flags: MessageFlags.Ephemeral });
+    const dbCatalog = await db.getShopItems(interaction.guild?.id);
+    const stockItem = dbCatalog.find(i => String(i.name || "").toLowerCase() === item.name.toLowerCase());
+    const stockItemId = stockItem?.id || item.id;
+    const limitedStock = stockItem?.limited_stock ?? item.limited_stock;
 
     // Fetch user state
     const [wallet, inv, pet] = await Promise.all([db.getBalance(userId), db.getInventory(userId), db.getPet(userId)]);
@@ -1065,8 +1106,22 @@ async function handleSelectMenu(interaction) {
     // Atomic balance check + deduct — inside a single lock so two rapid
     // clicks can't both pass the "have enough" check before either debit
     // lands, letting the user walk away with 2 items for the price of 1.
+    let stockReserved = false;
+    if (stockItemId && limitedStock !== null && limitedStock !== undefined) {
+      const stock = await db.tryDecrementShopStock(stockItemId);
+      if (!stock.ok) {
+        return interaction.reply({ content: stock.reason === "sold_out" ? "❌ That item is sold out" : `❌ couldn't reserve stock: ${stock.reason}`, flags: MessageFlags.Ephemeral });
+      }
+      stockReserved = true;
+    }
+
+    const refundStock = async () => {
+      if (stockReserved && stockItemId) await db.tryIncrementShopStock(stockItemId).catch(() => {});
+    };
+
     const deduct = await db.tryDeductBalance(userId, item.price, "shop_purchase", item.name);
     if (!deduct.ok) {
+      await refundStock();
       if (deduct.reason === "insufficient") {
         return interaction.reply({ content: `❌ **${item.name}** costs **${item.price.toLocaleString()}** coins — you have **${deduct.balance.toLocaleString()}**`, flags: MessageFlags.Ephemeral });
       }
@@ -1094,6 +1149,7 @@ async function handleSelectMenu(interaction) {
       const result = hireMinion(userId, item.minionType);
       if (!result.success) {
         await db.updateBalance(userId, item.price, "refund", item.name);
+        await refundStock();
         return interaction.reply({ content: `❌ ${result.error}`, flags: MessageFlags.Ephemeral });
       }
       const newBal = (await db.getBalance(userId)).balance;
@@ -1106,6 +1162,7 @@ async function handleSelectMenu(interaction) {
       const result = upgradeSlots(userId);
       if (!result.success) {
         await db.updateBalance(userId, item.price, "refund", item.name);
+        await refundStock();
         return interaction.reply({ content: `❌ ${result.error}`, flags: MessageFlags.Ephemeral });
       }
       const newBal = (await db.getBalance(userId)).balance;

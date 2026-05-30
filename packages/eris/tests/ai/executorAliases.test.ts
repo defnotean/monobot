@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error JS module without types
-import { TOOL_ALIASES, resolveToolName, validateToolAliases } from "../../ai/executor.js";
+import { TOOL_ALIASES, executeTool, resolveToolName, validateToolAliases } from "../../ai/executor.js";
 // @ts-expect-error JS module without types
 import { EVERYONE_TOOLS, OWNER_TOOLS } from "../../ai/tools.js";
 
@@ -83,5 +83,15 @@ describe("executor alias resolution + registry validation", () => {
     // crash at boot, but this test also fails first which is a friendlier signal.
     const realRegistry = new Set([...EVERYONE_TOOLS, ...OWNER_TOOLS].map((t: any) => t.name));
     expect(validateToolAliases(realRegistry, { throwOnDrift: false })).toEqual([]);
+  });
+
+  it("blocks owner-only tools at the central executor boundary for non-owners", async () => {
+    const result = await executeTool("execute_terminal", { command: "echo no" }, {
+      author: { id: "111111111111111111" },
+      guild: { id: "guild-1" },
+      channel: { id: "channel-1" },
+    } as any);
+
+    expect(String(result)).toMatch(/owner-only/i);
   });
 });

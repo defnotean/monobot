@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder , MessageFlags } from "discord.js";
-import { getBalance, updateBalance, getActiveBoss, spawnBoss, damageBoss, getPetBattleStats } from "../../database.js";
+import { updateBalance, tryDeductBalance, getActiveBoss, spawnBoss, damageBoss, getPetBattleStats } from "../../database.js";
 import { bossEmbed } from "../../ai/gameVisuals.js";
 import { getRandomBoss, calculateDamage } from "../../ai/stocks.js";
 
@@ -20,13 +20,17 @@ export async function execute(interaction) {
     const existing = await getActiveBoss(guildId);
     if (existing) return interaction.reply({ content: `there's already an active boss: **${existing.boss_name}** (${existing.boss_hp}/${existing.max_hp} HP)`, flags: MessageFlags.Ephemeral });
 
-    const wallet = await getBalance(userId);
-    if (wallet.balance < 500) return interaction.reply({ content: "spawning a boss costs 500 coins", flags: MessageFlags.Ephemeral });
-
     const boss = getRandomBoss();
-    await updateBalance(userId, -500, "boss_spawn", boss.name);
+    const debit = await tryDeductBalance(userId, 500, "boss_spawn", boss.name);
+    if (!debit.ok) {
+      const content = debit.reason === "insufficient" ? "spawning a boss costs 500 coins" : `failed to spawn boss: ${debit.reason}`;
+      return interaction.reply({ content, flags: MessageFlags.Ephemeral });
+    }
     const spawned = await spawnBoss(guildId, boss.name, boss.emoji, boss.hp, boss.phases, boss.lootMultiplier);
-    if (!spawned) return interaction.reply({ content: "failed to spawn boss — try again", flags: MessageFlags.Ephemeral });
+    if (!spawned) {
+      await updateBalance(userId, 500, "boss_spawn_refund", boss.name).catch(() => {});
+      return interaction.reply({ content: "failed to spawn boss — try again", flags: MessageFlags.Ephemeral });
+    }
 
     const { embed, row } = bossEmbed(boss.name, boss.emoji, boss.hp, boss.hp, null, null);
     embed.setDescription(`${embed.data.description}\n\n**${interaction.user.username}** summoned this boss!\nAttack with \`/boss attack\` (10 coins per swing)`);
@@ -37,10 +41,11 @@ export async function execute(interaction) {
     const boss = await getActiveBoss(guildId);
     if (!boss) return interaction.reply({ content: "no active boss — use `/boss spawn` to summon one", flags: MessageFlags.Ephemeral });
 
-    const wallet = await getBalance(userId);
-    if (wallet.balance < 10) return interaction.reply({ content: "attacking costs 10 coins", flags: MessageFlags.Ephemeral });
-
-    await updateBalance(userId, -10, "boss_attack", boss.boss_name);
+    const debit = await tryDeductBalance(userId, 10, "boss_attack", boss.boss_name);
+    if (!debit.ok) {
+      const content = debit.reason === "insufficient" ? "attacking costs 10 coins" : `attack failed: ${debit.reason}`;
+      return interaction.reply({ content, flags: MessageFlags.Ephemeral });
+    }
 
     // Calculate damage with pet bonus
     const pet = await getPetBattleStats(userId);
@@ -50,8 +55,14 @@ export async function execute(interaction) {
     const isCrit = totalDamage > baseDamage * 1.5;
 
     const result = await damageBoss(boss.id, userId, totalDamage);
-    if (!result) return interaction.reply({ content: "something went wrong", flags: MessageFlags.Ephemeral });
-    if (result.alreadyDead) return interaction.reply({ content: "that boss is already defeated!", flags: MessageFlags.Ephemeral });
+    if (!result) {
+      await updateBalance(userId, 10, "boss_attack_refund", boss.boss_name).catch(() => {});
+      return interaction.reply({ content: "something went wrong", flags: MessageFlags.Ephemeral });
+    }
+    if (result.alreadyDead) {
+      await updateBalance(userId, 10, "boss_attack_refund", boss.boss_name).catch(() => {});
+      return interaction.reply({ content: "that boss is already defeated!", flags: MessageFlags.Ephemeral });
+    }
 
     // Phase change notifications
     const oldPhase = boss.phase || 1;

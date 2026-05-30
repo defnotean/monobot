@@ -26,6 +26,11 @@ function roleHasDangerousPerm(role) {
   return DANGEROUS_PERMS.some((perm) => role.permissions?.has?.(perm));
 }
 
+/**
+ * @param {any} guild
+ * @param {any} role
+ * @param {{ actor?: any, actionLabel?: string, requireActorManageRoles?: boolean }} [options]
+ */
 export function validateAssignableRole(guild, role, { actor = null, actionLabel = "Custom commands", requireActorManageRoles = false } = {}) {
   if (!role) return "Couldn't find that role";
   if (role.id === guild.id) return `${actionLabel} can't manage @everyone.`;
@@ -50,6 +55,11 @@ export function validateAssignableRole(guild, role, { actor = null, actionLabel 
   return null;
 }
 
+/**
+ * @param {any} guild
+ * @param {Record<string, any>} command
+ * @param {{ actor?: any, findRole?: Function }} [options]
+ */
 function validateCommandRoles(guild, command, { actor = null, findRole } = {}) {
   for (const key of ["role_to_give", "role_to_remove"]) {
     if (!command[key]) continue;

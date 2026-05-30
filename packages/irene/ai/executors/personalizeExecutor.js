@@ -28,10 +28,10 @@ function getHeader(headers, name) {
 
 function imageTypeFromUrl(rawUrl) {
   let path = "";
-  try { path = new URL(rawUrl).pathname; }
+  try { path = new URL(String(rawUrl || "")).pathname; }
   catch { path = String(rawUrl).split("?")[0]; }
   const ext = path.toLowerCase().split(".").pop();
-  return IMAGE_EXT_TO_TYPE.get(ext) || null;
+  return IMAGE_EXT_TO_TYPE.get(ext || "") || null;
 }
 
 async function fetchPersonalizationImage(imageUrl) {
@@ -62,6 +62,9 @@ async function fetchPersonalizationImage(imageUrl) {
     : imageTypeFromUrl(res.url) || imageTypeFromUrl(imageUrl);
   if (!contentType || !ALLOWED_IMAGE_TYPES.has(contentType)) {
     throw new Error("Image must be PNG, JPG, GIF, or WebP.");
+  }
+  if (!res.bytes) {
+    throw new Error("Image download returned no bytes.");
   }
 
   return { bytes: res.bytes, contentType };

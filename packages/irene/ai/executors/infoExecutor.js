@@ -53,17 +53,22 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "list_channels": {
-      const cats = guild.channels.cache.filter((c) => c.type === ChannelType.GuildCategory).sort((a, b) => a.position - b.position);
+      const canView = (ch) => ch.permissionsFor?.(message.member)?.has?.(PermissionFlagsBits.ViewChannel)
+        || message.member?.permissions?.has?.(PermissionFlagsBits.Administrator)
+        || message.member?.id === guild.ownerId;
+      const cats = guild.channels.cache
+        .filter((c) => c.type === ChannelType.GuildCategory && canView(c))
+        .sort((a, b) => a.position - b.position);
       const lines = [];
       for (const cat of cats.values()) {
         lines.push(`📁 ${cat.name} [id:${cat.id}]`);
-        const children = guild.channels.cache.filter((c) => c.parentId === cat.id).sort((a, b) => a.position - b.position);
+        const children = guild.channels.cache.filter((c) => c.parentId === cat.id && canView(c)).sort((a, b) => a.position - b.position);
         for (const ch of children.values()) {
           const prefix = ch.type === ChannelType.GuildVoice ? "🔊" : "#";
           lines.push(`  ${prefix} ${ch.name} [id:${ch.id}]`);
         }
       }
-      const orphans = guild.channels.cache.filter((c) => !c.parentId && c.type !== ChannelType.GuildCategory);
+      const orphans = guild.channels.cache.filter((c) => !c.parentId && c.type !== ChannelType.GuildCategory && canView(c));
       for (const ch of orphans.values()) {
         const prefix = ch.type === ChannelType.GuildVoice ? "🔊" : "#";
         lines.push(`${prefix} ${ch.name} [id:${ch.id}]`);
@@ -154,6 +159,11 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "list_bans": {
+      const canViewBans = message.member?.permissions?.has?.(PermissionFlagsBits.BanMembers)
+        || message.member?.permissions?.has?.(PermissionFlagsBits.ViewAuditLog)
+        || message.member?.permissions?.has?.(PermissionFlagsBits.Administrator)
+        || message.member?.id === guild.ownerId;
+      if (!canViewBans) return "You need Ban Members or View Audit Log to list bans.";
       const bans = await guild.bans.fetch({ limit: 50 });
       if (!bans.size) return "No banned users";
       return bans.map((b) => `${b.user.tag} — ${b.reason || "No reason"}`).join("\n");

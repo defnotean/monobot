@@ -265,7 +265,7 @@ export async function executeSocialTool(toolName, input, message) {
       return db.withUserLock(userId, async () => {
         const has = await db.hasItem(userId, "Loot Box");
         if (!has) return "you don't have a loot box. buy one from the shop (200 coins)";
-        await db.removeFromInventory(userId, "Loot Box");
+        if (!await db.removeFromInventory(userId, "Loot Box")) return "you don't have a loot box. buy one from the shop (200 coins)";
 
         const drop = weightedRandom(LOOTBOX_DROPS);
         if (drop.type === "coins") {
@@ -298,7 +298,7 @@ export async function executeSocialTool(toolName, input, message) {
         let consumed = 0;
         try {
           for (let i = 0; i < toOpen; i++) {
-            await db.removeFromInventory(userId, "Loot Box");
+            if (!await db.removeFromInventory(userId, "Loot Box")) throw new Error("loot box was already consumed");
             consumed++;
           }
         } catch (err) {
@@ -472,15 +472,7 @@ export async function executeSocialTool(toolName, input, message) {
         const hasRing = await db.hasItem(userId, "Wedding Ring");
         if (!hasRing) return "you need a Wedding Ring from the shop first (500 coins)";
 
-        await db.updateBalance(userId, -500, "marriage", `married ${targetId}`);
-        await db.updateBalance(targetId, -500, "marriage", `married ${userId}`);
-        await db.removeFromInventory(userId, "Wedding Ring");
-        await db.createMarriage(userId, targetId);
-
-        if (!await db.hasAchievement(userId, "just_married")) await db.unlockAchievement(userId, "just_married");
-        if (!await db.hasAchievement(targetId, "just_married")) await db.unlockAchievement(targetId, "just_married");
-
-        return `you and <@${targetId}> are now married! both get +10% coin earnings`;
+        return `marriage needs consent now. use /marry so <@${targetId}> can accept or decline with buttons`;
       });
     }
 
@@ -543,7 +535,7 @@ export async function executeSocialTool(toolName, input, message) {
         if (missing.length) return `missing ingredients: ${missing.join(", ")}`;
 
         for (const ing of recipeData.ingredients) {
-          await db.removeFromInventory(userId, ing);
+          if (!await db.removeFromInventory(userId, ing)) return `missing ingredient: ${ing}`;
         }
         await db.addToInventory(userId, itemName, "crafted");
         await db.addDiscoveredRecipe(userId, itemName);
