@@ -34,6 +34,8 @@ let _state = null;
 let _loadPromise = null;
 let _saveTimer = null;
 let _tickInProgress = false;
+let _stockRpcAvailable = true;
+let _portfolioTableAvailable = true;
 const MAX_POSITION_VALUE = 1e12; // Cap holdings × price to stay well under MAX_SAFE_INTEGER
 
 function _freshState() {
@@ -118,6 +120,62 @@ function _scheduleSave() {
   }, 2000);
 }
 
+function _isMissingDbObject(error) {
+  return error?.code === "PGRST202" || error?.code === "42P01" || /Could not find|does not exist|schema cache/i.test(error?.message || "");
+}
+
+function _normalizePortfolioRows(rows) {
+  const portfolio = {};
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const sym = String(row?.symbol || "").toUpperCase();
+    const shares = Math.floor(Number(row?.shares) || 0);
+    if (/^[A-Z0-9_]{1,16}$/.test(sym) && shares > 0) portfolio[sym] = shares;
+  }
+  return portfolio;
+}
+
+async function _getPortfolioFromDb(userId) {
+  if (!_portfolioTableAvailable) return null;
+  try {
+    const { getSupabase } = await import("../database.js");
+    const sb = getSupabase();
+    if (!sb) return null;
+    const { data, error } = await sb
+      .from("eris_stock_portfolios")
+      .select("symbol,shares")
+      .eq("user_id", userId);
+    if (error) {
+      if (_isMissingDbObject(error)) {
+        _portfolioTableAvailable = false;
+        log("[Stocks] eris_stock_portfolios not deployed — using legacy JSON portfolios. Apply migrations/012_atomic_stock_portfolios_rpc.sql for cross-process trade safety.");
+        return null;
+      }
+      throw new Error(error.message || "portfolio query failed");
+    }
+    return _normalizePortfolioRows(data);
+  } catch (err) {
+    log(`[Stocks] Portfolio DB read failed for ${userId}: ${err.message}`);
+    return null;
+  }
+}
+
+async function _tryTradeRpc(name, params) {
+  if (!_stockRpcAvailable) return null;
+  const { getSupabase } = await import("../database.js");
+  const sb = getSupabase();
+  if (!sb?.rpc) return null;
+  const { data, error } = await sb.rpc(name, params);
+  if (error) {
+    if (_isMissingDbObject(error)) {
+      _stockRpcAvailable = false;
+      log("[Stocks] Atomic stock RPCs not deployed — using legacy in-process trade path. Apply migrations/012_atomic_stock_portfolios_rpc.sql for cross-process trade safety.");
+      return null;
+    }
+    return { ok: false, reason: error.message || "stock_rpc_failed" };
+  }
+  return data || { ok: false, reason: "stock_rpc_empty" };
+}
+
 // Box-Muller transform — one sample from N(0,1)
 function _randNormal() {
   let u = 0, v = 0;
@@ -185,6 +243,11 @@ export async function getMarket() {
 
 export async function getPortfolio(userId) {
   await _load();
+  const dbPortfolio = await _getPortfolioFromDb(userId);
+  if (dbPortfolio) {
+    _state.portfolios[userId] = dbPortfolio;
+    return dbPortfolio;
+  }
   return _state.portfolios[userId] || {};
 }
 
@@ -229,6 +292,22 @@ export async function buyShares(userId, symbol, shares) {
     return { ok: false, reason: "unknown_ticker", available: Object.keys(_state.tickers) };
   }
 
+  const ticker = _state.tickers[sym];
+  const rpcResult = await _tryTradeRpc("eris_buy_stock_shares", {
+    p_user_id: userId,
+    p_symbol: sym,
+    p_shares: n,
+    p_price: ticker.price,
+    p_max_position_value: MAX_POSITION_VALUE,
+  });
+  if (rpcResult) {
+    if (rpcResult.ok) {
+      if (!_state.portfolios[userId]) _state.portfolios[userId] = {};
+      _state.portfolios[userId][sym] = Math.floor(Number(rpcResult.newShares) || n);
+    }
+    return rpcResult;
+  }
+
   const db = await import("../database.js");
   return db.withUserLock(userId, async () => {
     // Re-read inside the lock — price may have ticked since the pre-lock read
@@ -263,6 +342,23 @@ export async function sellShares(userId, symbol, shares) {
 
   await _load();
   if (!_state.tickers[sym]) return { ok: false, reason: "unknown_ticker", available: Object.keys(_state.tickers) };
+
+  const ticker = _state.tickers[sym];
+  const rpcResult = await _tryTradeRpc("eris_sell_stock_shares", {
+    p_user_id: userId,
+    p_symbol: sym,
+    p_shares: n,
+    p_price: ticker.price,
+  });
+  if (rpcResult) {
+    if (rpcResult.ok) {
+      if (!_state.portfolios[userId]) _state.portfolios[userId] = {};
+      const remaining = Math.floor(Number(rpcResult.remainingShares) || 0);
+      if (remaining <= 0) delete _state.portfolios[userId][sym];
+      else _state.portfolios[userId][sym] = remaining;
+    }
+    return rpcResult;
+  }
 
   const db = await import("../database.js");
   return db.withUserLock(userId, async () => {
@@ -355,7 +451,7 @@ export async function buildMarketSummary(userId = null) {
 
   let portfolio = null;
   if (userId) {
-    const p = _state.portfolios[userId] || {};
+    const p = await getPortfolio(userId);
     const lines = [];
     let total = 0;
     for (const [sym, shares] of Object.entries(p)) {

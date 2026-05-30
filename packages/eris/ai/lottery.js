@@ -18,6 +18,7 @@ let _loadPromise = null;
 let _saveTimer = null;
 let _drawInProgress = false;
 const _drawQueue = [];
+let _lotteryRpcAvailable = true;
 
 function _freshState() {
   return {
@@ -85,14 +86,11 @@ async function _load() {
 
 async function _flushSave() {
   if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
-  try {
-    const { getSupabase } = await import("../database.js");
-    const sb = getSupabase();
-    if (!sb || !_state) return;
-    await sb.from("bot_data").upsert({ id: "eris_lottery", data: _state });
-  } catch (err) {
-    log(`[Lottery] Flush save failed: ${err.message}`);
-  }
+  const { getSupabase } = await import("../database.js");
+  const sb = getSupabase();
+  if (!sb || !_state) return;
+  const { error } = await sb.from("bot_data").upsert({ id: "eris_lottery", data: _state });
+  if (error) throw new Error(error.message || "lottery save failed");
 }
 
 function _scheduleSave() {
@@ -108,6 +106,50 @@ function _scheduleSave() {
       log(`[Lottery] Save failed: ${err.message}`);
     }
   }, 2000);
+}
+
+function _isMissingRpc(error) {
+  return error?.code === "PGRST202" || /Could not find the function|does not exist|schema cache/i.test(error?.message || "");
+}
+
+function _normalizeState(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const drawAt = Number(raw.drawAt);
+  const pot = Number(raw.pot);
+  const tickets = {};
+  if (raw.tickets && typeof raw.tickets === "object" && !Array.isArray(raw.tickets)) {
+    for (const [uid, value] of Object.entries(raw.tickets)) {
+      const n = Number(value);
+      if (/^\d{5,20}$/.test(String(uid)) && Number.isInteger(n) && n > 0 && n < 1_000_000) tickets[uid] = n;
+    }
+  }
+  return {
+    drawAt: Number.isFinite(drawAt) ? drawAt : Date.now() + DAY_MS,
+    pot: Number.isFinite(pot) && pot >= 0 ? Math.floor(pot) : HOUSE_SEED,
+    tickets,
+    history: Array.isArray(raw.history) ? raw.history.slice(0, 30) : [],
+  };
+}
+
+async function _tryLotteryRpc(name, params) {
+  if (!_lotteryRpcAvailable) return null;
+  const { getSupabase } = await import("../database.js");
+  const sb = getSupabase();
+  if (!sb?.rpc) return null;
+  const { data, error } = await sb.rpc(name, params);
+  if (error) {
+    if (_isMissingRpc(error)) {
+      _lotteryRpcAvailable = false;
+      log("[Lottery] Atomic lottery RPCs not deployed — using legacy in-process path. Apply migrations/013_atomic_lottery_rpc.sql for cross-process lottery safety.");
+      return null;
+    }
+    return { ok: false, reason: error.message || "lottery_rpc_failed" };
+  }
+  if (data?.state) {
+    const next = _normalizeState(data.state);
+    if (next) _state = next;
+  }
+  return data || { ok: false, reason: "lottery_rpc_empty" };
 }
 
 export async function getLotteryState() {
@@ -130,6 +172,15 @@ export async function buyLotteryTicket(userId, count = 1) {
   const cost = n * TICKET_PRICE;
 
   return _withLotteryLock(async () => {
+    const rpcResult = await _tryLotteryRpc("eris_buy_lottery_ticket", {
+      p_user_id: userId,
+      p_count: n,
+      p_ticket_price: TICKET_PRICE,
+      p_house_seed: HOUSE_SEED,
+      p_day_ms: DAY_MS,
+    });
+    if (rpcResult) return rpcResult;
+
     await _load();
     // Reject purchases during draw — caller can retry after the draw completes.
     if (_drawInProgress) return { ok: false, reason: "draw_in_progress" };
@@ -192,6 +243,27 @@ export async function buyLotteryTicket(userId, count = 1) {
  */
 export async function tickLotteryDraw(client) {
   return _withLotteryLock(async () => {
+    if (_drawInProgress) return null;
+    _drawInProgress = true;
+    try {
+      const rpcResult = await _tryLotteryRpc("eris_claim_lottery_draw", {
+        p_roll: Math.random(),
+        p_house_seed: HOUSE_SEED,
+        p_day_ms: DAY_MS,
+        p_rollover_fraction: ROLLOVER_FRACTION,
+      });
+      if (rpcResult) {
+        if (rpcResult.drawFired === false && rpcResult.reason === "not_due") return null;
+        if (rpcResult.drawFired) {
+          if (rpcResult.noBuyers) log(`[Lottery] No buyers — rolled over pot ${rpcResult.pot}`);
+          else log(`[Lottery] Draw — winner ${rpcResult.winnerId} with ${rpcResult.winningCount}/${rpcResult.totalTickets} tickets, prize ${rpcResult.prize}, rollover ${rpcResult.rollover}`);
+        }
+        return rpcResult;
+      }
+    } finally {
+      _drawInProgress = false;
+    }
+
     await _load();
     if (Date.now() < _state.drawAt) return null;
     if (_drawInProgress) return null;
