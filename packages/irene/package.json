@@ -26,7 +26,7 @@
     "voyageai": "0.2.1"
   },
   "devDependencies": {
-    "@types/node": "^20.19.39",
+    "@types/node": "^25.9.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
