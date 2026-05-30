@@ -267,6 +267,18 @@ async function handleGameButton(interaction) {
 
     const resolved = db.resolveDuel(channelId, userId);
     if (!resolved) return interaction.reply({ content: "duel not found", flags: MessageFlags.Ephemeral });
+    if (resolved.stake > 0) {
+      const challengerEscrow = await db.tryDeductBalance(resolved.challengerId, resolved.stake, "duel_escrow", `duel:${resolved.targetId}`);
+      if (!challengerEscrow.ok) {
+        return interaction.reply({ content: `duel cancelled: challenger can't escrow ${resolved.stake} coins anymore`, flags: MessageFlags.Ephemeral });
+      }
+      const targetEscrow = await db.tryDeductBalance(resolved.targetId, resolved.stake, "duel_escrow", `duel:${resolved.challengerId}`);
+      if (!targetEscrow.ok) {
+        await db.updateBalance(resolved.challengerId, resolved.stake, "duel_escrow_refund", resolved.targetId).catch(() => {});
+        return interaction.reply({ content: `duel cancelled: you can't escrow ${resolved.stake} coins`, flags: MessageFlags.Ephemeral });
+      }
+      resolved.escrowed = true;
+    }
 
     // Save duel state for move selection
     const duelKey = `${channelId}_${resolved.challengerId}_${resolved.targetId}`;
@@ -1005,7 +1017,9 @@ async function resolveDuelMoves(interaction, duelKey) {
     bonusNote = `\n🐾 Pet bonuses applied!`;
   }
 
-  if (pending.stake > 0) {
+  if (pending.stake > 0 && pending.escrowed) {
+    await db.updateBalance(winnerId, pending.stake * 2, "duel_win", `duel:${move1}v${move2}`);
+  } else if (pending.stake > 0) {
     const transfer = await db.transferBalance(loserId, winnerId, pending.stake, 0, "duel_loss", `duel:${move1}v${move2}`);
     if (!transfer.ok) {
       const payload = { content: `duel settlement failed: ${transfer.reason}`, flags: MessageFlags.Ephemeral };

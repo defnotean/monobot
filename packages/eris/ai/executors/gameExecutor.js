@@ -211,12 +211,24 @@ export async function execute(toolName, input, message, _context) {
       if (!duel) return "you don't have any pending duel challenges in this channel";
       const resolved = db.resolveDuel(message.channel.id, message.author.id);
       if (!resolved) return "duel not found or expired";
+      if (resolved.stake > 0) {
+        const challengerEscrow = await db.tryDeductBalance(resolved.challengerId, resolved.stake, "duel_escrow", `duel:${resolved.targetId}`);
+        if (!challengerEscrow.ok) return `duel couldn't start because challenger can't escrow ${resolved.stake} coins: ${challengerEscrow.reason}`;
+        const targetEscrow = await db.tryDeductBalance(resolved.targetId, resolved.stake, "duel_escrow", `duel:${resolved.challengerId}`);
+        if (!targetEscrow.ok) {
+          await db.updateBalance(resolved.challengerId, resolved.stake, "duel_escrow_refund", resolved.targetId).catch(() => {});
+          return `duel couldn't start because you can't escrow ${resolved.stake} coins: ${targetEscrow.reason}`;
+        }
+        resolved.escrowed = true;
+      }
       const { randomQuip } = await import("../gambling.js");
       const { duelResultEmbed } = await import("../gameVisuals.js");
       const challengerWins = Math.random() < 0.5;
       const winnerId = challengerWins ? resolved.challengerId : resolved.targetId;
       const loserId = challengerWins ? resolved.targetId : resolved.challengerId;
-      if (resolved.stake > 0) {
+      if (resolved.stake > 0 && resolved.escrowed) {
+        await db.updateBalance(winnerId, resolved.stake * 2, "duel_win", "duel");
+      } else if (resolved.stake > 0) {
         // Atomic stake transfer: move the stake from loser to winner in one
         // locked operation instead of a credit-then-debit pair (which could
         // mint coins if the loser's debit failed after the winner was paid).
