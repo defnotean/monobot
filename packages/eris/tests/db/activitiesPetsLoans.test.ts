@@ -143,10 +143,16 @@ describe("activities.js — pet hunger decay (via getPet)", () => {
   });
 
   it("does not decay a pet fed just now", async () => {
+    // Pin the clock so the source's Date.now() and our last_fed timestamp agree
+    // to the millisecond → hoursPassed === 0 → no decay. Without this the slow
+    // coverage run lets real time elapse and Math.floor(hoursPassed*2) can tick to 1.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     pets.push({ user_id: "u1", name: "Rex", species: "dog", hunger: 80, mood: 90, last_fed: new Date().toISOString() });
     const pet = await db.getPet("u1");
     expect(pet.hunger).toBe(80);
     expect(pet.mood).toBe(90);
+    vi.useRealTimers();
   });
 
   it("decays hunger ~2/hour over elapsed time", async () => {
