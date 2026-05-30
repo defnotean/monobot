@@ -42,6 +42,15 @@ function psEncoded(script) {
   return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
 }
 
+function isShellLikeApp(app) {
+  const base = String(app || "").trim().split(/[\\/]/).pop()?.toLowerCase() || "";
+  return /^(?:powershell|powershell\.exe|pwsh|pwsh\.exe|cmd|cmd\.exe|bash|bash\.exe|sh|sh\.exe|zsh|fish|wscript|wscript\.exe|cscript|cscript\.exe|mshta|mshta\.exe)$/i.test(base);
+}
+
+function hasShellLikeLaunchArgs(args) {
+  return /(?:^|\s)(?:-(?:command|encodedcommand|enc|ec|e|c)\b|\/c\b)/i.test(String(args || ""));
+}
+
 // Escape a value for use inside a PowerShell single-quoted string literal.
 // Inside '...' only ' is special and is escaped by doubling it.
 function psSingleQuote(value) {
@@ -131,6 +140,10 @@ export async function execute(toolName, input, message, _context) {
       const app = input.app || input.application || input.path;
       if (!app) return "no application specified";
       const args = input.args || input.arguments || "";
+      if (isShellLikeApp(app) || hasShellLikeLaunchArgs(args)) {
+        await audit(toolName, message, `launch ${app} ${args}`.trim(), "blocked: shell-like launch", !!input?.confirm);
+        return "launch_app only opens ordinary applications. use execute_terminal for shell/interpreter commands.";
+      }
       const script = args
         ? `Start-Process -FilePath ${psSingleQuote(app)} -ArgumentList ${psSingleQuote(args)}`
         : `Start-Process -FilePath ${psSingleQuote(app)}`;

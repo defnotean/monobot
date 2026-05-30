@@ -309,7 +309,13 @@ export async function deleteNote(userId, noteId) {
 export async function searchNotes(userId, query) {
   const supabase = getSupabase();
   if (!supabase) return [];
-  const { data: rows } = await supabase.from("eris_notes").select("*").eq("user_id", userId).or(`title.ilike.%${query}%,content.ilike.%${query}%`).limit(10);
+  const safeQuery = String(query || "")
+    .replace(/[,.()%*:\\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100);
+  if (!safeQuery) return [];
+  const { data: rows } = await supabase.from("eris_notes").select("*").eq("user_id", userId).or(`title.ilike.%${safeQuery}%,content.ilike.%${safeQuery}%`).limit(10);
   return rows || [];
 }
 

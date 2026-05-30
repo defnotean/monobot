@@ -3,6 +3,7 @@
 // adventure_start, adventure_choice, prestige, multiplier_check, marry, divorce,
 // partner_status, craft_item, craft_recipes, trade_offer, pet_battle, pet_train, use_item
 
+import { randomInt } from "crypto";
 import * as db from "../database.js";
 import { log } from "../utils/logger.js";
 import { resolveMember } from "../utils/discord.js";
@@ -118,7 +119,7 @@ const ADVENTURES = [
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 function randInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  return randomInt(min, max + 1);
 }
 
 function weightedRandom(table) {
@@ -224,36 +225,38 @@ export async function executeSocialTool(toolName, input, message) {
     case "scratch_card": {
       const tier = parseInt(input.tier || input.cost) || 50;
       if (![50, 100, 250].includes(tier)) return "scratch card tiers: 50, 100, 250 coins";
-      const bal = await db.getBalance(userId);
-      if (bal.balance < tier) return `need ${tier} coins. you have ${bal.balance}`;
-      await db.updateBalance(userId, -tier, "scratch_buy", `tier ${tier}`);
+      return db.withUserLock(userId, async () => {
+        const bal = await db.getBalance(userId);
+        if (bal.balance < tier) return `need ${tier} coins. you have ${bal.balance}`;
+        await db.updateBalanceUnsafe(userId, -tier, "scratch_buy", `tier ${tier}`);
 
-      const symbols = SCRATCH_SYMBOLS[tier];
-      const grid = Array.from({ length: 9 }, () => symbols[Math.floor(Math.random() * symbols.length)]);
+        const symbols = SCRATCH_SYMBOLS[tier];
+        const grid = Array.from({ length: 9 }, () => symbols[randInt(0, symbols.length - 1)]);
 
-      // Check rows, columns, diagonals for 3 matches
-      const lines = [
-        [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
-        [0, 3, 6], [1, 4, 7], [2, 5, 8], // cols
-        [0, 4, 8], [2, 4, 6],             // diagonals
-      ];
+        // Check rows, columns, diagonals for 3 matches
+        const lines = [
+          [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
+          [0, 3, 6], [1, 4, 7], [2, 5, 8], // cols
+          [0, 4, 8], [2, 4, 6],             // diagonals
+        ];
 
-      let bestPayout = 0;
-      let bestSymbol = null;
-      for (const [a, b, c] of lines) {
-        if (grid[a] === grid[b] && grid[b] === grid[c]) {
-          const payout = tier * (SCRATCH_PAYOUTS[grid[a]] || 2);
-          if (payout > bestPayout) { bestPayout = payout; bestSymbol = grid[a]; }
+        let bestPayout = 0;
+        let bestSymbol = null;
+        for (const [a, b, c] of lines) {
+          if (grid[a] === grid[b] && grid[b] === grid[c]) {
+            const payout = tier * (SCRATCH_PAYOUTS[grid[a]] || 2);
+            if (payout > bestPayout) { bestPayout = payout; bestSymbol = grid[a]; }
+          }
         }
-      }
 
-      const display = `${grid[0]}${grid[1]}${grid[2]}\n${grid[3]}${grid[4]}${grid[5]}\n${grid[6]}${grid[7]}${grid[8]}`;
+        const display = `${grid[0]}${grid[1]}${grid[2]}\n${grid[3]}${grid[4]}${grid[5]}\n${grid[6]}${grid[7]}${grid[8]}`;
 
-      if (bestPayout > 0) {
-        await db.updateBalance(userId, bestPayout, "scratch_win", `${bestSymbol} match`);
-        return `scratch card (${tier} coins):\n${display}\n\n3x ${bestSymbol} match! won **${bestPayout}** coins!`;
-      }
-      return `scratch card (${tier} coins):\n${display}\n\nno matches. better luck next time`;
+        if (bestPayout > 0) {
+          await db.updateBalanceUnsafe(userId, bestPayout, "scratch_win", `${bestSymbol} match`);
+          return `scratch card (${tier} coins):\n${display}\n\n3x ${bestSymbol} match! won **${bestPayout}** coins!`;
+        }
+        return `scratch card (${tier} coins):\n${display}\n\nno matches. better luck next time`;
+      });
     }
 
     // ─── Loot Box ──────────────────────────────────────────────────────

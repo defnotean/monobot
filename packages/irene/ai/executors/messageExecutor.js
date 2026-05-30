@@ -5,6 +5,7 @@ import {
   StringSelectMenuBuilder, StringSelectMenuOptionBuilder, PermissionFlagsBits,
 } from "discord.js";
 import { validateAssignableRole } from "./customCommandExecutor.js";
+import { spotlight } from "../firewall.js";
 import { isGuildOwnerMember } from "../../utils/permissions.js";
 
 const HANDLED = new Set([
@@ -146,7 +147,7 @@ export async function execute(toolName, input, message, ctx) {
           return line;
         });
 
-        return `Messages in #${channel.name} (${messages.size}):\n${lines.join("\n")}`;
+        return `Messages in #${channel.name} (${messages.size}):\n${spotlight(lines.join("\n"), "channel_message")}`;
       } catch (err) {
         return `Failed to read messages: ${err.message}`;
       }
@@ -185,7 +186,7 @@ export async function execute(toolName, input, message, ctx) {
           return `${m.author.username} (${ts}): ${content}`;
         });
 
-        return `Found ${matches.size} message(s) matching "${input.keyword}" in #${channel.name}:\n${lines.join("\n")}`;
+        return `Found ${matches.size} message(s) matching "${input.keyword}" in #${channel.name}:\n${spotlight(lines.join("\n"), "channel_message")}`;
       } catch (err) {
         return `Failed to search messages: ${err.message}`;
       }

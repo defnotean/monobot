@@ -1,5 +1,7 @@
 // ─── Memory Executor ────────────────────────────────────────────────────────
 
+import { spotlight } from "../firewall.js";
+
 const HANDLED = new Set([
   "remember_fact", "recall_memories", "forget_memory",
   "clear_all_memories", "summarize_channel",
@@ -90,7 +92,7 @@ export async function execute(toolName, input, message, ctx) {
       try {
         const msgs = await channel.messages.fetch({ limit: count });
         const lines = [...msgs.values()].reverse().map((m) => `${m.author.username}: ${m.content?.slice(0, 200) || "(no text)"}`).join("\n");
-        return `Last ${msgs.size} messages in #${channel.name}:\n${lines.slice(0, 3000)}`;
+        return `Last ${msgs.size} messages in #${channel.name}:\n${spotlight(lines.slice(0, 3000), "channel_message")}`;
       } catch (err) {
         return `failed to read messages: ${err.message}`;
       }

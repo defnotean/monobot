@@ -55,7 +55,18 @@ describe("systemExecutor fixed-shape tool gating", () => {
       message,
       {}
     );
-    expect(String(result)).toMatch(/destructive/i);
+    expect(String(result)).toMatch(/ordinary applications|shell/i);
+    expect(mockQueue).not.toHaveBeenCalled();
+  });
+
+  it("blocks launch_app interpreter args even when the command text is not destructive", async () => {
+    const result = await execute(
+      "launch_app",
+      { app: "notepad", args: "-Command Write-Host hi" },
+      message,
+      {}
+    );
+    expect(String(result)).toMatch(/ordinary applications|shell/i);
     expect(mockQueue).not.toHaveBeenCalled();
   });
 
