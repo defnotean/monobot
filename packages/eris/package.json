@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.39",
-    "electron": "^41.1.1",
+    "electron": "^42.3.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
