@@ -11,6 +11,7 @@ import { log, sendModLog } from "../utils/logger.js";
 import { trackJoin, activateLockdown, checkNewAccount } from "../utils/safety.js";
 import { findUsedInvite, refreshInvites } from "../utils/invites.js";
 import { updateStatsChannels } from "../utils/stats.js";
+import { validateAssignableRole } from "../ai/executors/customCommandExecutor.js";
 
 // ─── Named colour lookup ──────────────────────────────────────────────────────
 const NAMED_COLORS = {
@@ -294,7 +295,14 @@ export async function execute(member) {
   if (settings?.autorole_id) {
     try {
       const role = member.guild.roles.cache.get(settings.autorole_id);
-      if (role) await member.roles.add(role);
+      if (role) {
+        const reason = validateAssignableRole(member.guild, role, { actionLabel: "Autorole" });
+        if (reason) {
+          log(`[AutoRole] Skipping unsafe autorole ${settings.autorole_id} in ${member.guild.name}: ${reason}`);
+        } else {
+          await member.roles.add(role);
+        }
+      }
     } catch (err) {
       if (err.code === 10011) {
         log(`[AutoRole] Role ${settings.autorole_id} no longer exists in ${member.guild.name} — clearing setting`);

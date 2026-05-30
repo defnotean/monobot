@@ -99,6 +99,22 @@ describe("toggleExecutor admin mutators", () => {
     expect(addTrustedUser).toHaveBeenCalledWith("guild-1", "target-id");
   });
 
+  it("does not let ManageGuild callers grant trusted-user bypass", async () => {
+    const { guild, member } = buildMember({ manageGuild: true });
+    const ctx = buildCtx(guild);
+
+    const result = await executeToggle(
+      "trust_user",
+      { username: "target" },
+      buildMessage(member, guild),
+      ctx,
+    );
+
+    expect(String(result)).toMatch(/administrator/i);
+    expect(ctx.findMember).not.toHaveBeenCalled();
+    expect(addTrustedUser).not.toHaveBeenCalled();
+  });
+
   it("blocks non-admin server-level toggles before mutating guild settings", async () => {
     const { guild, member } = buildMember();
     const msg = buildMessage(member, guild);

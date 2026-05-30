@@ -4,13 +4,57 @@
 // Embed colors accept either a named color (resolved via COLOR_NAMES) or a raw
 // hex; "none" clears the color.
 
+import { PermissionFlagsBits } from "discord.js";
 import { getCustomCommand, setCustomCommand, deleteCustomCommand, listCustomCommands } from "../../database.js";
 import { COLOR_NAMES } from "../colors.js";
+import { DANGEROUS_PERMS } from "../hierarchy.js";
 
 const HANDLED = new Set([
   "create_custom_command", "edit_custom_command",
   "delete_custom_command", "list_custom_commands",
 ]);
+
+export function resolveCustomCommandRole(guild, value, findRole) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  const id = raw.match(/^<@&(\d+)>$/)?.[1] ?? raw;
+  return guild.roles.cache.get(id) ?? findRole?.(guild, raw) ?? null;
+}
+
+function roleHasDangerousPerm(role) {
+  return DANGEROUS_PERMS.some((perm) => role.permissions?.has?.(perm));
+}
+
+export function validateAssignableRole(guild, role, { actor = null, actionLabel = "Custom commands" } = {}) {
+  if (!role) return "Couldn't find that role";
+  if (role.id === guild.id) return `${actionLabel} can't manage @everyone.`;
+  if (role.managed) return `${actionLabel} can't manage **${role.name}** because Discord manages that role.`;
+  if (roleHasDangerousPerm(role)) return `${actionLabel} can't manage **${role.name}** because it has elevated permissions.`;
+
+  const botMember = guild.members?.me;
+  const botTop = botMember?.roles?.highest?.position;
+  if (!botMember?.permissions?.has?.(PermissionFlagsBits.ManageRoles)) return `I need Manage Roles before ${actionLabel.toLowerCase()} can manage roles.`;
+  if (botTop != null && role.position >= botTop) return `${actionLabel} can't manage **${role.name}** because it is at or above my top role.`;
+
+  if (actor && actor.id !== guild.ownerId) {
+    const actorTop = actor.roles?.highest?.position;
+    if (actorTop != null && role.position >= actorTop) {
+      return `${actionLabel} can't manage **${role.name}** because it is at or above your top role.`;
+    }
+  }
+
+  return null;
+}
+
+function validateCommandRoles(guild, command, { actor = null, findRole } = {}) {
+  for (const key of ["role_to_give", "role_to_remove"]) {
+    if (!command[key]) continue;
+    const role = resolveCustomCommandRole(guild, command[key], findRole);
+    const reason = validateAssignableRole(guild, role, { actor });
+    if (reason) return reason;
+  }
+  return null;
+}
 
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
@@ -21,6 +65,11 @@ export async function execute(toolName, input, message, ctx) {
     case "create_custom_command": {
       const existing = getCustomCommand(guild.id, input.trigger);
       if (existing) return `!${input.trigger} already exists. Use edit_custom_command to modify it.`;
+      const roleReason = validateCommandRoles(guild, input, {
+        actor: message.member,
+        findRole: ctx.findRole,
+      });
+      if (roleReason) return roleReason;
       const colorNames = COLOR_NAMES;
       let embedColor = null;
       if (input.embed_color) {
@@ -65,6 +114,11 @@ export async function execute(toolName, input, message, ctx) {
           updated.embed_color = COLOR_NAMES[raw] ?? (raw.startsWith("#") ? raw : `#${raw}`);
         }
       }
+      const roleReason = validateCommandRoles(guild, updated, {
+        actor: message.member,
+        findRole: ctx.findRole,
+      });
+      if (roleReason) return roleReason;
       setCustomCommand(guild.id, input.trigger, updated);
       return `Updated !${input.trigger}`;
     }

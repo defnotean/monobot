@@ -7,6 +7,7 @@
 // per-field "none"-clears-embed semantics, and the not-found delete/edit paths.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Collection, PermissionFlagsBits } from "discord.js";
 
 vi.mock("../../../database.js", () => ({
   getCustomCommand: vi.fn(),
@@ -28,6 +29,33 @@ import {
 const guild = { id: "guild-1" };
 const message = { author: { id: "author-1" } };
 const ctx = { guild } as any;
+
+function permissions(...flags: bigint[]) {
+  return { has: (flag: bigint) => flags.includes(flag) };
+}
+
+function roleGuild(role: any, { botTop = 100 } = {}) {
+  const roles = new Collection<string, any>();
+  roles.set(role.id, role);
+  return {
+    id: "guild-roles",
+    ownerId: "owner-1",
+    roles: {
+      cache: roles,
+      everyone: { id: "guild-roles", name: "@everyone", position: 0, permissions: permissions() },
+    },
+    members: {
+      me: {
+        permissions: permissions(PermissionFlagsBits.ManageRoles),
+        roles: { highest: { position: botTop } },
+      },
+    },
+  };
+}
+
+function actor(top = 50) {
+  return { id: "author-1", roles: { highest: { position: top } } };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -130,6 +158,38 @@ describe("create_custom_command", () => {
       }),
     );
   });
+
+  it("refuses to save a custom command that would grant a dangerous role", async () => {
+    const role = { id: "r-admin", name: "Admin", position: 10, permissions: permissions(PermissionFlagsBits.Administrator) };
+    const localGuild = roleGuild(role);
+    vi.mocked(getCustomCommand).mockReturnValue(undefined);
+
+    const r = await execute(
+      "create_custom_command",
+      { trigger: "adminme", response: "no", role_to_give: "Admin" },
+      { author: { id: "author-1" }, member: actor() },
+      { guild: localGuild, findRole: () => role } as any,
+    );
+
+    expect(String(r)).toMatch(/elevated permissions/i);
+    expect(setCustomCommand).not.toHaveBeenCalled();
+  });
+
+  it("refuses to save a custom command for a role above the bot", async () => {
+    const role = { id: "r-high", name: "High", position: 100, permissions: permissions() };
+    const localGuild = roleGuild(role, { botTop: 50 });
+    vi.mocked(getCustomCommand).mockReturnValue(undefined);
+
+    const r = await execute(
+      "create_custom_command",
+      { trigger: "high", response: "no", role_to_give: "High" },
+      { author: { id: "author-1" }, member: actor(200) },
+      { guild: localGuild, findRole: () => role } as any,
+    );
+
+    expect(String(r)).toMatch(/above my top role/i);
+    expect(setCustomCommand).not.toHaveBeenCalled();
+  });
 });
 
 describe("edit_custom_command", () => {
@@ -198,6 +258,22 @@ describe("edit_custom_command", () => {
     );
     const stored = vi.mocked(setCustomCommand).mock.calls[0][2];
     expect(stored.description).toBe("new desc");
+  });
+
+  it("refuses edits that would leave a dangerous role action stored", async () => {
+    const role = { id: "r-mod", name: "Mods", position: 10, permissions: permissions(PermissionFlagsBits.BanMembers) };
+    const localGuild = roleGuild(role);
+    vi.mocked(getCustomCommand).mockReturnValue({ trigger: "modme", response: "old" });
+
+    const r = await execute(
+      "edit_custom_command",
+      { trigger: "modme", role_to_remove: "Mods" },
+      { author: { id: "author-1" }, member: actor() },
+      { guild: localGuild, findRole: () => role } as any,
+    );
+
+    expect(String(r)).toMatch(/elevated permissions/i);
+    expect(setCustomCommand).not.toHaveBeenCalled();
   });
 });
 

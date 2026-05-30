@@ -12,7 +12,7 @@ import * as db from "../../database.js";
 import { log } from "../../utils/logger.js";
 import { resolveMember } from "../../utils/discord.js";
 import { isOwner, canCustomize, denyMessage } from "../../utils/permissions.js";
-import { searchSteam, addWatch, removeWatch, getWatches } from "../gameWatcher.js";
+import { searchSteam, addWatch, removeWatch, getWatches, validateGameWatchRssUrl } from "../gameWatcher.js";
 
 // Note: poker / stock_market / lottery moved to casinoExecutor.js — those
 // three moonshot features share the hardened atomic-economy primitives and
@@ -128,7 +128,12 @@ export async function execute(toolName, input, message, _context) {
       if (!gameName) return "what game do you want to track?";
 
       if (rssUrl) {
-        const id = addWatch(guildId, { channelId: message.channel.id, gameName, rssUrl, addedBy: message.author.id });
+        try {
+          await validateGameWatchRssUrl(rssUrl);
+        } catch (err) {
+          return `That RSS URL is not allowed: ${err?.message || err}`;
+        }
+        const id = addWatch(guildId, { channelId: message.channel.id, gameName, rssUrl: String(rssUrl).trim(), addedBy: message.author.id });
         return `now tracking **${gameName}** via RSS — updates will post here automatically (watch id: \`${id}\`)`;
       }
 

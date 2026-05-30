@@ -12,6 +12,17 @@ import { log } from "../../utils/logger.js";
 import { isOwner, canCustomize, denyMessage, addTrustedUser, removeTrustedUser, getTrustedUsers } from "../../utils/permissions.js";
 import { auditLog } from "../../utils/pcAgent.js";
 import { resolveMember } from "../../utils/discord.js";
+import { safeFetch } from "@defnotean/shared/safeFetch";
+
+const PERSONALIZATION_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const IMAGE_EXT_TO_TYPE = new Map([
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["gif", "image/gif"],
+  ["webp", "image/webp"],
+]);
+const ALLOWED_IMAGE_TYPES = new Set(IMAGE_EXT_TO_TYPE.values());
 
 // Resolve a user_id-or-name input to a verified Discord snowflake. The model
 // often passes a username instead of an ID; without this resolver, we'd store
@@ -58,6 +69,51 @@ function canManageServerSettings(message) {
   if (!message?.guild || !message?.author?.id) return false;
   const hasManageGuild = message.member?.permissions?.has?.("ManageGuild");
   return canCustomize(message.author.id, message.guild) || hasManageGuild;
+}
+
+function getHeader(headers, name) {
+  return headers?.get?.(name) ?? headers?.[name] ?? headers?.[name.toLowerCase()] ?? "";
+}
+
+function imageTypeFromUrl(rawUrl) {
+  let path = "";
+  try { path = new URL(rawUrl).pathname; }
+  catch { path = String(rawUrl).split("?")[0]; }
+  const ext = path.toLowerCase().split(".").pop();
+  return IMAGE_EXT_TO_TYPE.get(ext) || null;
+}
+
+async function fetchPersonalizationImage(imageUrl) {
+  if (!imageUrl) throw new Error("no image URL provided");
+
+  const res = await safeFetch(imageUrl, {
+    binary: true,
+    maxBytes: PERSONALIZATION_IMAGE_MAX_BYTES,
+    timeoutMs: 10_000,
+  }).catch((e) => {
+    if (/response too large/i.test(e?.message || "")) {
+      throw new Error("image is too large (max 8 MB)");
+    }
+    throw e;
+  });
+
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`image download failed (HTTP ${res.status})`);
+  }
+
+  const rawType = String(getHeader(res.headers, "content-type")).split(";")[0].trim().toLowerCase();
+  if (rawType && !rawType.startsWith("image/") && rawType !== "application/octet-stream") {
+    throw new Error("URL did not return an image");
+  }
+
+  const contentType = rawType.startsWith("image/")
+    ? rawType
+    : imageTypeFromUrl(res.url) || imageTypeFromUrl(imageUrl);
+  if (!contentType || !ALLOWED_IMAGE_TYPES.has(contentType)) {
+    throw new Error("image must be PNG, JPG, GIF, or WebP");
+  }
+
+  return { bytes: res.bytes, contentType };
 }
 
 export async function execute(toolName, input, message, _context) {
@@ -519,9 +575,8 @@ export async function execute(toolName, input, message, _context) {
     case "change_avatar": {
       if (!canCustomize(message.author.id, message.guild)) return denyMessage("customize");
       try {
-        const res = await fetch(input.image_url);
-        const buffer = await res.arrayBuffer();
-        await message.client.user.setAvatar(Buffer.from(buffer));
+        const image = await fetchPersonalizationImage(input.image_url);
+        await message.client.user.setAvatar(image.bytes);
         return "avatar updated successfully";
       } catch (e) {
         return `failed to change avatar: ${e.message}`;
@@ -531,9 +586,8 @@ export async function execute(toolName, input, message, _context) {
     case "change_banner": {
       if (!canCustomize(message.author.id, message.guild)) return denyMessage("customize");
       try {
-        const res = await fetch(input.image_url);
-        const buffer = await res.arrayBuffer();
-        await message.client.user.setBanner(Buffer.from(buffer));
+        const image = await fetchPersonalizationImage(input.image_url);
+        await message.client.user.setBanner(image.bytes);
         return "banner updated successfully";
       } catch (e) {
         return `failed to change banner: ${e.message}`;

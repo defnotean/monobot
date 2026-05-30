@@ -35,6 +35,9 @@ vi.mock("../../../database.js", () => ({
 
 vi.mock("../../../utils/logger.js", () => ({ log: vi.fn() }));
 vi.mock("../../../utils/pcAgent.js", () => ({ auditLog: vi.fn(async () => {}) }));
+vi.mock("@defnotean/shared/safeFetch", () => ({
+  safeFetch: vi.fn(),
+}));
 
 // @ts-expect-error - importing JS module without types
 import { execute } from "../../../ai/executors/adminExecutor.js";
@@ -44,12 +47,15 @@ import * as db from "../../../database.js";
 import * as perms from "../../../utils/permissions.js";
 // @ts-expect-error - importing JS module without types
 import { EVERYONE_TOOLS, OWNER_TOOLS } from "../../../ai/tools.js";
+// @ts-expect-error - importing JS module without types
+import { safeFetch } from "@defnotean/shared/safeFetch";
 
 const GUILD_ID = "guild-1";
 const CHANNEL_ID = "channel-1";
 const REGULAR_ID = "999999999999999999";
 const CUSTOMIZER_ID = "888888888888888888";
 const ADMIN_ID = "777777777777777777";
+const mockSafeFetch = safeFetch as unknown as ReturnType<typeof vi.fn>;
 
 function makeMessage({
   authorId = REGULAR_ID,
@@ -104,6 +110,7 @@ describe("Eris admin executor permission checks", () => {
     vi.clearAllMocks();
     state.settings.clear();
     state.directives.length = 0;
+    mockSafeFetch.mockReset();
     for (const id of perms.getTrustedUsers()) perms.removeTrustedUser(id);
   });
 
@@ -204,5 +211,54 @@ describe("Eris admin executor permission checks", () => {
     );
     expect(db.removeDirective).toHaveBeenCalledWith(GUILD_ID, "pirate");
     expect(state.directives).toHaveLength(0);
+  });
+
+  it("downloads bot avatars through safeFetch binary mode", async () => {
+    const image = Buffer.from("fake png");
+    mockSafeFetch.mockResolvedValue({
+      status: 200,
+      headers: new Headers({ "content-type": "image/png" }),
+      bytes: image,
+      url: "https://cdn.example/avatar.png",
+    });
+    const msg = makeMessage({ authorId: CUSTOMIZER_ID, guildOwnerId: CUSTOMIZER_ID });
+    msg.client.user = { setAvatar: vi.fn(async () => {}) };
+
+    const result = await execute("change_avatar", { image_url: "https://cdn.example/avatar.png" }, msg, {});
+
+    expect(mockSafeFetch).toHaveBeenCalledWith("https://cdn.example/avatar.png", {
+      binary: true,
+      maxBytes: 8 * 1024 * 1024,
+      timeoutMs: 10_000,
+    });
+    expect(msg.client.user.setAvatar).toHaveBeenCalledWith(image);
+    expect(String(result)).toMatch(/avatar updated successfully/i);
+  });
+
+  it("rejects non-image bot banner downloads before mutating the profile", async () => {
+    mockSafeFetch.mockResolvedValue({
+      status: 200,
+      headers: new Headers({ "content-type": "text/html" }),
+      bytes: Buffer.from("<html></html>"),
+      url: "https://example.com/banner.png",
+    });
+    const msg = makeMessage({ authorId: CUSTOMIZER_ID, guildOwnerId: CUSTOMIZER_ID });
+    msg.client.user = { setBanner: vi.fn(async () => {}) };
+
+    const result = await execute("change_banner", { image_url: "https://example.com/banner.png" }, msg, {});
+
+    expect(msg.client.user.setBanner).not.toHaveBeenCalled();
+    expect(String(result)).toMatch(/did not return an image/i);
+  });
+
+  it("returns a friendly size error when safeFetch aborts an oversized avatar", async () => {
+    mockSafeFetch.mockRejectedValue(new Error("response too large"));
+    const msg = makeMessage({ authorId: CUSTOMIZER_ID, guildOwnerId: CUSTOMIZER_ID });
+    msg.client.user = { setAvatar: vi.fn(async () => {}) };
+
+    const result = await execute("change_avatar", { image_url: "https://cdn.example/huge.png" }, msg, {});
+
+    expect(msg.client.user.setAvatar).not.toHaveBeenCalled();
+    expect(String(result)).toMatch(/max 8 MB/i);
   });
 });

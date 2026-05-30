@@ -3,11 +3,20 @@
 import { PermissionFlagsBits } from "discord.js";
 import { getVoiceStats } from "../../database.js";
 import { tempChannels } from "../../utils/tempvc.js";
+import { isGuildOwnerMember } from "../../utils/permissions.js";
 
 const HANDLED = new Set([
   "set_nickname", "move_user_to_voice", "disconnect_user_from_voice",
   "vc_info", "voice_leaderboard",
 ]);
+
+function hasMemberPermission(member, permission) {
+  return Boolean(
+    isGuildOwnerMember(member) ||
+    member?.permissions?.has?.(PermissionFlagsBits.Administrator) ||
+    member?.permissions?.has?.(permission)
+  );
+}
 
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
@@ -17,6 +26,9 @@ export async function execute(toolName, input, message, ctx) {
   switch (toolName) {
     case "set_nickname": {
       const botMember = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+      if (!hasMemberPermission(message.member, PermissionFlagsBits.ManageNicknames)) {
+        return "You need Manage Nicknames to change nicknames.";
+      }
       if (!botMember?.permissions.has(PermissionFlagsBits.ManageNicknames)) return "I don't have permission to change nicknames";
       const member = findMember(guild, input.username);
       if (!member) return `Couldn't find user "${input.username}"`;
@@ -27,6 +39,11 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "move_user_to_voice": {
+      const botMember = guild.members.me ?? await guild.members.fetchMe?.().catch(() => null);
+      if (!hasMemberPermission(message.member, PermissionFlagsBits.MoveMembers)) {
+        return "You need Move Members to move people between voice channels.";
+      }
+      if (!botMember?.permissions?.has?.(PermissionFlagsBits.MoveMembers)) return "I need Move Members to move people between voice channels.";
       const member = findMember(guild, input.username);
       if (!member) return `Couldn't find user "${input.username}"`;
       if (!member.voice.channel) return `${member.user.tag} is not in a voice channel`;
@@ -37,6 +54,11 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "disconnect_user_from_voice": {
+      const botMember = guild.members.me ?? await guild.members.fetchMe?.().catch(() => null);
+      if (!hasMemberPermission(message.member, PermissionFlagsBits.MoveMembers)) {
+        return "You need Move Members to disconnect people from voice.";
+      }
+      if (!botMember?.permissions?.has?.(PermissionFlagsBits.MoveMembers)) return "I need Move Members to disconnect people from voice.";
       const member = findMember(guild, input.username);
       if (!member) return `Couldn't find user "${input.username}"`;
       if (!member.voice.channel) return `${member.user.tag} is not in a voice channel`;

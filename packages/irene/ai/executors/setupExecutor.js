@@ -2,10 +2,11 @@
 
 import { ChannelType, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from "discord.js";
 import { setWelcomeChannel, setLogChannel, setAutorole, setAccessRole, setDmResults, setStatsChannels, addReactionRole, removeReactionRole, setStarboard, setColorRoles, getGuildSettings, getPatchFeeds, setPatchFeeds, getTwitchConfig, setTwitchConfig, setWelcomeEmbed } from "../../database.js";
-import { KNOWN_FEEDS } from "../../utils/patchbot.js";
+import { KNOWN_FEEDS, validatePatchFeedUrl } from "../../utils/patchbot.js";
 import { parseEmbedColor } from "../../events/guildMemberAdd.js";
 import { log } from "../../utils/logger.js";
 import { isGuildCategory } from "../../utils/channelTypes.js";
+import { validateAssignableRole } from "./customCommandExecutor.js";
 
 const HANDLED = new Set([
   "set_welcome_channel", "set_access_role", "setup_verification",
@@ -38,6 +39,8 @@ export async function execute(toolName, input, message, ctx) {
     case "set_access_role": {
       const role = findRole(guild, input.role_name);
       if (!role) return `Couldn't find role "${input.role_name}"`;
+      const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Access role" });
+      if (roleErr) return roleErr;
       setAccessRole(guild.id, role.id);
       return `Done — anyone who uses me will now automatically get the "${role.name}" role`;
     }
@@ -63,6 +66,8 @@ export async function execute(toolName, input, message, ctx) {
       if (verRole.position >= botTop) {
         return `the role **@${verRole.name}** is higher than my role in the hierarchy — move it below my role in Server Settings > Roles, then try again`;
       }
+      const verRoleErr = validateAssignableRole(guild, verRole, { actor: message.member, actionLabel: "Verification role" });
+      if (verRoleErr) return verRoleErr;
 
       // Parse public channels — use partial/fuzzy matching for decorated channel names
       const publicNames = (input.public_channels || "rules, verification, welcome, verify, entrance")
@@ -168,9 +173,8 @@ export async function execute(toolName, input, message, ctx) {
       }
       const role = findRole(guild, input.role_name);
       if (!role) return `Couldn't find role "${input.role_name}"`;
-      if (role.position >= guild.members.me.roles.highest.position) {
-        return `can't use **@${role.name}** as autorole — it's higher than my role in the hierarchy. move it below my role in Server Settings > Roles`;
-      }
+      const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Autorole" });
+      if (roleErr) return roleErr;
       setAutorole(guild.id, role.id);
       return `Auto-role set to **${role.name}** — new members will get this role when they join`;
     }
@@ -219,9 +223,15 @@ export async function execute(toolName, input, message, ctx) {
           }
           config.feeds.push(feedEntry);
         } else if (input.add_feed.startsWith("http")) {
-          if (config.feeds?.some((f) => f.url === input.add_feed)) return "That feed URL is already added.";
+          let safeFeedUrl;
+          try {
+            safeFeedUrl = await validatePatchFeedUrl(input.add_feed);
+          } catch (err) {
+            return `That feed URL is not allowed: ${err?.message || err}`;
+          }
+          if (config.feeds?.some((f) => f.url === safeFeedUrl)) return "That feed URL is already added.";
           if (!config.feeds) config.feeds = [];
-          const feedEntry = { name: input.add_feed.replace(/https?:\/\//, "").split("/")[0], url: input.add_feed, color: 0x5865F2 };
+          const feedEntry = { name: safeFeedUrl.replace(/https?:\/\//, "").split("/")[0], url: safeFeedUrl, color: 0x5865F2 };
           if (input.feed_ping_roles) {
             const feedRoleIds = findRoles(guild, input.feed_ping_roles);
             if (feedRoleIds.length) feedEntry.ping_role_ids = feedRoleIds;
@@ -863,6 +873,8 @@ export async function execute(toolName, input, message, ctx) {
           });
         }
         if (!role) { lines.push(`${r.emoji} — ⚠️ Role "${r.role_name}" not found`); continue; }
+        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Reaction role" });
+        if (roleErr) { lines.push(`${r.emoji} — ⚠️ ${roleErr}`); continue; }
         lines.push(`${r.emoji} — <@&${role.id}>`);
         rolesToCreate.push({ emoji: r.emoji, roleId: role.id, roleName: role.name });
       }
@@ -906,6 +918,8 @@ export async function execute(toolName, input, message, ctx) {
     case "add_reaction_role": {
       const rrRole = findRole(guild, input.role_name);
       if (!rrRole) return `Couldn't find role "${input.role_name}"`;
+      const rrRoleErr = validateAssignableRole(guild, rrRole, { actor: message.member, actionLabel: "Reaction role" });
+      if (rrRoleErr) return rrRoleErr;
       const exclusive = input.exclusive ?? true;
       addReactionRole(guild.id, input.message_id, input.emoji, rrRole.id, exclusive);
       try {
@@ -953,6 +967,8 @@ export async function execute(toolName, input, message, ctx) {
           role = await guild.roles.create({ name: r.name, reason: "Role picker setup" });
         }
         if (!role) return `Couldn't find role "${r.name}" — set create_if_missing: true to create it`;
+        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Role picker" });
+        if (roleErr) return roleErr;
         resolved.push({ id: role.id, name: role.name, emoji: r.emoji ?? null, label: r.description ?? r.name, style: r.style || "secondary" });
       }
 
@@ -1006,6 +1022,8 @@ export async function execute(toolName, input, message, ctx) {
           role = await guild.roles.create({ name: r.name, reason: "Dropdown role picker setup" });
         }
         if (!role) return `Couldn't find role "${r.name}" — set create_if_missing: true to create it`;
+        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Dropdown role" });
+        if (roleErr) return roleErr;
         resolved.push({ id: role.id, name: role.name, emoji: r.emoji ?? null, description: r.description ?? null });
       }
 
@@ -1125,6 +1143,11 @@ export async function execute(toolName, input, message, ctx) {
           }
           const hex = parseInt(hexStr, 16);
           role = await guild.roles.create({ name: color.name, color: hex, reason: "Color role picker" });
+        }
+        const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Color role" });
+        if (roleErr) {
+          roleIds.push({ id: null, name: color.name, emoji: color.emoji ?? null, error: roleErr });
+          continue;
         }
         roleIds.push({ id: role.id, name: color.name, emoji: color.emoji ?? null });
       }

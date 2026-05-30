@@ -57,11 +57,12 @@ export function isOriginAllowed(origin, allowedOrigins) {
 export function isDashboardRequestAuthorized(req) {
   const remote = req.socket?.remoteAddress || "";
   const isLocalhost = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
-  if (isLocalhost) return true;
+  const allowLocalhostBypass = process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS === "1";
+  if (isLocalhost && allowLocalhostBypass) return true;
 
   const authHeader = req.headers.authorization;
   const token = typeof authHeader === "string" ? authHeader.replace(/^Bearer\s+/i, "") : "";
-  const validKeys = [process.env.DASHBOARD_API_KEY, process.env.TWIN_API_SECRET].filter(Boolean);
+  const validKeys = [process.env.DASHBOARD_API_KEY].filter(Boolean);
   return !!token && validKeys.some((k) => safeStringEqual(token, k));
 }
 
@@ -146,16 +147,14 @@ export async function handleApiRequest(req, res) {
       // GET twin endpoints (mood, status) — no secret needed, limited data
     }
   } else {
-    // Dashboard API — accept DASHBOARD_API_KEY or TWIN_API_SECRET. Using a
+    // Dashboard API — accept DASHBOARD_API_KEY. Using a
     // truncated Discord bot token as a fallback API key was a credential-
     // reuse footgun: if the token leaked anywhere (logs, git, a compromised
     // dep), the first 20 chars would double as a dashboard credential.
     // Removed — callers must use an explicit API key env var.
     //
-    // Localhost bypass: requests from 127.0.0.1 / ::1 skip the token check.
-    // The admin panel is served from the same process at /admin, so any
-    // browser tab on this machine (or an SSH-tunneled session) is trusted.
-    // Anyone with shell access to this user already owns the bots.
+    // Localhost bypass is disabled by default; explicitly opt in with
+    // DASHBOARD_ALLOW_LOCALHOST_BYPASS=1 for trusted single-user machines.
     // Constant-time compare via safeStringEqual (crypto.timingSafeEqual over
     // length-equalized buffers). Array.includes uses === under the hood, which
     // short-circuits on the first mismatched byte and leaks the secret one byte

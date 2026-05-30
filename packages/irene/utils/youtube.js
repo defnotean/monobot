@@ -5,6 +5,7 @@ import { EmbedBuilder } from "discord.js";
 import { getYoutubeConfig, setYoutubeConfig } from "../database.js";
 import { log } from "./logger.js";
 import Parser from "rss-parser";
+import { safeFetch } from "@defnotean/shared/safeFetch";
 
 const parser = new Parser();
 
@@ -13,6 +14,17 @@ const parser = new Parser();
 const _feedState = new Map(); // "guildId:youtubeChannelId" → { lastVideoId, lastChecked, failureCount }
 const MAX_RETRIES = 3;
 const YOUTUBE_CHANNEL_ID_REGEX = /^[a-zA-Z0-9_-]{24}$/; // YouTube channel IDs are 24 chars
+const FEED_MAX_BYTES = 1_000_000;
+
+async function parseFeedUrl(feedUrl) {
+  const res = await safeFetch(feedUrl, {
+    headers: { "User-Agent": "Mozilla/5.0" },
+    timeoutMs: 10_000,
+    maxBytes: FEED_MAX_BYTES,
+  });
+  if (!res.text || !/<(?:feed|entry)[\s>]/i.test(res.text)) return { items: [] };
+  return parser.parseString(res.text);
+}
 
 // ─── YouTube Config Management ─────────────────────────────────────────────
 
@@ -113,7 +125,7 @@ async function checkGuildYoutubeFeeds(guild) {
       for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         try {
           const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${feed.youtubeChannelId}`;
-          feedData = await parser.parseURL(feedUrl);
+          feedData = await parseFeedUrl(feedUrl);
           state.failureCount = 0; // Reset on success
           break;
         } catch (err) {

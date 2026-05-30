@@ -1,6 +1,69 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 // @ts-expect-error - importing JS module without types
-import { resolveTwinCommand, TWIN_ALIASES, TWIN_COMMAND_ALLOWLIST } from "../../presence.js";
+import { isDashboardRequestAuthorized, isOriginAllowed, resolveTwinCommand, TWIN_ALIASES, TWIN_COMMAND_ALLOWLIST } from "../../presence.js";
+
+const savedDashboardEnv = {
+  DASHBOARD_API_KEY: process.env.DASHBOARD_API_KEY,
+  TWIN_API_SECRET: process.env.TWIN_API_SECRET,
+  DASHBOARD_ALLOW_LOCALHOST_BYPASS: process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS,
+};
+
+afterEach(() => {
+  for (const [key, value] of Object.entries(savedDashboardEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
+
+function authReq(remoteAddress: string, authorization?: string) {
+  return {
+    socket: { remoteAddress },
+    headers: authorization ? { authorization } : {},
+  };
+}
+
+describe("isDashboardRequestAuthorized", () => {
+  it("does not trust localhost unless explicitly enabled", () => {
+    delete process.env.DASHBOARD_API_KEY;
+    delete process.env.TWIN_API_SECRET;
+    delete process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS;
+
+    expect(isDashboardRequestAuthorized(authReq("127.0.0.1"))).toBe(false);
+  });
+
+  it("allows localhost only when the bypass flag is enabled", () => {
+    process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS = "1";
+
+    expect(isDashboardRequestAuthorized(authReq("::1"))).toBe(true);
+  });
+
+  it("accepts configured bearer tokens for remote requests", () => {
+    process.env.DASHBOARD_API_KEY = "dash-secret";
+    delete process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS;
+
+    expect(isDashboardRequestAuthorized(authReq("203.0.113.10", "Bearer dash-secret"))).toBe(true);
+    expect(isDashboardRequestAuthorized(authReq("203.0.113.10", "Bearer wrong"))).toBe(false);
+  });
+
+  it("does not accept TWIN_API_SECRET as a dashboard admin key", () => {
+    process.env.TWIN_API_SECRET = "twin-secret";
+    delete process.env.DASHBOARD_API_KEY;
+    delete process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS;
+
+    expect(isDashboardRequestAuthorized(authReq("203.0.113.10", "Bearer twin-secret"))).toBe(false);
+  });
+});
+
+describe("isOriginAllowed", () => {
+  it("requires exact scheme, hostname, and port matches", () => {
+    const allowed = ["http://localhost:3001", "https://dashboard.example.com"];
+
+    expect(isOriginAllowed("http://localhost:3001", allowed)).toBe(true);
+    expect(isOriginAllowed("http://localhost:9999", allowed)).toBe(false);
+    expect(isOriginAllowed("https://localhost:3001", allowed)).toBe(false);
+    expect(isOriginAllowed("https://dashboard.example.com.attacker.test", allowed)).toBe(false);
+  });
+});
 
 // Server-side defense-in-depth allowlist for the /api/twin/command relay path.
 // resolveTwinCommand resolves Eris's short command name to Irene's real tool

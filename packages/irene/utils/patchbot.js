@@ -6,8 +6,32 @@ import Parser from "rss-parser";
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 import { getPatchFeeds, setPatchFeeds, getPatchLastSeen, setPatchLastSeen } from "../database.js";
 import { log } from "./logger.js";
+import { safeFetch, validateUrlAsync } from "@defnotean/shared/safeFetch";
 
 const parser = new Parser();
+const PAGE_MAX_BYTES = 2_000_000;
+const FEED_MAX_BYTES = 1_000_000;
+
+export async function validatePatchFeedUrl(url) {
+  await validateUrlAsync(url);
+  return String(url).trim();
+}
+
+async function fetchText(url, { maxBytes = PAGE_MAX_BYTES } = {}) {
+  const res = await safeFetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+    timeoutMs: 10_000,
+    maxBytes,
+  });
+  return res.ok ? res.text : null;
+}
+
+async function parseFeedUrl(url) {
+  await validatePatchFeedUrl(url);
+  const xml = await fetchText(url, { maxBytes: FEED_MAX_BYTES });
+  if (!xml || !/<(?:rss|feed|item|entry)[\s>]/i.test(xml)) return { items: [] };
+  return parser.parseString(xml);
+}
 
 // ─── Known Feeds Library ─────────────────────────────────────────────────────
 
@@ -29,12 +53,8 @@ export const KNOWN_FEEDS = {
 
 async function scrapePage(url) {
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
+    const html = await fetchText(url);
+    if (!html) return null;
 
     const get = (prop) =>
       html.match(new RegExp(`<meta\\s+(?:property|name)="${prop}"\\s+content="([^"]+)"`, "i"))?.[1]
@@ -69,12 +89,8 @@ async function scrapePage(url) {
 
 async function fetchRiotPatchNotes(listingUrl, baseOrigin) {
   try {
-    const res = await fetch(listingUrl, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return [];
-    const html = await res.text();
+    const html = await fetchText(listingUrl);
+    if (!html) return [];
 
     const match = html.match(/<script\s+id="__NEXT_DATA__"\s+type="application\/json">([\s\S]*?)<\/script>/i);
     if (!match) return [];
@@ -117,12 +133,8 @@ async function fetchRiotPatchNotes(listingUrl, baseOrigin) {
 
 async function fetchCS2Updates(url) {
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return [];
-    const text = await res.text();
+    const text = await fetchText(url);
+    if (!text) return [];
 
     // The page has updates in a pattern: date heading + "Counter-Strike 2 Update" + bullet sections
     // Split by date pattern like "March 18, 2026" or "January 21, 2026"
@@ -271,7 +283,7 @@ export async function fetchLatestPost(feedUrl, feedName, feedColor, { offset = 0
   }
 
   // RSS-type: parse feed
-  const parsed = await parser.parseURL(feedUrl);
+  const parsed = await parseFeedUrl(feedUrl);
   if (!parsed.items?.length) return null;
 
   let item;
@@ -372,7 +384,7 @@ export async function checkFeeds(client) {
 
           // RSS feeds
           if (!feed.url) return;
-          const parsed = await parser.parseURL(feed.url);
+          const parsed = await parseFeedUrl(feed.url);
           if (!parsed.items?.length) return;
 
           const latest = parsed.items[0];

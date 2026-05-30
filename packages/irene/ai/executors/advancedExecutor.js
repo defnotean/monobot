@@ -11,6 +11,10 @@ import { safeFetch, wrapUntrustedWithFirewall } from "@defnotean/shared/safeFetc
 import { checkInjection } from "../firewall.js";
 import { findMember } from "../executor.js";
 
+function canManageScheduledTasks(member) {
+  return isAdminMember(member);
+}
+
 // Wrap external content fetched by web tools so the LLM treats it as data,
 // not as instructions. Runs the firewall on the body and redacts if it fires.
 async function wrapWebOutput(content, userId) {
@@ -473,6 +477,9 @@ export async function execute(toolName, input, message, ctx) {
       const task = getScheduledTask(taskId);
       if (!task) return `No pending task with ID ${taskId}.`;
       if (task.guildId !== guild.id) return `Task #${taskId} belongs to a different server.`;
+      if (task.authorId !== message.author.id && !canManageScheduledTasks(message.member)) {
+        return "You can only cancel your own scheduled tasks unless you have Manage Server.";
+      }
 
       const timer = scheduledTaskTimers.get(taskId);
       if (timer) { clearTimeout(timer); scheduledTaskTimers.delete(taskId); }
@@ -483,7 +490,10 @@ export async function execute(toolName, input, message, ctx) {
 
     case "list_scheduled_tasks": {
       if (!guild) return "list_scheduled_tasks only works inside a server.";
-      const tasks = getScheduledTasks(guild.id);
+      const allTasks = getScheduledTasks(guild.id);
+      const tasks = canManageScheduledTasks(message.member)
+        ? allTasks
+        : allTasks.filter((t) => t.authorId === message.author.id);
       if (!tasks.length) return "No scheduled tasks pending in this server.";
 
       const lines = tasks

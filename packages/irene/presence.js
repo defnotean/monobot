@@ -23,6 +23,37 @@ const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000, maxKe
 const _presenceLimiter = createRateLimiter({ limit: 1, windowMs: 1_000, maxKeys: 1000, globalLimit: 300 });
 const _dashboardLimiter = createRateLimiter({ limit: 30, windowMs: 60_000, maxKeys: 500, globalLimit: 600 });
 
+function normalizeOrigin(value) {
+  if (!value || typeof value !== "string") return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+export function isOriginAllowed(origin, allowedOrigins) {
+  const reqOrigin = normalizeOrigin(origin);
+  if (!reqOrigin) return false;
+  for (const allowed of allowedOrigins) {
+    const allowedOrigin = normalizeOrigin(allowed);
+    if (allowedOrigin && allowedOrigin === reqOrigin) return true;
+  }
+  return false;
+}
+
+export function isDashboardRequestAuthorized(req) {
+  const remote = req.socket?.remoteAddress || "";
+  const isLocalhost = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+  const allowLocalhostBypass = process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS === "1";
+  if (isLocalhost && allowLocalhostBypass) return true;
+
+  const authHeader = req.headers.authorization;
+  const token = typeof authHeader === "string" ? authHeader.replace(/^Bearer\s+/i, "") : "";
+  const validKeys = [process.env.DASHBOARD_API_KEY].filter(Boolean);
+  return !!token && validKeys.some((k) => safeStringEqual(token, k));
+}
+
 // TTS audio cache — stores generated WAV buffers keyed by random ID, served via /tts/:id
 // Bounded to TTS_MAX_CACHE entries; oldest entries evicted on insert. Entries expire after 5 min.
 const TTS_MAX_CACHE = 50;
@@ -261,7 +292,7 @@ export function startPresenceAPI(client) {
       const apiOrigin = req.headers.origin;
       const selfUrl = process.env.EXTERNAL_URL || process.env.RENDER_EXTERNAL_URL;
       const allowedOrigins = [selfUrl, process.env.DASHBOARD_URL].filter(Boolean);
-      if (apiOrigin && allowedOrigins.some(o => { try { return new URL(apiOrigin).hostname === new URL(/** @type {string} */ (o)).hostname; } catch { return false; } })) {
+      if (apiOrigin && isOriginAllowed(apiOrigin, allowedOrigins)) {
         res.setHeader("Access-Control-Allow-Origin", apiOrigin);
       }
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
@@ -279,28 +310,13 @@ export function startPresenceAPI(client) {
       const apiIP = getClientIp(req);
       if (!_dashboardLimiter.allow(apiIP)) { j(429, { error: "rate limited" }); return; }
 
-      // ── Auth check — accept DASHBOARD_API_KEY or TWIN_API_SECRET
-      // Comparison goes through safeStringEqual so a network attacker can't
-      // learn either secret one byte at a time from response-time deltas.
-      // (Array.includes uses === under the hood, which short-circuits on
-      // first mismatched byte.)
-      //
-      // Localhost bypass: same-machine requests skip the token check so the
-      // admin panel served from Eris (or a local browser tab / SSH tunnel)
-      // can hit Irene's API directly. Anyone with shell access to this user
-      // already owns the bots.
+      // ── Auth check — accept DASHBOARD_API_KEY.
+      // Localhost bypass is disabled by default; explicitly opt in with
+      // DASHBOARD_ALLOW_LOCALHOST_BYPASS=1 for trusted single-user machines.
       const isTwinPath = path.startsWith("/api/twin/");
-      const remoteAddr = req.socket?.remoteAddress || "";
-      const isLocalhost = remoteAddr === "127.0.0.1" || remoteAddr === "::1" || remoteAddr === "::ffff:127.0.0.1";
-      if (!isTwinPath && path !== "/api/health" && !isLocalhost) {
-        const authHeader = req.headers.authorization;
-        const token = authHeader?.replace("Bearer ", "");
-        const validKeys = [process.env.DASHBOARD_API_KEY, process.env.TWIN_API_SECRET].filter(Boolean);
-        const tokenOk = !!token && validKeys.some((k) => safeStringEqual(token, k));
-        if (!tokenOk) {
-          j(401, { error: "unauthorized" });
-          return;
-        }
+      if (!isTwinPath && path !== "/api/health" && !isDashboardRequestAuthorized(req)) {
+        j(401, { error: "unauthorized" });
+        return;
       }
 
       // ── Health

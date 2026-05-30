@@ -3,6 +3,7 @@ import {
   setBirthday, removeBirthday, getBirthday, getGuildBirthdays,
   getBirthdayConfig, setBirthdayChannel, setBirthdayRole, setBirthdayMessage,
 } from "../../database.js";
+import { validateAssignableRole } from "../../ai/executors/customCommandExecutor.js";
 
 const MONTHS = [
   "January","February","March","April","May","June",
@@ -153,7 +154,11 @@ export async function execute(interaction) {
     const message = interaction.options.getString("message");
 
     setBirthdayChannel(guild.id, channel.id);
-    if (role)    setBirthdayRole(guild.id, role.id);
+    if (role) {
+      const roleErr = validateAssignableRole(guild, role, { actor: interaction.member, actionLabel: "Birthday role" });
+      if (roleErr) return interaction.reply({ content: roleErr, ephemeral: true });
+      setBirthdayRole(guild.id, role.id);
+    }
     if (message) setBirthdayMessage(guild.id, message);
 
     const lines = [`✅ Birthday announcements set to ${channel}`];

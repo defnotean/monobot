@@ -6,6 +6,7 @@
 import { EmbedBuilder } from "discord.js";
 import { getGuildSettings, setGuildSetting } from "../database.js";
 import { log } from "../utils/logger.js";
+import { safeFetch, validateUrlAsync } from "@defnotean/shared/safeFetch";
 
 const POLL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const STEAM_NEWS_URL  = (appId, count = 5) =>
@@ -29,6 +30,12 @@ const RELEVANT_FEEDS = new Set([
 ]);
 
 const RELEVANT_TITLE_RX = /\b(update|patch|hotfix|fix|changelog|release|v\d|version|\d+\.\d+|dlc|content)\b/i;
+const RSS_MAX_BYTES = 1_000_000;
+
+export async function validateGameWatchRssUrl(url) {
+  await validateUrlAsync(url);
+  return String(url).trim();
+}
 
 // ─── Steam helpers ────────────────────────────────────────────────────────────
 
@@ -68,11 +75,15 @@ async function fetchSteamNews(appId) {
 
 async function fetchRSS(url) {
   try {
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       headers: { "User-Agent": "Mozilla/5.0" },
-      signal: AbortSignal.timeout(10_000),
+      timeoutMs: 10_000,
+      maxBytes: RSS_MAX_BYTES,
     });
-    const xml = await res.text();
+    const type = res.headers?.get?.("content-type") || "";
+    const xml = res.text || "";
+    if (type && !/(xml|rss|atom|text\/plain|text\/html)/i.test(type)) return [];
+    if (!/<(?:rss|feed|item|entry)[\s>]/i.test(xml)) return [];
     const items = [];
     // Simple XML extraction — no external parser needed
     const itemRx = /<item[\s>]([\s\S]*?)<\/item>/gi;

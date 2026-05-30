@@ -6,6 +6,8 @@ vi.mock("../../../music/player.js", () => ({
 }));
 vi.mock("../../../utils/logger.js", () => ({ log: vi.fn() }));
 vi.mock("../../../utils/pagination.js", () => ({ paginate: vi.fn() }));
+const validateUrlAsync = vi.hoisted(() => vi.fn(async () => ({})));
+vi.mock("@defnotean/shared/safeFetch", () => ({ validateUrlAsync }));
 
 // @ts-expect-error JS helper without types
 import { makeInteraction, makeGuild, makeChannel, repliedText, PermissionFlagsBits } from "../../_helpers/mockDiscord.js";
@@ -51,6 +53,21 @@ describe("/soundboard add", () => {
     });
     await soundboard.execute(interaction);
     expect(repliedText(interaction)).toMatch(/Invalid URL/i);
+  });
+
+  it("rejects private or otherwise unsafe URLs", async () => {
+    validateUrlAsync.mockRejectedValueOnce(new Error("private/loopback address not allowed"));
+    const interaction = makeInteraction({
+      subcommand: "add",
+      options: { name: "bad", url: "http://127.0.0.1/a.mp3" },
+      permissions: [PermissionFlagsBits.ManageGuild],
+      guild: makeGuild({ id: "g1" }),
+    });
+
+    await soundboard.execute(interaction);
+
+    expect(repliedText(interaction)).toMatch(/private\/loopback/i);
+    expect(soundboard.getSoundboardData()).toEqual({});
   });
 
   it("rejects an over-long name", async () => {

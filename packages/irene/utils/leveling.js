@@ -2,6 +2,7 @@
 // In-memory store with JSON backup structure. No database imports.
 
 import { log } from "./logger.js";
+import { validateAssignableRole } from "../ai/executors/customCommandExecutor.js";
 
 const levelData = {
   users: {},        // guildId -> userId -> { xp, totalXp }
@@ -224,6 +225,12 @@ export async function applyLevelRewards(member, guildId, level, guild) {
 
     // Skip if member already has role
     if (member.roles.cache.has(reward.roleId)) {
+      continue;
+    }
+
+    const roleErr = validateAssignableRole(guild, role, { actor: member, actionLabel: "Level reward" });
+    if (roleErr) {
+      log(`Skipping unsafe level reward role ${role.id} for ${member.user.tag}: ${roleErr}`);
       continue;
     }
 

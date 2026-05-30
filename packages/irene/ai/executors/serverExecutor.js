@@ -1,7 +1,8 @@
 // ─── Server Management Executor ─────────────────────────────────────────────
 
-import { AuditLogEvent } from "discord.js";
+import { AuditLogEvent, PermissionFlagsBits } from "discord.js";
 import { log } from "../../utils/logger.js";
+import { safeFetch } from "@defnotean/shared/safeFetch";
 
 import { getInviteHistory, getInviteLeaderboard, getInvitesBy } from "../../database.js";
 
@@ -14,6 +15,15 @@ const VERIFICATION_LEVELS = { none: 0, low: 1, medium: 2, high: 3, very_high: 4 
 const NOTIFICATION_LEVELS = { all_messages: 0, only_mentions: 1 };
 const CONTENT_FILTER_LEVELS = { disabled: 0, members_without_roles: 1, all_members: 2 };
 const VALID_AFK_TIMEOUTS = [60, 300, 900, 1800, 3600];
+const SERVER_ICON_MAX_BYTES = 8 * 1024 * 1024;
+const IMAGE_EXT_TO_TYPE = new Map([
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["gif", "image/gif"],
+  ["webp", "image/webp"],
+]);
+const ALLOWED_IMAGE_TYPES = new Set(IMAGE_EXT_TO_TYPE.values());
 
 const AUDIT_LOG_TYPES = {
   guild_update: AuditLogEvent.GuildUpdate,
@@ -50,10 +60,74 @@ const AUDIT_LOG_TYPES = {
   message_unpin: AuditLogEvent.MessageUnpin,
 };
 
+const TOOL_PERMISSIONS = {
+  create_invite: PermissionFlagsBits.CreateInstantInvite,
+  list_invites: PermissionFlagsBits.ManageGuild,
+  delete_invite: PermissionFlagsBits.ManageGuild,
+  set_server_settings: PermissionFlagsBits.ManageGuild,
+  set_server_icon: PermissionFlagsBits.ManageGuild,
+  view_audit_log: PermissionFlagsBits.ViewAuditLog,
+  list_members: PermissionFlagsBits.ManageGuild,
+};
+
+function hasGuildPermission(member, guild, permission) {
+  if (!permission) return true;
+  if (!member) return false;
+  if (member.id === guild?.ownerId) return true;
+  return Boolean(member.permissions?.has?.(PermissionFlagsBits.Administrator) || member.permissions?.has?.(permission));
+}
+
+function getHeader(headers, name) {
+  return headers?.get?.(name) ?? headers?.[name] ?? headers?.[name.toLowerCase()] ?? "";
+}
+
+function imageTypeFromUrl(rawUrl) {
+  let path = "";
+  try { path = new URL(rawUrl).pathname; }
+  catch { path = String(rawUrl).split("?")[0]; }
+  const ext = path.toLowerCase().split(".").pop();
+  return IMAGE_EXT_TO_TYPE.get(ext) || null;
+}
+
+async function fetchServerIcon(url) {
+  const res = await safeFetch(url, {
+    binary: true,
+    maxBytes: SERVER_ICON_MAX_BYTES,
+    timeoutMs: 10_000,
+  }).catch((e) => {
+    if (/response too large/i.test(e?.message || "")) {
+      throw new Error("image is too large (max 8 MB)");
+    }
+    throw e;
+  });
+
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`image download failed (HTTP ${res.status})`);
+  }
+
+  const rawType = String(getHeader(res.headers, "content-type")).split(";")[0].trim().toLowerCase();
+  if (rawType && !rawType.startsWith("image/") && rawType !== "application/octet-stream") {
+    throw new Error("URL did not return an image");
+  }
+
+  const contentType = rawType.startsWith("image/")
+    ? rawType
+    : imageTypeFromUrl(res.url) || imageTypeFromUrl(url);
+  if (!contentType || !ALLOWED_IMAGE_TYPES.has(contentType)) {
+    throw new Error("image must be PNG, JPG, GIF, or WebP");
+  }
+
+  return { bytes: res.bytes, contentType };
+}
+
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
 
   const { guild, findChannel, by } = ctx;
+  const requiredPermission = TOOL_PERMISSIONS[toolName];
+  if (!hasGuildPermission(message.member, guild, requiredPermission)) {
+    return "permission denied";
+  }
 
   switch (toolName) {
     // ── Create Invite ─────────────────────────────────────────────────────────
@@ -228,12 +302,8 @@ export async function execute(toolName, input, message, ctx) {
         const url = input.url?.trim();
         if (!url) return "No image URL provided.";
 
-        const response = await fetch(url);
-        if (!response.ok) return `Failed to fetch image: HTTP ${response.status}`;
-
-        const contentType = response.headers.get("content-type") || "image/png";
-        const buffer = Buffer.from(await response.arrayBuffer());
-        const dataUri = `data:${contentType};base64,${buffer.toString("base64")}`;
+        const image = await fetchServerIcon(url);
+        const dataUri = `data:${image.contentType};base64,${image.bytes.toString("base64")}`;
 
         await guild.setIcon(dataUri);
         return "Server icon updated successfully.";

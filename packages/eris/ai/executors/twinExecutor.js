@@ -2,13 +2,60 @@
 // Handles: ask_irene
 // Called from main executor.js via delegation.
 
-import { isOwner, isTrusted } from "../../utils/permissions.js";
+import { isOwner } from "../../utils/permissions.js";
 import { log } from "../../utils/logger.js";
 import { signTwinRequest } from "@defnotean/shared/twinSign";
 import { resolveMember } from "../../utils/discord.js";
 import config from "../../config.js";
+import { PermissionFlagsBits } from "discord.js";
 
 const HANDLED = new Set(["ask_irene"]);
+
+const COMMAND_PERMISSIONS = new Map([
+  ["announce", PermissionFlagsBits.ManageMessages],
+  ["ban", PermissionFlagsBits.BanMembers],
+  ["ban_user", PermissionFlagsBits.BanMembers],
+  ["kick", PermissionFlagsBits.KickMembers],
+  ["kick_user", PermissionFlagsBits.KickMembers],
+  ["warn", PermissionFlagsBits.ModerateMembers],
+  ["warn_user", PermissionFlagsBits.ModerateMembers],
+  ["timeout", PermissionFlagsBits.ModerateMembers],
+  ["timeout_user", PermissionFlagsBits.ModerateMembers],
+  ["purge", PermissionFlagsBits.ManageMessages],
+  ["purge_messages", PermissionFlagsBits.ManageMessages],
+  ["lock", PermissionFlagsBits.ManageChannels],
+  ["lock_channel", PermissionFlagsBits.ManageChannels],
+  ["unlock", PermissionFlagsBits.ManageChannels],
+  ["unlock_channel", PermissionFlagsBits.ManageChannels],
+  ["slowmode", PermissionFlagsBits.ManageChannels],
+  ["set_slowmode", PermissionFlagsBits.ManageChannels],
+  ["set_topic", PermissionFlagsBits.ManageChannels],
+  ["set_channel_topic", PermissionFlagsBits.ManageChannels],
+  ["create_channel", PermissionFlagsBits.ManageChannels],
+  ["delete_channel", PermissionFlagsBits.ManageChannels],
+  ["nuke_channel", PermissionFlagsBits.ManageChannels],
+  ["rename_channel", PermissionFlagsBits.ManageChannels],
+  ["move_channel", PermissionFlagsBits.ManageChannels],
+  ["set_log_channel", PermissionFlagsBits.ManageGuild],
+  ["set_welcome_channel", PermissionFlagsBits.ManageGuild],
+  ["setup_starboard", PermissionFlagsBits.ManageGuild],
+  ["setup_reaction_roles", PermissionFlagsBits.ManageGuild],
+  ["create_role", PermissionFlagsBits.ManageRoles],
+  ["delete_role", PermissionFlagsBits.ManageRoles],
+  ["give_role", PermissionFlagsBits.ManageRoles],
+  ["remove_role", PermissionFlagsBits.ManageRoles],
+  ["mass_role", PermissionFlagsBits.ManageRoles],
+  ["nickname", PermissionFlagsBits.ManageNicknames],
+  ["set_nickname", PermissionFlagsBits.ManageNicknames],
+]);
+
+function canRelayCommand(message, command) {
+  if (isOwner(message.author.id)) return true;
+  const required = COMMAND_PERMISSIONS.get(command);
+  if (!required) return false;
+  const perms = message.member?.permissions;
+  return Boolean(perms?.has?.(PermissionFlagsBits.Administrator) || perms?.has?.(required));
+}
 
 export async function execute(toolName, input, message, _context) {
   if (!HANDLED.has(toolName)) return undefined;
@@ -21,20 +68,8 @@ export async function execute(toolName, input, message, _context) {
       const command = (input.command || "").toLowerCase().trim();
       if (!command) return "what do you want me to tell irene to do?";
 
-      // Role-based permission check — mirrors Irene's own permission system
-      const _memberPerms = message.member?.permissions;
-      const _userIsAdmin = isOwner(message.author.id) || isTrusted(message.author.id) || _memberPerms?.has?.("Administrator");
-      const _userIsMod = _userIsAdmin || _memberPerms?.has?.("ModerateMembers") || _memberPerms?.has?.("KickMembers") || _memberPerms?.has?.("BanMembers");
-      const _userIsStaff = _userIsMod || _memberPerms?.has?.("ManageChannels") || _memberPerms?.has?.("ManageRoles");
-
-      const _ADMIN_CMDS = ["create_channel", "delete_channel", "create_role", "delete_role", "set_log_channel", "set_welcome_channel", "setup_starboard", "setup_reaction_roles", "nuke_channel", "lockdown_server"];
-      const _MOD_CMDS = ["ban", "ban_user", "kick", "kick_user", "warn", "warn_user", "timeout", "timeout_user", "purge", "purge_messages", "lock", "lock_channel", "unlock", "unlock_channel", "slowmode", "set_slowmode", "nickname", "set_nickname"];
-      const _STAFF_CMDS = ["give_role", "remove_role", "mass_role", "set_topic", "rename_channel", "move_channel"];
-
       const _sassyDeny = ["lol cute attempt", "that's adorable that you thought you could do that", "you wish bestie", "maybe in your dreams", "nah you're not built for that one", "ask someone with actual power", "that's above your clearance level sorry not sorry"][Math.floor(Math.random() * 7)];
-      if (_ADMIN_CMDS.includes(command) && !_userIsAdmin) return _sassyDeny;
-      if (_MOD_CMDS.includes(command) && !_userIsMod) return _sassyDeny;
-      if (_STAFF_CMDS.includes(command) && !_userIsStaff) return _sassyDeny;
+      if (!canRelayCommand(message, command)) return _sassyDeny;
 
       const IRENE_API = config.twinApiUrl;
       const TWIN_SECRET = config.twinApiSecret;

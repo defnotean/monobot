@@ -60,6 +60,7 @@ import {
   trackAiUsage, trackHumanityState, detectSleepIntent, maybeAutoSleep,
   maybeAfterthought, mirrorToDm, recordEpisode, autoAssignAccessRole,
 } from "./messageCreate/analytics.js";
+import { validateAssignableRole } from "../ai/executors/customCommandExecutor.js";
 
 // Re-export so external callers (presence.js, toolCallDirective.test.ts)
 // keep working.
@@ -276,7 +277,11 @@ export async function execute(message) {
         const reward = rewards.find((r) => r.level === result.level);
         if (reward) {
           const role = message.guild.roles.cache.get(reward.roleId);
-          if (role) message.member?.roles.add(role).catch(() => {});
+          if (role) {
+            const roleErr = validateAssignableRole(message.guild, role, { actor: message.member, actionLabel: "Level reward" });
+            if (roleErr) log(`[Leveling] Skipping unsafe reward role ${role.id} in ${message.guild.name}: ${roleErr}`);
+            else message.member?.roles.add(role).catch(() => {});
+          }
         }
         // Announce level up — supports multi-role pinging
         const levelPingIds = Array.isArray(settings.ping_role_ids) ? settings.ping_role_ids : [];

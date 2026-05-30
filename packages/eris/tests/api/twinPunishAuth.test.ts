@@ -170,6 +170,7 @@ const validBodyJson = JSON.stringify({
 beforeEach(() => {
   _resetReplayCacheForTests();
   process.env.TWIN_API_SECRET = SECRET;
+  process.env.DASHBOARD_API_KEY = "dashboard-key";
   // Reset our in-memory db harness state.
   dbState.guildSettings = { cross_bot_punish: true };
   dbState.balance = { balance: 0 };
@@ -348,7 +349,7 @@ describe("/api/twin/remind, /api/twin/note, /api/twin/fact - strict HMAC auth", 
 });
 
 // Non-twin dashboard paths require an Authorization: Bearer <key> header where
-// <key> is DASHBOARD_API_KEY or TWIN_API_SECRET, compared via safeStringEqual
+// <key> is DASHBOARD_API_KEY, compared via safeStringEqual
 // (constant-time). The legacy truncated-bot-token fallback was removed. These
 // tests lock in the accept/reject behavior on a representative GET path.
 describe("dashboard Bearer auth gate (/api/stats — non-twin)", () => {
@@ -375,14 +376,27 @@ describe("dashboard Bearer auth gate (/api/stats — non-twin)", () => {
     expect(body.error).toMatch(/unauthorized/);
   });
 
-  it("accepts a request whose Bearer token equals TWIN_API_SECRET with 200", async () => {
-    // process.env.TWIN_API_SECRET is set to SECRET by tests/setup.ts and is one
-    // of the validKeys safeStringEqual accepts.
+  it("rejects a request whose Bearer token only equals TWIN_API_SECRET", async () => {
     const req = makeReq({
       path: "/api/stats",
       body: "",
       method: "GET",
       headers: { authorization: `Bearer ${SECRET}` },
+    });
+    const res = makeRes();
+    const { status, body } = await call(req, res);
+
+    expect(status).toBe(401);
+    expect(body.error).toMatch(/unauthorized/);
+  });
+
+  it("accepts a request whose Bearer token equals DASHBOARD_API_KEY", async () => {
+    process.env.DASHBOARD_API_KEY = "dashboard-key";
+    const req = makeReq({
+      path: "/api/stats",
+      body: "",
+      method: "GET",
+      headers: { authorization: "Bearer dashboard-key" },
     });
     const res = makeRes();
     const { status, body } = await call(req, res);
@@ -408,7 +422,7 @@ describe("dashboard body cap (413 payload too large)", () => {
       path: "/api/mood",
       body: huge,
       method: "PATCH",
-      headers: { authorization: `Bearer ${SECRET}` },
+      headers: { authorization: "Bearer dashboard-key" },
     });
     const res = makeRes();
     const { status, body } = await call(req, res);

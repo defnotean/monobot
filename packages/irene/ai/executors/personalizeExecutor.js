@@ -3,6 +3,17 @@
 import { setDmWelcome, setLeaveChannel, setChannelPersonality, setBadWords, setEscalation, setServerPersona } from "../../database.js";
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
+import { safeFetch } from "@defnotean/shared/safeFetch";
+
+const PERSONALIZATION_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const IMAGE_EXT_TO_TYPE = new Map([
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["gif", "image/gif"],
+  ["webp", "image/webp"],
+]);
+const ALLOWED_IMAGE_TYPES = new Set(IMAGE_EXT_TO_TYPE.values());
 
 const HANDLED = new Set([
   "set_server_avatar", "set_server_banner", "set_server_persona",
@@ -10,6 +21,51 @@ const HANDLED = new Set([
   "set_bad_words", "set_escalation",
   "adjust_relationship", "adjust_mood",
 ]);
+
+function getHeader(headers, name) {
+  return headers?.get?.(name) ?? headers?.[name] ?? headers?.[name.toLowerCase()] ?? "";
+}
+
+function imageTypeFromUrl(rawUrl) {
+  let path = "";
+  try { path = new URL(rawUrl).pathname; }
+  catch { path = String(rawUrl).split("?")[0]; }
+  const ext = path.toLowerCase().split(".").pop();
+  return IMAGE_EXT_TO_TYPE.get(ext) || null;
+}
+
+async function fetchPersonalizationImage(imageUrl) {
+  if (!imageUrl) throw new Error("No image URL provided.");
+
+  const res = await safeFetch(imageUrl, {
+    binary: true,
+    maxBytes: PERSONALIZATION_IMAGE_MAX_BYTES,
+    timeoutMs: 10_000,
+  }).catch((e) => {
+    if (/response too large/i.test(e?.message || "")) {
+      throw new Error("Image is too large (max 8 MB).");
+    }
+    throw e;
+  });
+
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`Image download failed (HTTP ${res.status}).`);
+  }
+
+  const rawType = String(getHeader(res.headers, "content-type")).split(";")[0].trim().toLowerCase();
+  if (rawType && !rawType.startsWith("image/") && rawType !== "application/octet-stream") {
+    throw new Error("URL did not return an image.");
+  }
+
+  const contentType = rawType.startsWith("image/")
+    ? rawType
+    : imageTypeFromUrl(res.url) || imageTypeFromUrl(imageUrl);
+  if (!contentType || !ALLOWED_IMAGE_TYPES.has(contentType)) {
+    throw new Error("Image must be PNG, JPG, GIF, or WebP.");
+  }
+
+  return { bytes: res.bytes, contentType };
+}
 
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
@@ -22,19 +78,10 @@ export async function execute(toolName, input, message, ctx) {
       if (!input.image_url) return "No image URL provided.";
       const field = toolName === "set_server_banner" ? "banner" : "avatar";
       try {
-        const res = await fetch(input.image_url);
-        if (!res.ok) throw new Error(`Fetch failed (HTTP ${res.status})`);
-
-        const rawType = (res.headers.get("content-type") || "").split(";")[0].trim();
-        const urlPath = input.image_url.split("?")[0].toLowerCase();
-        const extMap = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
-        const ext = urlPath.split(".").pop();
-        const contentType = (rawType.startsWith("image/") ? rawType : null) ?? extMap[ext] ?? "image/png";
-
-        const buffer = await res.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString("base64");
-        const dataUri = `data:${contentType};base64,${base64}`;
-        log(`[Persona] set_server_${field}: ${Math.round(buffer.byteLength / 1024)}KB, type=${contentType}`);
+        const image = await fetchPersonalizationImage(input.image_url);
+        const base64 = image.bytes.toString("base64");
+        const dataUri = `data:${image.contentType};base64,${base64}`;
+        log(`[Persona] set_server_${field}: ${Math.round(image.bytes.byteLength / 1024)}KB, type=${image.contentType}`);
 
         await guild.client.rest.patch(`/guilds/${guild.id}/members/@me`, {
           body: { [field]: dataUri },

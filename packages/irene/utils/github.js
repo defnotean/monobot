@@ -5,6 +5,7 @@ import { EmbedBuilder } from "discord.js";
 import { getGithubConfig, setGithubConfig } from "../database.js";
 import { log } from "./logger.js";
 import Parser from "rss-parser";
+import { safeFetch } from "@defnotean/shared/safeFetch";
 
 const parser = new Parser();
 
@@ -13,6 +14,18 @@ const parser = new Parser();
 const _feedState = new Map(); // "guildId:repo" → { lastEventId, lastChecked, failureCount }
 const MAX_RETRIES = 3;
 const GITHUB_REPO_REGEX = /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/; // owner/repo format
+const GITHUB_BRANCH_REGEX = /^[a-zA-Z0-9._/-]{1,120}$/;
+const FEED_MAX_BYTES = 1_000_000;
+
+async function parseFeedUrl(feedUrl) {
+  const res = await safeFetch(feedUrl, {
+    headers: { "User-Agent": "Mozilla/5.0" },
+    timeoutMs: 10_000,
+    maxBytes: FEED_MAX_BYTES,
+  });
+  if (!res.text || !/<(?:feed|entry)[\s>]/i.test(res.text)) return { items: [] };
+  return parser.parseString(res.text);
+}
 
 // ─── GitHub Config Management ──────────────────────────────────────────────
 
@@ -37,6 +50,9 @@ export function addGithubFeed(guildId, repo, discordChannelId, branch = "main") 
   // Validate repo format (owner/repo)
   if (!GITHUB_REPO_REGEX.test(repo)) {
     return { success: false, error: "Invalid repo format (use: owner/repo)" };
+  }
+  if (!GITHUB_BRANCH_REGEX.test(branch) || branch.includes("..") || branch.startsWith("/") || branch.endsWith("/")) {
+    return { success: false, error: "Invalid branch name" };
   }
 
   const configs = getGithubConfig(guildId);
@@ -122,7 +138,7 @@ async function checkGuildGithubFeeds(guild) {
       for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         try {
           const feedUrl = `https://github.com/${owner}/${repoName}/commits/${branch}.atom`;
-          feedData = await parser.parseURL(feedUrl);
+          feedData = await parseFeedUrl(feedUrl);
           state.failureCount = 0; // Reset on success
           break;
         } catch (err) {

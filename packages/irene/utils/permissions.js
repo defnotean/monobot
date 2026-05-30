@@ -28,6 +28,22 @@ export function isAdminMember(member) {
   return false;
 }
 
+export function isGuildOwnerMember(member) {
+  return Boolean(member?.guild?.ownerId && member.id === member.guild.ownerId);
+}
+
+export function hasAdministratorMember(member) {
+  return Boolean(isGuildOwnerMember(member) || member?.permissions?.has?.(PermissionFlagsBits.Administrator));
+}
+
+export function hasManageRolesMember(member) {
+  return Boolean(isGuildOwnerMember(member) || member?.permissions?.has?.(PermissionFlagsBits.Administrator) || member?.permissions?.has?.(PermissionFlagsBits.ManageRoles));
+}
+
+export function hasManageChannelsMember(member) {
+  return Boolean(isGuildOwnerMember(member) || member?.permissions?.has?.(PermissionFlagsBits.Administrator) || member?.permissions?.has?.(PermissionFlagsBits.ManageChannels));
+}
+
 export function requirePermission(interaction, permission, permName) {
   // Server owner bypasses all permission checks
   if (interaction.member.id === interaction.guild.ownerId) return true;

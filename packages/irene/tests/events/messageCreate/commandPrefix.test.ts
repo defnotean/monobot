@@ -4,13 +4,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../../../utils/logger.js", () => ({ log: vi.fn() }));
 vi.mock("../../../database.js", () => ({
   getCustomCommand: vi.fn(),
+  setCustomCommand: vi.fn(),
+  deleteCustomCommand: vi.fn(),
+  listCustomCommands: vi.fn(() => []),
   getTrustedUsers: vi.fn(() => []),
   getAutoResponders: vi.fn(() => []),
   getStickyMessage: vi.fn(() => null),
   updateStickyMessageId: vi.fn(),
   isFeatureEnabled: vi.fn(() => true),
 }));
-vi.mock("../../../ai/executor.js", () => ({
+vi.mock("../../../ai/resolve.js", () => ({
   findRole: vi.fn(),
 }));
 
@@ -23,7 +26,7 @@ import {
 import {
   getCustomCommand, getTrustedUsers, getAutoResponders, isFeatureEnabled,
 } from "../../../database.js";
-import { findRole } from "../../../ai/executor.js";
+import { findRole } from "../../../ai/resolve.js";
 // @ts-expect-error JS helper, no types
 import { makeMessage, makeUser, makeMember, makeGuild, makeChannel, PermissionFlagsBits } from "../../_helpers/mockDiscord.js";
 
@@ -138,12 +141,42 @@ describe("commandPrefix / handleCustomCommand", () => {
 
   it("adds a configured role via findRole", async () => {
     getCustomCommand.mockReturnValue({ response: "ok", role_to_give: "VIP" });
-    const role = { id: "r1", name: "VIP" };
+    const role = { id: "r1", name: "VIP", position: 1, permissions: { has: () => false } };
     findRole.mockReturnValue(role);
     const msg = buildMsg({ content: "!vip" });
     await handleCustomCommand(msg);
     expect(findRole).toHaveBeenCalledWith(msg.guild, "VIP");
     expect(msg.member.roles.add).toHaveBeenCalledWith(role);
+  });
+
+  it("does not add a dangerous role from a stored command", async () => {
+    getCustomCommand.mockReturnValue({ response: "ok", role_to_give: "Admin" });
+    const role = {
+      id: "r-admin",
+      name: "Admin",
+      position: 1,
+      permissions: { has: (flag) => flag === PermissionFlagsBits.Administrator },
+    };
+    findRole.mockReturnValue(role);
+    const msg = buildMsg({ content: "!adminme" });
+
+    await handleCustomCommand(msg);
+
+    expect(msg.member.roles.add).not.toHaveBeenCalled();
+    expect(msg.channel.send).toHaveBeenCalledWith("ok");
+  });
+
+  it("does not remove a role at or above the bot's top role", async () => {
+    getCustomCommand.mockReturnValue({ response: "ok", role_to_remove: "Protected" });
+    const role = { id: "r-high", name: "Protected", position: 100, permissions: { has: () => false } };
+    findRole.mockReturnValue(role);
+    const msg = buildMsg({ content: "!drop" });
+    msg.guild.members.me.roles.highest.position = 50;
+
+    await handleCustomCommand(msg);
+
+    expect(msg.member.roles.remove).not.toHaveBeenCalled();
+    expect(msg.channel.send).toHaveBeenCalledWith("ok");
   });
 
   it("sends an embed when embed_title is set", async () => {

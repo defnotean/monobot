@@ -153,6 +153,7 @@ describe("setup wizard handler (handleSetupWizard)", () => {
       customId: "setupwiz:autorole:pick",
       permissions: [PermissionFlagsBits.ManageGuild],
     });
+    interaction.member.roles.highest.position = 50;
     interaction.roles = { first: () => role };
     await handleSetupWizard(interaction);
     expect(setGuildSetting).not.toHaveBeenCalled();
@@ -168,6 +169,7 @@ describe("setup wizard handler (handleSetupWizard)", () => {
       customId: "setupwiz:autorole:pick",
       permissions: [PermissionFlagsBits.ManageGuild],
     });
+    interaction.member.roles.highest.position = 50;
     interaction.roles = { first: () => role };
     await handleSetupWizard(interaction);
     expect(setGuildSetting).not.toHaveBeenCalled();
@@ -183,6 +185,7 @@ describe("setup wizard handler (handleSetupWizard)", () => {
       customId: "setupwiz:autorole:pick",
       permissions: [PermissionFlagsBits.ManageGuild],
     });
+    interaction.member.roles.highest.position = 50;
     interaction.roles = { first: () => role };
     await handleSetupWizard(interaction);
     expect(setGuildSetting).toHaveBeenCalledWith(guild.id, "autorole_id", role.id);

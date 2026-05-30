@@ -14,6 +14,7 @@ import { ADMIN_TOOLS } from "./tools.js";
 import { registry } from "./toolRegistry.js";
 import { log, redact } from "../utils/logger.js";
 import config from "../config.js";
+import { safeFetch } from "@defnotean/shared/safeFetch";
 
 const GEMINI_MODEL = config.geminiModel;               // worker AI — most capable, deep reasoning + tools
 const GEMINI_FALLBACK_MODEL = config.geminiFallbackModel; // fallback on rate limit — still thinking-capable
@@ -286,13 +287,9 @@ async function toGeminiHistory(history) {
                       continue;
                     }
 
-                    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+                    const res = await safeFetch(url, { binary: true, maxBytes: 1_000_000, timeoutMs: 5000 });
                     if (res.ok) {
-                      const contentLength = parseInt(res.headers.get("content-length") || "0");
-                      if (contentLength > 1_000_000) { parts.push({ text: "[image too large to process]" }); continue; }
-                      const buf = Buffer.from(await res.arrayBuffer());
-                      if (buf.length > 1_000_000) { parts.push({ text: "[image too large]" }); continue; }
-                      parts.push({ inlineData: { mimeType: res.headers.get("content-type") || "image/png", data: buf.toString("base64") } });
+                      parts.push({ inlineData: { mimeType: res.headers.get("content-type") || "image/png", data: Buffer.from(res.bytes).toString("base64") } });
                     } else {
                       parts.push({ text: "[image failed to load]" });
                     }

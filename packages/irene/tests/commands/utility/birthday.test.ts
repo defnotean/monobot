@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 // @ts-expect-error JS helper, no types
-import { makeInteraction, makeUser, makeGuild, repliedText, PermissionFlagsBits } from "../../_helpers/mockDiscord.js";
+import { makeInteraction, makeUser, makeGuild, makeRole, makePermissions, repliedText, PermissionFlagsBits } from "../../_helpers/mockDiscord.js";
 
 // In-memory backing store for the mocked database module.
 const store = {
@@ -135,6 +135,27 @@ describe("utility/birthday setup (permission gate)", () => {
     expect(mockSetBirthdayChannel).toHaveBeenCalledWith("g1", "chan-9");
     expect(mockSetBirthdayRole).toHaveBeenCalledWith("g1", "role-9");
     expect(mockSetBirthdayMessage).toHaveBeenCalledWith("g1", "Happy bday {user}");
+  });
+
+  it("rejects dangerous birthday roles", async () => {
+    const role = makeRole({
+      id: "role-danger",
+      name: "Adminish",
+      position: 1,
+      permissions: makePermissions([PermissionFlagsBits.ManageRoles]),
+    });
+    const interaction = bday({
+      sub: "setup",
+      perms: [PermissionFlagsBits.ManageGuild],
+      options: {
+        channel: { id: "chan-9", toString: () => "<#chan-9>" },
+        role,
+        message: null,
+      },
+    });
+    await birthdayCmd.execute(interaction);
+    expect(mockSetBirthdayRole).not.toHaveBeenCalled();
+    expect(repliedText(interaction)).toMatch(/elevated permissions/i);
   });
 });
 

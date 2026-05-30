@@ -46,7 +46,8 @@ function makeRes(): MockRes {
 
 beforeEach(() => {
   process.env.TWIN_API_SECRET = "test-twin-secret";
-  delete process.env.DASHBOARD_API_KEY;
+  process.env.DASHBOARD_API_KEY = "dashboard-key";
+  delete process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS;
 });
 
 describe("Eris admin auxiliary routes", () => {
@@ -70,7 +71,20 @@ describe("Eris admin auxiliary routes", () => {
     expect(JSON.parse(res.body).error).toBe("unauthorized");
   });
 
-  it("allows localhost dashboard requests through the auxiliary route gate", async () => {
+  it("rejects localhost dashboard requests unless the dev bypass is explicitly enabled", async () => {
+    const res = makeRes();
+
+    const handled = await handleAdminAuxRoute(
+      makeReq("/api/logs?bot=nonexistent&lines=10", {}, "127.0.0.1"),
+      res,
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("allows localhost dashboard requests when the explicit dev bypass is enabled", async () => {
+    process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS = "1";
     const res = makeRes();
 
     const handled = await handleAdminAuxRoute(
@@ -90,7 +104,7 @@ describe("Eris admin auxiliary routes", () => {
     // Unique remote IP so this test's bucket is isolated from any other test
     // that touched the shared module-level _dashboardLimiter for a known IP.
     const ip = "198.51.100.31";
-    const auth = { authorization: "Bearer test-twin-secret" };
+    const auth = { authorization: "Bearer dashboard-key" };
 
     // First 30 authed requests are under the per-IP limit. They are authed
     // (valid Bearer) and hit a nonexistent log (404), so never a 401 or 429.
@@ -120,7 +134,7 @@ describe("Eris admin auxiliary routes", () => {
     // Distinct IP again so the 30 hits above don't bleed into this assertion.
     const res = makeRes();
     const handled = await handleAdminAuxRoute(
-      makeReq("/api/logs?bot=nonexistent&lines=10", { authorization: "Bearer test-twin-secret" }, "198.51.100.77"),
+      makeReq("/api/logs?bot=nonexistent&lines=10", { authorization: "Bearer dashboard-key" }, "198.51.100.77"),
       res,
     );
 

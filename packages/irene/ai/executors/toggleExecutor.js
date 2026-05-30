@@ -1,7 +1,7 @@
 // ─── Toggle / Auto-Responder / Trust Executor ──────────────────────────────
 
 import { setFeatureToggle, addTrustedUser, removeTrustedUser, getTrustedUsers, addAutoResponder, getAutoResponders, removeAutoResponder } from "../../database.js";
-import { isAdminMember } from "../../utils/permissions.js";
+import { hasAdministratorMember, isAdminMember } from "../../utils/permissions.js";
 
 const HANDLED = new Set([
   "toggle_twin_chat", "toggle_auto_responders", "toggle_voice_tracking",
@@ -21,12 +21,21 @@ const ADMIN_MUTATORS = new Set([
   "toggle_invite_filter",
 ]);
 
+const TRUST_MUTATORS = new Set([
+  "trust_user",
+  "untrust_user",
+]);
+
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
 
   const { guild, findMember } = ctx;
 
-  if (ADMIN_MUTATORS.has(toolName) && !isAdminMember(message.member)) {
+  if (TRUST_MUTATORS.has(toolName) && !hasAdministratorMember(message.member)) {
+    return "permission denied — only the server owner or an Administrator can change trusted users";
+  }
+
+  if (ADMIN_MUTATORS.has(toolName) && !TRUST_MUTATORS.has(toolName) && !isAdminMember(message.member)) {
     return "permission denied";
   }
 

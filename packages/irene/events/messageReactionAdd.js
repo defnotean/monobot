@@ -4,6 +4,7 @@ import { EmbedBuilder } from "discord.js";
 import { getReactionRoles, isReactionRoleExclusive, getStarboard, addStarboardEntry, getStarboardEntry } from "../database.js";
 import { _botRemovedReactions } from "./messageReactionRemove.js";
 import { log } from "../utils/logger.js";
+import { validateAssignableRole } from "../ai/executors/customCommandExecutor.js";
 
 export const name = "messageReactionAdd";
 
@@ -31,6 +32,11 @@ export async function execute(reaction, user) {
         const member = guild.members.cache.get(user.id) ?? await guild.members.fetch(user.id);
         const role = guild.roles.cache.get(match.roleId);
         if (role && member) {
+          const roleErr = validateAssignableRole(guild, role, { actor: member, actionLabel: "Reaction role" });
+          if (roleErr) {
+            log(`[ReactionRole] blocked unsafe role ${match.roleId} for ${user.tag}: ${roleErr}`);
+            return;
+          }
           const exclusive = isReactionRoleExclusive(guild.id, reaction.message.id);
 
           if (exclusive) {

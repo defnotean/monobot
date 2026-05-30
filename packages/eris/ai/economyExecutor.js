@@ -6,6 +6,35 @@ import * as db from "../database.js";
 import { resolveMember } from "../utils/discord.js";
 import { ACHIEVEMENTS, DEFAULT_SHOP_ITEMS, generateChallenge, calculateLoanTotal, openMysteryBox } from "./economy.js";
 import { randomQuip } from "./gambling.js";
+import { PermissionFlagsBits } from "discord.js";
+
+const SELF_ASSIGN_DENY_PERMS = [
+  PermissionFlagsBits.Administrator,
+  PermissionFlagsBits.ManageGuild,
+  PermissionFlagsBits.ManageRoles,
+  PermissionFlagsBits.ManageChannels,
+  PermissionFlagsBits.BanMembers,
+  PermissionFlagsBits.KickMembers,
+  PermissionFlagsBits.ModerateMembers,
+  PermissionFlagsBits.ManageMessages,
+  PermissionFlagsBits.MentionEveryone,
+  PermissionFlagsBits.ViewAuditLog,
+];
+
+function validateShopRole(guild, role) {
+  if (!role) return "that shop role no longer exists";
+  if (role.id === guild.id) return "shop roles can't grant @everyone";
+  if (role.managed) return `shop roles can't grant **${role.name}** because Discord manages that role`;
+  if (SELF_ASSIGN_DENY_PERMS.some((perm) => role.permissions?.has?.(perm))) {
+    return `shop roles can't grant **${role.name}** because it has elevated permissions`;
+  }
+  const botMember = guild.members?.me;
+  if (!botMember?.permissions?.has?.(PermissionFlagsBits.ManageRoles)) return "I need Manage Roles to grant shop roles";
+  if (botMember.roles?.highest?.position != null && role.position >= botMember.roles.highest.position) {
+    return `I can't grant **${role.name}** because it is at or above my top role`;
+  }
+  return null;
+}
 
 // Per-user loan lock — serializes loan_request so parallel calls can't both
 // pass the "no active loan" check and create two loans.
@@ -66,6 +95,12 @@ export async function executeEconomyTool(toolName, input, message) {
       if (UNIQUE_TYPES.has(item.type)) {
         const alreadyOwns = await db.hasItem(message.author.id, item.name);
         if (alreadyOwns) return `you already own ${item.name}`;
+      }
+      if (item.type === "role" && item.role_id) {
+        if (!guild) return "role shop items only work in servers";
+        const role = guild.roles.cache.get(item.role_id);
+        const roleErr = validateShopRole(guild, role);
+        if (roleErr) return roleErr;
       }
 
       // Atomically reserve stock (if the item is limited) BEFORE charging.

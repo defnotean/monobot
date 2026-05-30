@@ -2,6 +2,7 @@ import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
 import { successEmbed, errorEmbed, infoEmbed, musicEmbed } from "../../utils/embeds.js";
 import { log } from "../../utils/logger.js";
 import { paginate } from "../../utils/pagination.js";
+import { validateUrlAsync } from "@defnotean/shared/safeFetch";
 
 // ─── Soundboard Store ──────────────────────────────────────────────────────────
 // Key: guildId, Value: { soundName: { url, category?, duration? } }
@@ -137,6 +138,14 @@ export async function execute(interaction) {
         flags: 64,
       });
     }
+    try {
+      await validateUrlAsync(url);
+    } catch (err) {
+      return interaction.reply({
+        embeds: [errorEmbed("Invalid URL", err.message || "that URL is not allowed")],
+        flags: 64,
+      });
+    }
 
     if (!addSound(guildId, name, url, category, duration)) {
       return interaction.reply({
@@ -174,6 +183,7 @@ export async function execute(interaction) {
 
     // Import player dynamically to use playSoundEffect
     try {
+      await validateUrlAsync(url);
       const { playSoundEffect } = await import("../../music/player.js");
       await playSoundEffect(guildId, url, interaction.member.voice.channel);
 

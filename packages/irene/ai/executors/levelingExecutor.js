@@ -1,5 +1,7 @@
 // ─── Leveling Executor ──────────────────────────────────────────────────────
 
+import { validateAssignableRole } from "./customCommandExecutor.js";
+
 const HANDLED = new Set([
   "set_level_reward", "remove_level_reward", "toggle_leveling",
   "set_level_channel", "set_level_ping_roles",
@@ -15,6 +17,8 @@ export async function execute(toolName, input, message, ctx) {
       const { setLevelReward } = await import("../../utils/leveling.js");
       const role = findRole(guild, input.role_name);
       if (!role) return `couldn't find role "${input.role_name}"`;
+      const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Level reward" });
+      if (roleErr) return roleErr;
       setLevelReward(guild.id, input.level, role.id);
       return `set level ${input.level} reward to ${role.name}`;
     }

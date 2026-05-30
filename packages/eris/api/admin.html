@@ -124,16 +124,16 @@
 </head>
 <body>
 
-<!-- Auth login modal — only shown when local bypass fails and no key in localStorage -->
+<!-- Auth login modal — shown when no valid key is available -->
 <div id="login-modal" class="modal-bg">
   <div class="modal">
     <h2>🔒 Auth required</h2>
-    <p>This admin panel is being accessed remotely. Paste your <span class="mono">DASHBOARD_API_KEY</span> or <span class="mono">TWIN_API_SECRET</span> below. It'll be saved in this browser's localStorage.</p>
+    <p>This admin panel is being accessed remotely. Paste your <span class="mono">DASHBOARD_API_KEY</span> below. It'll be saved in this browser's localStorage.</p>
     <input id="login-token" type="password" placeholder="Paste token..." autocomplete="off" />
     <div id="login-error" class="err-box" style="display:none; margin: 0 0 12px;"></div>
     <button class="btn primary" style="width:100%; padding: 10px;" onclick="submitLogin()">Sign in</button>
     <div class="small" style="margin-top: 10px; text-align: center;">
-      Tip: local access from this machine doesn't need a token (localhost bypass).
+      Tip: localhost bypass is disabled unless DASHBOARD_ALLOW_LOCALHOST_BYPASS=1.
     </div>
   </div>
 </div>
@@ -638,8 +638,8 @@ async function refresh() {
   refreshStatus();
 }
 
-// Auth bootstrap: try a token-free probe first (localhost bypass). If 401,
-// either auto-use saved token from localStorage, or show login modal.
+// Auth bootstrap: try a token-free probe first in case localhost bypass was
+// explicitly enabled. If 401, use a saved token or show the login modal.
 async function bootstrap() {
   try {
     const r = await authFetch('/api/health', { cache: 'no-store' });

@@ -17,6 +17,7 @@ import {
 import {
   getConvClient, activeProviderNeedsGeminiClient,
 } from "./aiInvoke.js";
+import { validateAssignableRole } from "../../ai/executors/customCommandExecutor.js";
 
 let _modHumanity, _modLongmemory, _modStats;
 const lazyHumanity   = async () => (_modHumanity   ??= await import("../../ai/humanity.js"));
@@ -133,6 +134,11 @@ export async function autoAssignAccessRole({ isDM, message, guild }) {
       ? guild.roles.cache.get(accessRoleId)
       : guild.roles.cache.find((r) => r.name.toLowerCase() === "irene-perms");
     if (accessRole && !message.member.roles.cache.has(accessRole.id)) {
+      const roleErr = validateAssignableRole(guild, accessRole, { actor: message.member, actionLabel: "Access role" });
+      if (roleErr) {
+        log(`[AccessRole] Skipping unsafe access role ${accessRole.id} in ${guild.name}: ${roleErr}`);
+        return;
+      }
       await message.member.roles.add(accessRole).catch(() => {});
     }
   } catch {}

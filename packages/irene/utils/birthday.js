@@ -4,6 +4,7 @@
 import { EmbedBuilder } from "discord.js";
 import { getTodaysBirthdays, getBirthdayConfig, markBirthdayAnnounced, wasBirthdayAnnounced, getBirthday } from "../database.js";
 import { log } from "./logger.js";
+import { validateAssignableRole } from "../ai/executors/customCommandExecutor.js";
 
 function ordinal(n) {
   const s = ["th", "st", "nd", "rd"];
@@ -116,6 +117,11 @@ async function checkGuildBirthdays(guild) {
     if (config.role_id) {
       const role = guild.roles.cache.get(config.role_id);
       if (role) {
+        const roleErr = validateAssignableRole(guild, role, { actor: member, actionLabel: "Birthday role" });
+        if (roleErr) {
+          log(`[Birthday] Skipping unsafe birthday role ${role.id} in "${guild.name}": ${roleErr}`);
+          continue;
+        }
         await member.roles.add(role, "Birthday role").catch(() => {});
         setTimeout(async () => {
           try {

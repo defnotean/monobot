@@ -2,7 +2,8 @@
 
 import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { log } from "../../utils/logger.js";
-import { isAdminMember } from "../../utils/permissions.js";
+import { hasAdministratorMember, hasManageChannelsMember, hasManageRolesMember } from "../../utils/permissions.js";
+import { DANGEROUS_PERMS, checkRoleMutationHierarchy, checkRoleReorderHierarchy } from "../hierarchy.js";
 
 const HANDLED = new Set([
   "create_role", "delete_role", "edit_role", "reorder_roles",
@@ -10,17 +11,127 @@ const HANDLED = new Set([
   "give_role", "remove_role", "mass_role", "set_role_icons",
 ]);
 
+const ROLE_MUTATION_TOOLS = new Set([
+  "create_role", "delete_role", "edit_role", "reorder_roles",
+  "set_role_permissions", "give_role", "remove_role", "mass_role",
+  "set_role_icons",
+]);
+
+const CHANNEL_MUTATION_TOOLS = new Set([
+  "create_category", "delete_category",
+]);
+
+const PERMISSION_MAP = {
+  view_channels:      PermissionFlagsBits.ViewChannel,
+  send_messages:      PermissionFlagsBits.SendMessages,
+  read_history:       PermissionFlagsBits.ReadMessageHistory,
+  embed_links:        PermissionFlagsBits.EmbedLinks,
+  attach_files:       PermissionFlagsBits.AttachFiles,
+  add_reactions:      PermissionFlagsBits.AddReactions,
+  use_ext_emoji:      PermissionFlagsBits.UseExternalEmojis,
+  use_slash_commands: PermissionFlagsBits.UseApplicationCommands,
+  mention_everyone:   PermissionFlagsBits.MentionEveryone,
+  manage_messages:    PermissionFlagsBits.ManageMessages,
+  manage_channels:    PermissionFlagsBits.ManageChannels,
+  manage_roles:       PermissionFlagsBits.ManageRoles,
+  manage_guild:       PermissionFlagsBits.ManageGuild,
+  kick_members:       PermissionFlagsBits.KickMembers,
+  ban_members:        PermissionFlagsBits.BanMembers,
+  timeout_members:    PermissionFlagsBits.ModerateMembers,
+  view_audit_log:     PermissionFlagsBits.ViewAuditLog,
+  connect_voice:      PermissionFlagsBits.Connect,
+  speak_voice:        PermissionFlagsBits.Speak,
+  stream:             PermissionFlagsBits.Stream,
+  move_members:       PermissionFlagsBits.MoveMembers,
+  mute_members:       PermissionFlagsBits.MuteMembers,
+  deafen_members:     PermissionFlagsBits.DeafenMembers,
+  administrator:      PermissionFlagsBits.Administrator,
+};
+
+function isGuildOwner(member, guild) {
+  return Boolean(member?.id && guild?.ownerId && member.id === guild.ownerId);
+}
+
+function hasAdministratorOrOwner(member, guild) {
+  return isGuildOwner(member, guild) || hasAdministratorMember(member);
+}
+
+function hasManageRolesOrOwner(member, guild) {
+  return isGuildOwner(member, guild) || hasManageRolesMember(member);
+}
+
+function hasManageChannelsOrOwner(member, guild) {
+  return isGuildOwner(member, guild) || hasManageChannelsMember(member);
+}
+
+function requestedPermissionChanges(input) {
+  return Object.entries(PERMISSION_MAP).filter(([key]) => input[key] === true || input[key] === false);
+}
+
+function requestedDangerousGrants(input) {
+  return requestedPermissionChanges(input)
+    .filter(([key, flag]) => input[key] === true && DANGEROUS_PERMS.includes(flag))
+    .map(([key]) => key);
+}
+
+function dangerousGrantError(input, member, guild) {
+  const dangerous = requestedDangerousGrants(input);
+  if (!dangerous.length) return null;
+  if (dangerous.includes("administrator") && !isGuildOwner(member, guild)) {
+    return "Only the server owner can grant Administrator to a role";
+  }
+  if (!hasAdministratorOrOwner(member, guild)) {
+    return `Only the server owner or an Administrator can grant elevated role permissions: ${dangerous.join(", ")}`;
+  }
+  return null;
+}
+
+function buildPermissionBitfield(input, current = 0n) {
+  let perms = BigInt(current);
+  const changed = [];
+  for (const [key, flag] of Object.entries(PERMISSION_MAP)) {
+    if (input[key] === true)  { perms |= BigInt(flag);  changed.push(`+${key}`); }
+    if (input[key] === false) { perms &= ~BigInt(flag); changed.push(`-${key}`); }
+  }
+  return { perms, changed };
+}
+
+function checkNewRolePosition(member, guild, position) {
+  if (position === undefined || position === null) return null;
+  const botTop = guild.members?.me?.roles?.highest?.position;
+  if (typeof botTop === "number" && position >= botTop) {
+    return "I can't create a role at or above my top role";
+  }
+  if (!isGuildOwner(member, guild)) {
+    const memberTop = member?.roles?.highest?.position;
+    if (typeof memberTop !== "number") return "Could not verify moderator role hierarchy";
+    if (position >= memberTop) return "You can't create a role at or above your top role";
+  }
+  return null;
+}
+
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
 
-  // Defense-in-depth: every tool routed through this executor is destructive.
-  // The primary ADMIN_TOOLS gate runs in dual.js; this is a backup so a
-  // regression in the gate logic can't bypass authentication.
-  if (!isAdminMember(message.member)) {
-    return "permission denied";
-  }
-
   const { guild, by, findRole, findMember, parseHexColor, checkRoleAssignment } = ctx;
+  const actor = message.member;
+
+  if (ROLE_MUTATION_TOOLS.has(toolName)) {
+    if (!hasManageRolesOrOwner(actor, guild)) {
+      return "permission denied — you need Manage Roles";
+    }
+    if (!hasManageRolesOrOwner(guild.members?.me, guild)) {
+      return "I need Manage Roles to do that";
+    }
+  }
+  if (CHANNEL_MUTATION_TOOLS.has(toolName)) {
+    if (!hasManageChannelsOrOwner(actor, guild)) {
+      return "permission denied — you need Manage Channels";
+    }
+    if (!hasManageChannelsOrOwner(guild.members?.me, guild)) {
+      return "I need Manage Channels to do that";
+    }
+  }
 
   switch (toolName) {
     case "create_category": {
@@ -38,48 +149,27 @@ export async function execute(toolName, input, message, ctx) {
     case "set_role_permissions": {
       const role = findRole(guild, input.role_name);
       if (!role) return `Couldn't find role "${input.role_name}"`;
+      const hierarchyErr = checkRoleMutationHierarchy(actor, role, guild, "edit");
+      if (hierarchyErr) return hierarchyErr;
+      const grantErr = dangerousGrantError(input, actor, guild);
+      if (grantErr) return grantErr;
 
-      const map = {
-        view_channels:      PermissionFlagsBits.ViewChannel,
-        send_messages:      PermissionFlagsBits.SendMessages,
-        read_history:       PermissionFlagsBits.ReadMessageHistory,
-        embed_links:        PermissionFlagsBits.EmbedLinks,
-        attach_files:       PermissionFlagsBits.AttachFiles,
-        add_reactions:      PermissionFlagsBits.AddReactions,
-        use_ext_emoji:      PermissionFlagsBits.UseExternalEmojis,
-        use_slash_commands: PermissionFlagsBits.UseApplicationCommands,
-        mention_everyone:   PermissionFlagsBits.MentionEveryone,
-        manage_messages:    PermissionFlagsBits.ManageMessages,
-        manage_channels:    PermissionFlagsBits.ManageChannels,
-        manage_roles:       PermissionFlagsBits.ManageRoles,
-        manage_guild:       PermissionFlagsBits.ManageGuild,
-        kick_members:       PermissionFlagsBits.KickMembers,
-        ban_members:        PermissionFlagsBits.BanMembers,
-        timeout_members:    PermissionFlagsBits.ModerateMembers,
-        view_audit_log:     PermissionFlagsBits.ViewAuditLog,
-        connect_voice:      PermissionFlagsBits.Connect,
-        speak_voice:        PermissionFlagsBits.Speak,
-        stream:             PermissionFlagsBits.Stream,
-        move_members:       PermissionFlagsBits.MoveMembers,
-        mute_members:       PermissionFlagsBits.MuteMembers,
-        deafen_members:     PermissionFlagsBits.DeafenMembers,
-        administrator:      PermissionFlagsBits.Administrator,
-      };
-
-      let perms = role.permissions.bitfield;
-      const changed = [];
-      for (const [key, flag] of Object.entries(map)) {
-        if (input[key] === true)  { perms |= flag;  changed.push(`+${key}`); }
-        if (input[key] === false) { perms &= ~flag; changed.push(`-${key}`); }
-      }
+      const { perms, changed } = buildPermissionBitfield(input, role.permissions.bitfield);
       if (!changed.length) return "No permission changes specified";
       await role.setPermissions(perms, `Permissions set ${by}`);
       return `Updated @${role.name} permissions: ${changed.join(", ")}`;
     }
 
     case "create_role": {
+      const grantErr = dangerousGrantError(input, actor, guild);
+      if (grantErr) return grantErr;
+      const positionErr = checkNewRolePosition(actor, guild, input.position);
+      if (positionErr) return positionErr;
       const color = parseHexColor(input.color);
       const createOpts = { name: input.name, color, hoist: input.hoist || false, mentionable: input.mentionable || false, reason: `Created ${by}` };
+      if (input.position !== undefined) createOpts.position = input.position;
+      const { perms, changed } = buildPermissionBitfield(input);
+      if (changed.length) createOpts.permissions = perms;
       if (input.icon) {
         const isEmoji = /^\p{Emoji}$/u.test(input.icon.trim());
         if (isEmoji) createOpts.unicodeEmoji = input.icon.trim();
@@ -98,6 +188,8 @@ export async function execute(toolName, input, message, ctx) {
     case "delete_role": {
       const role = findRole(guild, input.name);
       if (!role) return `Couldn't find role "${input.name}"`;
+      const hierarchyErr = checkRoleMutationHierarchy(actor, role, guild, "delete");
+      if (hierarchyErr) return hierarchyErr;
       await role.delete(`Deleted ${by}`);
       return `Deleted role "${input.name}"`;
     }
@@ -105,6 +197,8 @@ export async function execute(toolName, input, message, ctx) {
     case "edit_role": {
       const role = findRole(guild, input.name);
       if (!role) return `Couldn't find role "${input.name}"`;
+      const hierarchyErr = checkRoleMutationHierarchy(actor, role, guild, "edit");
+      if (hierarchyErr) return hierarchyErr;
       const opts = {};
       if (input.new_name) opts.name = input.new_name;
       if (input.color) opts.color = parseHexColor(input.color);
@@ -135,6 +229,8 @@ export async function execute(toolName, input, message, ctx) {
       for (const entry of input.roles) {
         const role = findRole(guild, entry.name);
         if (!role) return `Couldn't find role "${entry.name}"`;
+        const hierarchyErr = checkRoleReorderHierarchy(actor, role, entry.position, guild);
+        if (hierarchyErr) return hierarchyErr;
         updates.push({ role: role.id, position: entry.position });
       }
       try {
@@ -205,6 +301,13 @@ export async function execute(toolName, input, message, ctx) {
         targets = targets.filter((m) => m.roles.cache.has(filterRole.id));
       }
       targets = targets.filter((m) => !m.user.bot);
+      let skippedByHierarchy = 0;
+      targets = targets.filter((m) => {
+        const roleErr = checkRoleAssignment(actor, m, role, guild);
+        if (!roleErr) return true;
+        skippedByHierarchy += 1;
+        return false;
+      });
       // Chunk the role mutations to 25 at a time so we don't hammer the API
       // and eat rate limits on servers with thousands of members.
       const list = [...targets.values()];
@@ -220,7 +323,8 @@ export async function execute(toolName, input, message, ctx) {
         count += results.filter((r) => r.status === "fulfilled").length;
         failed += results.filter((r) => r.status === "rejected").length;
       }
-      const failNote = failed ? ` (${failed} skipped — no permission)` : "";
+      const skipped = failed + skippedByHierarchy;
+      const failNote = skipped ? ` (${skipped} skipped — no permission or hierarchy)` : "";
       return `${input.action === "give" ? "Gave" : "Removed"} "${role.name}" ${input.action === "give" ? "to" : "from"} ${count} members${failNote}`;
     }
 
@@ -229,6 +333,8 @@ export async function execute(toolName, input, message, ctx) {
       for (const entry of input.roles) {
         const role = findRole(guild, entry.name);
         if (!role) { results.push(`"${entry.name}" — not found`); continue; }
+        const hierarchyErr = checkRoleMutationHierarchy(actor, role, guild, "edit");
+        if (hierarchyErr) { results.push(`"${entry.name}" — ${hierarchyErr}`); continue; }
         const opts = {};
         if (entry.icon === "none") {
           opts.unicodeEmoji = null;

@@ -1,7 +1,8 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
-import { successEmbed } from "../../utils/embeds.js";
-import { requirePermission, requireAdminOrOwner } from "../../utils/permissions.js";
+import { errorEmbed, successEmbed } from "../../utils/embeds.js";
+import { requireAdminOrOwner } from "../../utils/permissions.js";
 import { setAutorole } from "../../database.js";
+import { validateAssignableRole } from "../../ai/executors/customCommandExecutor.js";
 
 export const data = new SlashCommandBuilder()
   .setName("autorole")
@@ -13,6 +14,18 @@ export async function execute(interaction) {
   if (!requireAdminOrOwner(interaction)) return;
 
   const role = interaction.options.getRole("role");
+  const reason = validateAssignableRole(interaction.guild, role, {
+    actor: interaction.member,
+    actionLabel: "Autorole",
+  });
+  if (reason) {
+    await interaction.reply({
+      embeds: [errorEmbed("Unsafe Auto-Role", reason)],
+      ephemeral: true,
+    });
+    return;
+  }
+
   setAutorole(interaction.guild.id, role.id);
 
   await interaction.reply({

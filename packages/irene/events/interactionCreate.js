@@ -7,6 +7,7 @@ import { handleGiveawayButton } from "../commands/fun/giveaway.js";
 import { handlePollButton } from "../commands/fun/polladvanced.js";
 import { handleSetupWizard } from "../commands/setup/setup-wizard.js";
 import { handleTicketWizard } from "../commands/setup/ticket.js";
+import { validateAssignableRole } from "../ai/executors/customCommandExecutor.js";
 
 export const name = "interactionCreate";
 
@@ -283,6 +284,12 @@ export async function execute(interaction) {
       await interaction.editReply({ content: "that role doesn't exist anymore" }).catch(() => {});
       return;
     }
+    const roleErr = validateAssignableRole(guild, role, { actor: member, actionLabel: "Color role" });
+    if (roleErr) {
+      await interaction.editReply({ content: roleErr }).catch(() => {});
+      log(`[ColorRole] blocked unsafe role ${roleId} for ${member.user.tag}: ${roleErr}`);
+      return;
+    }
 
     try {
       const hasRole = member.roles.cache.has(roleId);
@@ -322,6 +329,12 @@ export async function execute(interaction) {
       await interaction.editReply({ content: "that role doesn't exist anymore" }).catch(() => {});
       return;
     }
+    const roleErr = validateAssignableRole(interaction.guild, role, { actor: member, actionLabel: "Role toggle" });
+    if (roleErr) {
+      await interaction.editReply({ content: roleErr }).catch(() => {});
+      log(`[ToggleRole] blocked unsafe role ${roleId} for ${member.user.tag}: ${roleErr}`);
+      return;
+    }
     try {
       const hasRole = member.roles.cache.has(roleId);
       if (hasRole) {
@@ -351,7 +364,16 @@ export async function execute(interaction) {
 
     try {
       // Filter out deleted roles — dropdown options may reference roles that no longer exist
-      const validSelected = selectedRoleIds.filter(id => guild.roles.cache.has(id));
+      const validSelected = selectedRoleIds.filter((id) => {
+        const role = guild.roles.cache.get(id);
+        if (!role) return false;
+        const roleErr = validateAssignableRole(guild, role, { actor: member, actionLabel: "Dropdown role" });
+        if (roleErr) {
+          log(`[DropdownRole] blocked unsafe role ${id} for ${member.user.tag}: ${roleErr}`);
+          return false;
+        }
+        return true;
+      });
       const invalidCount = selectedRoleIds.length - validSelected.length;
 
       if (mode === "exclusive") {

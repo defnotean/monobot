@@ -2,6 +2,7 @@ import { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuild
 import { primaryEmbed, successEmbed, errorEmbed, infoEmbed } from "../../utils/embeds.js";
 import { getGuildSettings, setLogChannel, setWelcomeChannel, setGuildSetting } from "../../database.js";
 import { log } from "../../utils/logger.js";
+import { validateAssignableRole } from "../../ai/executors/customCommandExecutor.js";
 
 // ─── Setup Wizard ───────────────────────────────────────────────────────────
 // Multi-page button-driven config flow. One command opens the main menu,
@@ -364,6 +365,8 @@ export async function handleSetupWizard(interaction) {
       if (!role) return interaction.reply({ content: "couldn't resolve that role — try again", flags: E }).catch(() => {});
       const check = _checkBotCanAssignRole(guild, role);
       if (!check.ok) return interaction.reply({ content: check.reason, flags: E }).catch(() => {});
+      const roleErr = validateAssignableRole(guild, role, { actor: interaction.member, actionLabel: "Autorole" });
+      if (roleErr) return interaction.reply({ content: roleErr, flags: E }).catch(() => {});
       const saved = await _persistSetting(guild.id, "autorole_id", role.id);
       if (!saved.ok) return interaction.reply({ embeds: [errorEmbed("Save failed", saved.error)], flags: E }).catch(() => {});
       return _safeUpdate(interaction, renderCategory(page, guild));

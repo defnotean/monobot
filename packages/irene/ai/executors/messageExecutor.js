@@ -2,8 +2,10 @@
 
 import {
   ComponentType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
+  StringSelectMenuBuilder, StringSelectMenuOptionBuilder, PermissionFlagsBits,
 } from "discord.js";
+import { validateAssignableRole } from "./customCommandExecutor.js";
+import { isGuildOwnerMember } from "../../utils/permissions.js";
 
 const HANDLED = new Set([
   "edit_message", "delete_message", "read_messages", "search_messages",
@@ -11,6 +13,13 @@ const HANDLED = new Set([
   "react_to_message", "remove_reaction",
   "send_message", "send_animated_message", "create_thread",
 ]);
+
+function hasChannelPermission(channel, member, permission) {
+  if (isGuildOwnerMember(member)) return true;
+  const scoped = channel?.permissionsFor?.(member);
+  if (scoped?.has?.(PermissionFlagsBits.Administrator) || scoped?.has?.(permission)) return true;
+  return Boolean(member?.permissions?.has?.(PermissionFlagsBits.Administrator) || member?.permissions?.has?.(permission));
+}
 
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
@@ -25,6 +34,12 @@ export async function execute(toolName, input, message, ctx) {
           ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
+        if (!hasChannelPermission(channel, message.member, PermissionFlagsBits.ManageMessages)) {
+          return "You need Manage Messages to pin messages.";
+        }
+        if (!hasChannelPermission(channel, guild.members?.me, PermissionFlagsBits.ManageMessages)) {
+          return "I need Manage Messages to pin messages.";
+        }
 
         const target = await channel.messages.fetch(input.message_id);
         if (!target) return `Couldn't find message with ID ${input.message_id}`;
@@ -154,6 +169,12 @@ export async function execute(toolName, input, message, ctx) {
           ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
+        if (!hasChannelPermission(channel, message.member, PermissionFlagsBits.ManageMessages)) {
+          return "You need Manage Messages to unpin messages.";
+        }
+        if (!hasChannelPermission(channel, guild.members?.me, PermissionFlagsBits.ManageMessages)) {
+          return "I need Manage Messages to unpin messages.";
+        }
 
         const target = await channel.messages.fetch(input.message_id);
         if (!target) return `Couldn't find message with ID ${input.message_id}`;
@@ -295,6 +316,12 @@ export async function execute(toolName, input, message, ctx) {
         };
 
         if (Array.isArray(input.buttons) && input.buttons.length) {
+          for (const b of input.buttons) {
+            if (!b.role_id) continue;
+            const role = guild.roles.cache.get(b.role_id);
+            const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Button role" });
+            if (roleErr) return roleErr;
+          }
           for (let i = 0; i < input.buttons.length; i += 5) {
             const slice = input.buttons.slice(i, i + 5);
             const row = new ActionRowBuilder().addComponents(
@@ -323,6 +350,11 @@ export async function execute(toolName, input, message, ctx) {
 
         if (input.dropdown?.options?.length) {
           const d = input.dropdown;
+          for (const opt of d.options.slice(0, 25)) {
+            const role = guild.roles.cache.get(opt.role_id);
+            const roleErr = validateAssignableRole(guild, role, { actor: message.member, actionLabel: "Dropdown role" });
+            if (roleErr) return roleErr;
+          }
           const exclusive = d.exclusive ?? false;
           const menu = new StringSelectMenuBuilder()
             .setCustomId(`dropdown_role:${exclusive ? "exclusive" : "multi"}`)
@@ -332,7 +364,7 @@ export async function execute(toolName, input, message, ctx) {
           for (const opt of d.options.slice(0, 25)) {
             const o = new StringSelectMenuOptionBuilder()
               .setLabel(opt.label || "Option")
-              .setValue(opt.role_id || opt.label);
+              .setValue(opt.role_id);
             if (opt.description) o.setDescription(opt.description.slice(0, 100));
             if (opt.emoji) o.setEmoji(opt.emoji);
             menu.addOptions(o);

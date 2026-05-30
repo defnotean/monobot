@@ -7,7 +7,8 @@
 import { EmbedBuilder, PermissionFlagsBits } from "discord.js";
 import { log } from "../../utils/logger.js";
 import { getCustomCommand, getTrustedUsers, getAutoResponders } from "../../database.js";
-import { findRole } from "../../ai/executor.js";
+import { resolveCustomCommandRole, validateAssignableRole } from "../../ai/executors/customCommandExecutor.js";
+import { findRole } from "../../ai/resolve.js";
 
 // ── Injection sanitizer for user-stored responses ─────────────────────────
 // Custom commands and auto-responders are admin-controlled, but their
@@ -64,12 +65,22 @@ export async function handleCustomCommand(message) {
     .replace(/{channel}/g, message.channel.toString());
 
   if (cmd.role_to_give) {
-    const role = findRole(message.guild, cmd.role_to_give);
-    if (role) await message.member.roles.add(role).catch(() => {});
+    const role = resolveCustomCommandRole(message.guild, cmd.role_to_give, findRole);
+    const reason = validateAssignableRole(message.guild, role);
+    if (reason) {
+      log(`[CustomCmd] blocked role grant for !${trigger}: ${reason}`);
+    } else {
+      await message.member.roles.add(role).catch(() => {});
+    }
   }
   if (cmd.role_to_remove) {
-    const role = findRole(message.guild, cmd.role_to_remove);
-    if (role) await message.member.roles.remove(role).catch(() => {});
+    const role = resolveCustomCommandRole(message.guild, cmd.role_to_remove, findRole);
+    const reason = validateAssignableRole(message.guild, role);
+    if (reason) {
+      log(`[CustomCmd] blocked role removal for !${trigger}: ${reason}`);
+    } else {
+      await message.member.roles.remove(role).catch(() => {});
+    }
   }
 
   try {
