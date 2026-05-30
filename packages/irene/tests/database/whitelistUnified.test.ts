@@ -165,4 +165,91 @@ describe("unified whitelist — Irene reads/writes the canonical bot_data:main r
     expect(db._internal.dirty.has("server_whitelist")).toBe(false);
     expect([...db._internal.dirty]).toEqual([]);
   });
+
+  it("removeFromWhitelist falls back to read-modify-write when the RPC is unavailable", async () => {
+    rpcAvailable = false; // pre-migration-007 deployment
+    botDataRows.set("main", { id: "main", data: { server_whitelist: { "g-rm": { name: "Doomed" } } } });
+    const ok = await db.removeFromWhitelist("g-rm");
+    expect(ok).toBe(true);
+    // Fallback upserts the canonical id="main" row with the entry deleted.
+    expect(upsertCalls.some((u) => u.id === "main")).toBe(true);
+    expect(botDataRows.get("main").data.server_whitelist["g-rm"]).toBeUndefined();
+  });
+
+  it("removeFromWhitelist fallback no-ops (still ok) when the entry wasn't present", async () => {
+    rpcAvailable = false;
+    botDataRows.set("main", { id: "main", data: { server_whitelist: { "other": { name: "Other" } } } });
+    const ok = await db.removeFromWhitelist("g-absent");
+    expect(ok).toBe(true);
+    // Nothing to delete → no upsert performed.
+    expect(upsertCalls.length).toBe(0);
+  });
+});
+
+// ─── Error / not-configured edge branches ──────────────────────────────────────
+describe("unified whitelist — error and not-configured edges", () => {
+  beforeEach(() => {
+    db._internal.__resetForTest();
+  });
+  afterEach(() => {
+    db._internal.__resetForTest();
+  });
+
+  it("getWhitelist returns {} when supabase is not configured", async () => {
+    db._internal.__setSupabaseForTest(null);
+    expect(await db.getWhitelist()).toEqual({});
+  });
+
+  it("addToWhitelist returns false when supabase is not configured", async () => {
+    db._internal.__setSupabaseForTest(null);
+    expect(await db.addToWhitelist("g", { name: "X" })).toBe(false);
+  });
+
+  it("removeFromWhitelist returns false when supabase is not configured", async () => {
+    db._internal.__setSupabaseForTest(null);
+    expect(await db.removeFromWhitelist("g")).toBe(false);
+  });
+
+  it("getWhitelist returns {} (not throw) on a non-PGRST116 select error", async () => {
+    db._internal.__setSupabaseForTest({
+      from() {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          single() { return Promise.resolve({ data: null, error: { code: "08006", message: "connection failure" } }); },
+        };
+      },
+    });
+    expect(await db.getWhitelist()).toEqual({});
+  });
+
+  it("addToWhitelist returns false when the RPC is down AND the fallback upsert fails", async () => {
+    db._internal.__setSupabaseForTest({
+      rpc() { return Promise.resolve({ error: { message: "no rpc", code: "PGRST202" } }); },
+      from() {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          single() { return Promise.resolve({ data: { data: {} }, error: null }); },
+          upsert() { return Promise.resolve({ error: { message: "write denied", code: "42501" } }); },
+        };
+      },
+    });
+    expect(await db.addToWhitelist("g", { name: "X" })).toBe(false);
+  });
+
+  it("addToWhitelist returns false when the RPC is down AND the fallback select hard-fails", async () => {
+    db._internal.__setSupabaseForTest({
+      rpc() { return Promise.resolve({ error: { message: "no rpc", code: "PGRST202" } }); },
+      from() {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          single() { return Promise.resolve({ data: null, error: { code: "08006", message: "conn lost" } }); },
+          upsert() { return Promise.resolve({ error: null }); },
+        };
+      },
+    });
+    expect(await db.addToWhitelist("g", { name: "X" })).toBe(false);
+  });
 });

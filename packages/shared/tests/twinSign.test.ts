@@ -58,6 +58,120 @@ describe("twinSign — sign/verify round-trip", () => {
     expect(safeStringEqual("abc", "abcd")).toBe(false);
     expect(safeStringEqual(undefined, "abc")).toBe(false);
   });
+
+  it("safeStringEqual returns false for non-string operands without throwing", () => {
+    expect(safeStringEqual(123 as any, "123")).toBe(false);
+    expect(safeStringEqual("123", 123 as any)).toBe(false);
+    expect(safeStringEqual(null as any, undefined as any)).toBe(false);
+    expect(safeStringEqual({} as any, {} as any)).toBe(false);
+  });
+});
+
+describe("twinSign — verify rejection modes (each distinct reason)", () => {
+  const now = 1_700_000_000_000;
+
+  it("signTwinRequest throws on an empty secret (fail-loud)", () => {
+    expect(() => signTwinRequest("{}", "", now)).toThrow(/twin secret missing/);
+  });
+
+  it("verify rejects when the server has no secret configured", () => {
+    const headers = signTwinRequest("{}", SECRET, now);
+    expect(verifyTwinRequest(headers, "{}", "", now)).toEqual({
+      ok: false,
+      reason: "server missing twin secret",
+    });
+  });
+
+  it("rejects when the timestamp header is missing", () => {
+    const headers = signTwinRequest("{}", SECRET, now) as Record<string, string>;
+    delete headers["x-twin-timestamp"];
+    expect(verifyTwinRequest(headers, "{}", SECRET, now)).toEqual({
+      ok: false,
+      reason: "missing twin signature headers",
+    });
+  });
+
+  it("rejects when the signature header is missing", () => {
+    const headers = signTwinRequest("{}", SECRET, now) as Record<string, string>;
+    delete headers["x-twin-signature"];
+    expect(verifyTwinRequest(headers, "{}", SECRET, now)).toEqual({
+      ok: false,
+      reason: "missing twin signature headers",
+    });
+  });
+
+  it("rejects a signature that is not 64 hex chars (malformed)", () => {
+    const headers = {
+      "x-twin-timestamp": String(now),
+      "x-twin-signature": "deadbeef", // valid hex but too short
+    };
+    expect(verifyTwinRequest(headers, "{}", SECRET, now)).toEqual({
+      ok: false,
+      reason: "malformed signature",
+    });
+  });
+
+  it("rejects a 64-char signature containing non-hex characters (malformed)", () => {
+    const headers = {
+      "x-twin-timestamp": String(now),
+      "x-twin-signature": "z".repeat(64),
+    };
+    expect(verifyTwinRequest(headers, "{}", SECRET, now)).toEqual({
+      ok: false,
+      reason: "malformed signature",
+    });
+  });
+
+  it("rejects a non-string signature header value (malformed)", () => {
+    const headers = {
+      "x-twin-timestamp": String(now),
+      "x-twin-signature": 1234567890 as any,
+    };
+    expect(verifyTwinRequest(headers as any, "{}", SECRET, now)).toEqual({
+      ok: false,
+      reason: "malformed signature",
+    });
+  });
+
+  it("rejects a non-finite timestamp (invalid timestamp)", () => {
+    const headers = {
+      "x-twin-timestamp": "not-a-number",
+      "x-twin-signature": "a".repeat(64),
+    };
+    expect(verifyTwinRequest(headers, "{}", SECRET, now)).toEqual({
+      ok: false,
+      reason: "invalid timestamp",
+    });
+  });
+
+  it("accepts a case-preserved header map by lowercasing keys", () => {
+    const lower = signTwinRequest("{\"hi\":1}", SECRET, now) as Record<string, string>;
+    const mixedCase = {
+      "X-Twin-Timestamp": lower["x-twin-timestamp"],
+      "X-Twin-Signature": lower["x-twin-signature"],
+    };
+    expect(verifyTwinRequest(mixedCase, "{\"hi\":1}", SECRET, now)).toEqual({ ok: true });
+  });
+
+  it("accepts an uppercase-hex signature by lowercasing it before compare", () => {
+    const headers = signTwinRequest("{\"hi\":1}", SECRET, now) as Record<string, string>;
+    headers["x-twin-signature"] = headers["x-twin-signature"].toUpperCase();
+    expect(verifyTwinRequest(headers, "{\"hi\":1}", SECRET, now)).toEqual({ ok: true });
+  });
+
+  it("prunes aged-out replay entries so an old signature no longer counts as replay", () => {
+    // Sign + verify at t0 (caches the sig), then re-verify the SAME sig far in
+    // the future. The prune drops the aged entry (>2× skew), but the timestamp
+    // is now outside the skew window so it's rejected on skew, not replay —
+    // proving the entry was pruned rather than flagged as a replay.
+    const headers = signTwinRequest("{\"x\":1}", SECRET, now) as Record<string, string>;
+    expect(verifyTwinRequest(headers, "{\"x\":1}", SECRET, now)).toEqual({ ok: true });
+    const later = now + TWIN_MAX_SKEW_MS * 2 + 1;
+    expect(verifyTwinRequest(headers, "{\"x\":1}", SECRET, later)).toEqual({
+      ok: false,
+      reason: "timestamp outside acceptable skew",
+    });
+  });
 });
 
 describe("twinSign — replay-cache-pressure warn is routed through redactString", () => {

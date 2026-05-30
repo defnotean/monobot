@@ -8,12 +8,13 @@ const HANDLED = new Set([
   "set_server_avatar", "set_server_banner", "set_server_persona",
   "set_channel_personality", "set_dm_welcome", "set_leave_channel",
   "set_bad_words", "set_escalation",
+  "adjust_relationship", "adjust_mood",
 ]);
 
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
 
-  const { guild, findChannel } = ctx;
+  const { guild, findChannel, findMember } = ctx;
 
   switch (toolName) {
     case "set_server_avatar":
@@ -104,6 +105,46 @@ export async function execute(toolName, input, message, ctx) {
       if (input.kick_at) parts.push(`kick at ${input.kick_at} warnings`);
       if (input.ban_at) parts.push(`ban at ${input.ban_at} warnings`);
       return parts.length ? `Escalation set: ${parts.join(", ")}` : "Escalation thresholds cleared";
+    }
+
+    // ─── Relationship / Mood Management ────────────────────────────
+    case "adjust_relationship": {
+      const { getRelationship, updateRelationship } = await import("../../database.js");
+      let userId = input.user_id || input.userId || input.username;
+      if (!userId) return "need a user_id to adjust relationship";
+      // Models often pass a username instead of a snowflake — resolve it via
+      // the guild member index so we don't end up keying affinity off literal
+      // strings (and the `<@username>` mention won't render as a ping).
+      if (guild && !/^\d{17,20}$/.test(String(userId))) {
+        const member = findMember(guild, userId);
+        if (member) userId = member.id;
+        else return `couldn't find user "${userId}"`;
+      }
+      if (input.reset) {
+        const current = getRelationship(userId);
+        updateRelationship(userId, -current.affinity_score);
+        return `relationship with <@${userId}> reset to neutral. ${input.reason || ""}`.trim();
+      }
+      // Clamp per-call delta so a hallucinated tool-call with affinity_delta
+      // like 9999 can't yeet a relationship to max in one shot. Relationship
+      // changes should feel earned, not magic-number'd.
+      const rawDelta = Number(input.affinity_delta) || 0;
+      const delta = Math.max(-25, Math.min(25, Math.round(rawDelta)));
+      updateRelationship(userId, delta);
+      const after = getRelationship(userId);
+      const label = after.affinity_score > 50 ? "bestie" : after.affinity_score > 20 ? "friend" : after.affinity_score > 0 ? "acquaintance" : after.affinity_score > -30 ? "neutral" : "enemy";
+      return `adjusted feelings toward <@${userId}> by ${delta > 0 ? "+" : ""}${delta}. now: ${label} (${after.affinity_score}). ${input.reason || ""}`.trim();
+    }
+
+    case "adjust_mood": {
+      const { shiftMood: shift, getMood: mood } = await import("../../database.js");
+      // Same clamp for mood/energy — these are -100..100 ranges; a single tool
+      // call shouldn't move the needle more than 30 points.
+      const moodD = Math.max(-30, Math.min(30, Math.round(Number(input.mood_delta) || 0)));
+      const energyD = Math.max(-30, Math.min(30, Math.round(Number(input.energy_delta) || 0)));
+      shift(moodD, energyD);
+      const after = mood();
+      return `mood shifted by ${moodD > 0 ? "+" : ""}${moodD}, energy by ${energyD > 0 ? "+" : ""}${energyD}. now: mood ${after.mood_score}, energy ${after.energy}. ${input.reason || ""}`.trim();
     }
   }
 }

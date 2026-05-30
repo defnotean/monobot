@@ -7,7 +7,7 @@ import { getInviteHistory, getInviteLeaderboard, getInvitesBy } from "../../data
 
 const HANDLED = new Set([
   "list_invites", "delete_invite", "invite_stats", "set_server_settings",
-  "set_server_icon", "view_audit_log", "list_members",
+  "set_server_icon", "view_audit_log", "list_members", "create_invite",
 ]);
 
 const VERIFICATION_LEVELS = { none: 0, low: 1, medium: 2, high: 3, very_high: 4 };
@@ -53,9 +53,22 @@ const AUDIT_LOG_TYPES = {
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
 
-  const { guild, findChannel } = ctx;
+  const { guild, findChannel, by } = ctx;
 
   switch (toolName) {
+    // ── Create Invite ─────────────────────────────────────────────────────────
+    case "create_invite": {
+      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
+      if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const invite = await ch.createInvite({
+        maxUses: input.max_uses || 0,
+        maxAge: input.max_age ?? 0,
+        temporary: input.temporary || false,
+        reason: `Created ${by}`,
+      });
+      return `Created invite: https://discord.gg/${invite.code}${input.max_uses ? ` (${input.max_uses} uses)` : ""}${input.max_age ? ` (expires in ${input.max_age}s)` : " (never expires)"}`;
+    }
+
     // ── List Invites ──────────────────────────────────────────────────────────
     case "list_invites": {
       try {

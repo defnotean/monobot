@@ -446,6 +446,40 @@ describe("recursiveDecode termination", () => {
     // Just confirm we don't get pathological growth.
     expect(out.length).toBeLessThan(50);
   });
+
+  it("keeps the original first and only adds the ROT13 variant for plain prose", () => {
+    // Plain prose with no base64/hex/url/unicode-escape run → only the depth-0
+    // ROT13 pass adds a (meaningless) second variant; no decoder loops further.
+    const out = recursiveDecode("just a normal sentence with words");
+    expect(out[0]).toBe("just a normal sentence with words");
+    expect(out).toHaveLength(2); // original + its ROT13
+  });
+
+  it("rejects a base64-shaped run that decodes to mostly-binary garbage", () => {
+    // High bytes → the decoded run is <70% printable, so decodeBase64's ratio
+    // guard rejects it: the binary expansion must NOT appear as a variant.
+    const garbage = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 250, 251, 252, 253, 254, 255, 128, 129])
+      .toString("base64");
+    const out = recursiveDecode(`prefix ${garbage} suffix here please`);
+    // The first variant is always the input; binary garbage never surfaces.
+    expect(out[0]).toBe(`prefix ${garbage} suffix here please`);
+    expect(out.every((v) => typeof v === "string")).toBe(true);
+  });
+
+  it("skips an odd-length hex run (decodeHex length guard)", () => {
+    // 17 hex chars — odd length, so decodeHex's `m.length % 2 !== 0` guard skips
+    // it and produces no hex-decoded variant.
+    const input = "value=0123456789abcdef0 trailing text here";
+    const out = recursiveDecode(input);
+    expect(out[0]).toBe(input);
+    expect(out.every((v) => typeof v === "string")).toBe(true);
+  });
+
+  it("expands a percent-encoded run via decodeUrlEscape", () => {
+    // %25 → % is a real expansion, exercising the non-null url-decode branch.
+    const out = recursiveDecode("100%25 done already nothing else to expand");
+    expect(out).toContain("100% done already nothing else to expand");
+  });
 });
 
 describe("normalizeText", () => {

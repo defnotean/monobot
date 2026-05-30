@@ -31,5 +31,8 @@
     "protobufjs": "^7.6.1",
     "qs": "^6.15.2",
     "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.4"
   }
 }

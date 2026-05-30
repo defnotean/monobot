@@ -249,6 +249,89 @@ describe("truncateLine + redactLogLine", () => {
   });
 });
 
+describe("redactString / redactValue / truncateLine — edge & error paths", () => {
+  it("returns non-string input from redactString unchanged (guard branch)", () => {
+    // redactString documents string-only; non-strings short-circuit untouched.
+    expect(redactString(undefined as any)).toBeUndefined();
+    expect(redactString(null as any)).toBeNull();
+    expect(redactString(42 as any)).toBe(42);
+  });
+
+  it("returns the empty string from redactString without running any pass", () => {
+    expect(redactString("")).toBe("");
+  });
+
+  it("returns null/undefined unchanged from redactValue (nullish guard)", () => {
+    expect(redactValue(null)).toBeNull();
+    expect(redactValue(undefined)).toBeUndefined();
+  });
+
+  it("redacts an Error that has no stack via String(err) fallback", () => {
+    withEnv({ DISCORD_TOKEN: "Bot.totallyrealtokenvalue.shhhhh" }, () => {
+      const err = new Error("auth Bot.totallyrealtokenvalue.shhhhh failed");
+      // Force the `typeof value.stack === "string"` branch false.
+      Object.defineProperty(err, "stack", { value: undefined, configurable: true });
+      const out = redactValue(err) as string;
+      expect(typeof out).toBe("string");
+      // String(error) → "Error: auth ... failed"; secret must still be scrubbed.
+      expect(out).not.toContain("totallyrealtokenvalue");
+    });
+  });
+
+  it("stringifies + redacts an object that hits maxDepth (depth-limit branch)", () => {
+    withEnv({ DISCORD_TOKEN: "Bot.totallyrealtokenvalue.shhhhh" }, () => {
+      // maxDepth 0 forces the JSON.stringify-at-limit branch immediately.
+      const out = redactValue({ secretBody: "Bot.totallyrealtokenvalue.shhhhh" }, 0) as string;
+      expect(typeof out).toBe("string");
+      expect(out).not.toContain("totallyrealtokenvalue");
+    });
+  });
+
+  it("returns '[unstringifiable]' when JSON.stringify throws at the depth limit", () => {
+    // A BigInt inside an object makes JSON.stringify throw; at depth 0 the
+    // catch arm must yield the sentinel rather than crashing.
+    const out = redactValue({ n: 10n }, 0);
+    expect(out).toBe("[unstringifiable]");
+  });
+
+  it("stringifies primitive BigInt/Symbol values through redactString", () => {
+    // BigInt: String(10n) === "10n"? no — String(10n) === "10". Either way it
+    // must come back as a plain redacted string, not throw.
+    expect(redactValue(10n)).toBe("10");
+    expect(typeof redactValue(Symbol("s"))).toBe("string");
+    expect(redactValue(true)).toBe("true");
+  });
+
+  it("truncateLine returns a non-string argument unchanged (guard branch)", () => {
+    expect(truncateLine(undefined as any)).toBeUndefined();
+    expect(truncateLine(12345 as any)).toBe(12345);
+  });
+
+  it("truncateLine measures UTF-8 bytes, not JS .length (multi-byte input)", () => {
+    // 4-byte emoji: many repeats exceed the byte cap while .length stays lower.
+    // NOTE: the byte cap is enforced on a Buffer.slice boundary, which can land
+    // mid-emoji; toString then emits a 3-byte U+FFFD for the dangling fragment,
+    // so the result can run a byte or two PAST MAX_LOG_LINE_BYTES. We assert the
+    // documented intent (truncation fired + the line is bounded to within a
+    // single replacement-char's slack) rather than strict <= max, because strict
+    // <= max does NOT hold at multi-byte boundaries (see residualDebt).
+    const emoji = "😀";
+    const s = emoji.repeat(MAX_LOG_LINE_BYTES); // 4 bytes each → way over cap
+    const out = truncateLine(s);
+    expect(out).toContain("truncated");
+    // Within 3 bytes (one U+FFFD) of the cap — a tight, behavior-pinning bound.
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(MAX_LOG_LINE_BYTES + 3);
+  });
+
+  it("truncateLine on a pure-ASCII overflow respects the hard byte cap exactly", () => {
+    // The boundary-overshoot only happens with multi-byte chars; ASCII stays
+    // strictly within the cap, which is the contract operators rely on.
+    const out = truncateLine("x".repeat(MAX_LOG_LINE_BYTES + 500));
+    expect(out).toContain("truncated");
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(MAX_LOG_LINE_BYTES);
+  });
+});
+
 describe("upstream-error-body scenarios (audit-driven)", () => {
   it("scrubs an upstream-echoed bearer in a fetch error message", () => {
     const errText =

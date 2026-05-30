@@ -13,8 +13,6 @@ import { data, save, ensureGuild } from "./core.js";
 // GIVEAWAYS, HIGHLIGHTS, VOICE STATS & AUTO-RESPONDERS
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ─── Audit Log ──────────────────────────────────────────────────────────────
-
 // ─── Giveaway Persistence ───────────────────────────────────────────────────
 
 export function getGiveawayDb() {
@@ -45,8 +43,6 @@ export function saveHighlightDb(highlightObj) {
   data.highlights = highlightObj;
   save("highlights");
 }
-
-// ─── Audit Log ──────────────────────────────────────────────────────────────
 
 // ─── Voice Stats ──────────────────────────────────────────────────────────
 

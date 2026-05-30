@@ -1,8 +1,9 @@
 // ─── Setup / Server Settings Executor ───────────────────────────────────────
 
 import { ChannelType, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from "discord.js";
-import { setWelcomeChannel, setLogChannel, setAutorole, setAccessRole, setDmResults, setStatsChannels, addReactionRole, removeReactionRole, setStarboard, setColorRoles, getGuildSettings, getPatchFeeds, setPatchFeeds, getTwitchConfig, setTwitchConfig } from "../../database.js";
+import { setWelcomeChannel, setLogChannel, setAutorole, setAccessRole, setDmResults, setStatsChannels, addReactionRole, removeReactionRole, setStarboard, setColorRoles, getGuildSettings, getPatchFeeds, setPatchFeeds, getTwitchConfig, setTwitchConfig, setWelcomeEmbed } from "../../database.js";
 import { KNOWN_FEEDS } from "../../utils/patchbot.js";
+import { parseEmbedColor } from "../../events/guildMemberAdd.js";
 import { log } from "../../utils/logger.js";
 import { isGuildCategory } from "../../utils/channelTypes.js";
 
@@ -18,6 +19,7 @@ const HANDLED = new Set([
   "sticky_message", "remove_sticky",
   "list_roles_by_category",
   "learn_rules_from_channel",
+  "customize_welcome",
 ]);
 
 export async function execute(toolName, input, message, ctx) {
@@ -1274,6 +1276,57 @@ export async function execute(toolName, input, message, ctx) {
       }
       removeStickyMessage(guild.id, ch.id);
       return `Removed sticky message from #${ch.name}`;
+    }
+
+    // ─── Welcome Customization ───────────────────────────────────────
+    case "customize_welcome": {
+      if (input.reset) {
+        setWelcomeEmbed(guild.id, null);
+        return "Welcome embed reset to defaults.";
+      }
+
+      const patch = {};
+      const colorFields = ["color"];
+      const boolFields  = ["show_title","show_thumbnail","show_banner","show_author","show_footer","show_timestamp","show_member_field","show_age_field","show_joined_field","ping_user"];
+      const strFields   = ["title","title_url","description","content","thumbnail_url","banner_url","author_name","author_icon_url","author_url","footer_text","footer_icon_url","member_field_name","age_field_name","joined_field_name"];
+
+      for (const f of colorFields) {
+        if (input[f] !== undefined) {
+          const parsed = parseEmbedColor(input[f]);
+          if (parsed !== null) patch[f] = input[f];
+          else return `Unknown color "${input[f]}" — use a hex (#FF0000) or a name like red, blue, white, purple…`;
+        }
+      }
+      for (const f of boolFields) if (input[f] !== undefined) patch[f] = input[f];
+      for (const f of strFields) {
+        if (input[f] !== undefined) {
+          patch[f] = (input[f] === "default" || input[f] === "none") ? null : input[f];
+        }
+      }
+      if (input.extra_fields !== undefined) patch.extra_fields = input.extra_fields;
+
+      if (input.ping_roles !== undefined) {
+        if (input.ping_roles === "none" || input.ping_roles === "") {
+          patch.ping_role_ids = [];
+        } else {
+          const roleIds = findRoles(guild, input.ping_roles);
+          if (!roleIds.length) return `No roles found matching "${input.ping_roles}"`;
+          patch.ping_role_ids = roleIds;
+        }
+      }
+
+      if (!Object.keys(patch).length) return "Nothing to update — pass at least one option.";
+
+      setWelcomeEmbed(guild.id, patch);
+
+      const changed = Object.keys(patch).map((k) => {
+        const v = patch[k];
+        if (typeof v === "boolean") return `${k}: ${v ? "on" : "off"}`;
+        if (v === null) return `${k}: reset to default`;
+        if (Array.isArray(v)) return `${k}: ${v.length} field(s)`;
+        return `${k}: ${v}`;
+      });
+      return `Welcome embed updated ✓\n${changed.join("\n")}\n\nUse send_test_welcome to preview it.`;
     }
   }
 }
