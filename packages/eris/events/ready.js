@@ -48,6 +48,8 @@ async function generateAutonomousText({ prompt, systemInstruction, maxOutputToke
 
 export default async function ready(client) {
   log(`[BOT] ${client.user.tag} online | guilds: ${client.guilds.cache.size}`);
+  const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${client.user.id}&permissions=8&scope=bot%20applications.commands`;
+  log(`[BOT] Admin invite URL: ${inviteUrl}`);
 
   // ─── Ensure creator always has max affinity ───
   const creatorRel = db.getRelationship(config.ownerId);
