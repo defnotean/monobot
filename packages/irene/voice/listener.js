@@ -377,14 +377,11 @@ function startCapturingUser(state, userId, receiver) {
     const wavBuffer = pcmToWav(pcmBuffer, 48000, 2, 16);
     log(`[VoiceListen] Captured ${pcmBuffer.length} PCM bytes (${duration}ms) from user ${userId}`);
 
-    // Process with Gemini. NOTE: `pcmChunks` here are ALREADY-DECODED 48kHz
-    // stereo PCM frames (decoded by the prism Opus decoder above). The Gemini
-    // path uses only `wavBuffer`, so it is correct. The LOCAL_STT/whisper path
-    // (processAudio → _whisperTranscribe → _opusFramesToWav16kMono) instead
-    // re-feeds these into a FRESH prism Opus decoder via decoder.write(frame),
-    // which expects raw OPUS packets, not PCM — so LOCAL_STT remains
-    // non-functional. Fixing it (capture the raw opusStream frames separately
-    // or skip the re-decode) is a behavior change tracked outside this stream.
+    // Process the captured audio. `pcmChunks` are ALREADY-DECODED 48kHz stereo
+    // s16le PCM frames (decoded by the prism Opus decoder above). The Gemini
+    // path uses only `wavBuffer` (a 48kHz WAV wrapper of the same PCM). The
+    // LOCAL_STT/whisper path uses `pcmChunks` directly, downmixing + downsampling
+    // them to a 16kHz mono WAV (no Opus re-decode).
     try {
       await processAudio(state, userId, wavBuffer, pcmChunks);
     } catch (err) {
@@ -412,41 +409,42 @@ function startCapturingUser(state, userId, receiver) {
 
 // ─── Audio Processing (Gemini multimodal, or local whisper.cpp via WHISPER_BIN) ─
 
-// Decode raw Opus packets (Discord voice) → 16kHz mono PCM WAV via prism-media.
-// Needed for local whisper because whisper expects a proper WAV/MP3/etc file.
-async function _opusFramesToWav16kMono(opusFrames) {
-  const prism = (await import("prism-media")).default;
-  const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
-  return await new Promise((resolve, reject) => {
-    const pcmChunks = [];
-    decoder.on("data", (c) => pcmChunks.push(c));
-    decoder.on("end", () => {
-      const pcm = Buffer.concat(pcmChunks); // 48kHz stereo s16le
-      const stereoSamples = pcm.length / 4;
-      const monoSamples = Math.floor(stereoSamples / 3); // decimate 48 → 16
-      const out = Buffer.alloc(monoSamples * 2);
-      for (let i = 0, j = 0; j < monoSamples; i += 12, j++) {
-        const l = pcm.readInt16LE(i);
-        const r = pcm.readInt16LE(i + 2);
-        out.writeInt16LE(Math.round((l + r) / 2), j * 2);
-      }
-      const dataSize = out.length;
-      const hdr = Buffer.alloc(44);
-      hdr.write("RIFF", 0); hdr.writeUInt32LE(36 + dataSize, 4); hdr.write("WAVE", 8);
-      hdr.write("fmt ", 12); hdr.writeUInt32LE(16, 16); hdr.writeUInt16LE(1, 20);
-      hdr.writeUInt16LE(1, 22); hdr.writeUInt32LE(16000, 24);
-      hdr.writeUInt32LE(32000, 28); hdr.writeUInt16LE(2, 32); hdr.writeUInt16LE(16, 34);
-      hdr.write("data", 36); hdr.writeUInt32LE(dataSize, 40);
-      resolve(Buffer.concat([hdr, out]));
-    });
-    decoder.on("error", reject);
-    for (const frame of opusFrames) decoder.write(frame);
-    decoder.end();
-  });
+// Build a 16kHz mono 16-bit WAV from ALREADY-DECODED 48kHz stereo s16le PCM.
+// The capture pipeline (startCapturingUser) already runs each user's Opus
+// stream through a prism Opus decoder, so by the time we get here the chunks
+// are raw PCM — NOT Opus packets. whisper-cli expects a proper WAV/MP3/etc
+// file at 16kHz mono, so we downmix (average L/R) and downsample (48000→16000,
+// i.e. keep every 3rd stereo frame) directly from that PCM. No Opus re-decode.
+function _pcmToWav16kMono(pcmChunks) {
+  const pcm = Buffer.concat(pcmChunks); // 48kHz stereo s16le
+  const stereoSamples = Math.floor(pcm.length / 4); // 4 bytes per stereo frame
+  const monoSamples = Math.floor(stereoSamples / 3); // decimate 48 → 16
+  const out = Buffer.alloc(monoSamples * 2);
+  for (let i = 0, j = 0; j < monoSamples; i += 12, j++) {
+    const l = pcm.readInt16LE(i);
+    const r = pcm.readInt16LE(i + 2);
+    out.writeInt16LE(Math.round((l + r) / 2), j * 2);
+  }
+  const dataSize = out.length;
+  const hdr = Buffer.alloc(44);
+  hdr.write("RIFF", 0); hdr.writeUInt32LE(36 + dataSize, 4); hdr.write("WAVE", 8);
+  hdr.write("fmt ", 12); hdr.writeUInt32LE(16, 16); hdr.writeUInt16LE(1, 20);
+  hdr.writeUInt16LE(1, 22); hdr.writeUInt32LE(16000, 24);
+  hdr.writeUInt32LE(32000, 28); hdr.writeUInt16LE(2, 32); hdr.writeUInt16LE(16, 34);
+  hdr.write("data", 36); hdr.writeUInt32LE(dataSize, 40);
+  return Buffer.concat([hdr, out]);
 }
 
-async function _whisperTranscribe(opusFrames) {
-  const wav = await _opusFramesToWav16kMono(opusFrames);
+// Test-only hook: expose the module-internal _pcmToWav16kMono so the regression
+// test can exercise the REAL conversion (not a spec-mirror copy). Gated behind
+// an env var so it is never present in production — the public ESM export
+// surface is unchanged (this assigns to globalThis, it is not an `export`).
+if (process.env.IRENE_TEST_HOOKS === "1") {
+  /** @type {any} */ (globalThis).__irenePcmToWav16kMono = _pcmToWav16kMono;
+}
+
+async function _whisperTranscribe(pcmChunks) {
+  const wav = _pcmToWav16kMono(pcmChunks);
   const { writeFileSync, unlinkSync } = await import("node:fs");
   const { spawn } = await import("node:child_process");
   const tmpPath = `/tmp/irene-stt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`;
@@ -468,7 +466,7 @@ async function _whisperTranscribe(opusFrames) {
   });
 }
 
-async function processAudio(state, userId, wavBuffer, opusFrames) {
+async function processAudio(state, userId, wavBuffer, pcmChunks) {
   const localStt = !!config.local?.stt;
   const client = localStt ? null : getSttClient();
   if (!localStt && !client) {
@@ -481,7 +479,10 @@ async function processAudio(state, userId, wavBuffer, opusFrames) {
   try {
     let transcript = "";
     if (localStt) {
-      transcript = await _whisperTranscribe(opusFrames);
+      // `pcmChunks` are ALREADY-DECODED 48kHz stereo s16le PCM (the capture
+      // pipeline ran them through the Opus decoder). Convert straight to a
+      // 16kHz mono WAV for whisper — no Opus re-decode.
+      transcript = await _whisperTranscribe(pcmChunks);
     } else {
       // `client` is guaranteed non-null here: the early return above bailed
       // when (!localStt && !client), so in this !localStt branch client is set.
