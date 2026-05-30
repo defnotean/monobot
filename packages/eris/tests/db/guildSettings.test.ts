@@ -98,6 +98,7 @@ describe("guildSettings.js — directives", () => {
 describe("guildSettings.js — feature config", () => {
   it("getFeatureConfig returns the known defaults for a feature", () => {
     expect(db.getFeatureConfig("g11", "economy")).toEqual({ enabled: true, channel_id: null, ping_role_ids: [] });
+    expect(db.getFeatureConfig("g11", "events")).toEqual({ enabled: false, channel_id: null, ping_role_ids: [] });
     expect(db.getFeatureConfig("g11", "pets")).toEqual({ enabled: true });
   });
 
@@ -115,9 +116,9 @@ describe("guildSettings.js — feature config", () => {
 
   it("setFeatureConfig is incremental — later partial updates merge in", () => {
     db.setFeatureConfig("g14", "events", { channel_id: "111" });
-    db.setFeatureConfig("g14", "events", { enabled: false });
+    db.setFeatureConfig("g14", "events", { enabled: true });
     const cfg = db.getFeatureConfig("g14", "events");
     expect(cfg.channel_id).toBe("111");
-    expect(cfg.enabled).toBe(false);
+    expect(cfg.enabled).toBe(true);
   });
 });

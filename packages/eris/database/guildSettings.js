@@ -56,7 +56,7 @@ export function getFeatureConfig(guildId, feature) {
   const defaults = {
     economy: { enabled: true, channel_id: null, ping_role_ids: [] },
     gambling: { enabled: true, channel_id: null, ping_role_ids: [] },
-    events: { enabled: true, channel_id: null, ping_role_ids: [] },
+    events: { enabled: false, channel_id: null, ping_role_ids: [] },
     confessions: { enabled: true, channel_id: null, ping_role_ids: [] },
     boss_battles: { enabled: true, channel_id: null, ping_role_ids: [] },
     stocks: { enabled: true, channel_id: null, ping_role_ids: [] },

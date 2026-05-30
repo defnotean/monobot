@@ -623,6 +623,7 @@ Write ONE reflection — a higher-order observation about yourself. Example: "i'
 
       const gs = db.getGuildSettings(guild.id) || {};
       const eventsCfg = db.getFeatureConfig?.(guild.id, "events");
+      if (eventsCfg?.enabled === false) continue;
 
       // WHITELIST: if admin set event_allowed_channels, ONLY fire in those
       // (picks one randomly so events rotate across allowed channels).
