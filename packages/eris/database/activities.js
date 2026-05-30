@@ -165,10 +165,21 @@ export async function spawnBoss(guildId, bossName, bossEmoji, hp, phases, lootMu
   } catch { return null; }
 }
 
+const _bossLocks = new Map();
+async function _withBossLock(bossId, fn) {
+  const prev = _bossLocks.get(bossId) ?? Promise.resolve();
+  const current = prev.catch(() => {}).then(fn);
+  _bossLocks.set(bossId, current);
+  try { return await current; } finally {
+    if (_bossLocks.get(bossId) === current) _bossLocks.delete(bossId);
+  }
+}
+
 export async function damageBoss(bossId, userId, damage) {
   const supabase = getSupabase();
   if (!supabase) return null;
-  try {
+  return _withBossLock(bossId, async () => {
+    try {
     const { data: boss } = await supabase.from("eris_boss_battles").select("*").eq("id", bossId).single();
     if (!boss) return null;
     if (boss.boss_hp <= 0) return { ...boss, defeated: false, alreadyDead: true }; // Already killed by someone else
@@ -178,7 +189,8 @@ export async function damageBoss(bossId, userId, damage) {
     const phase = newHp <= 0 ? 0 : newHp <= boss.max_hp * 0.25 ? 3 : newHp <= boss.max_hp * 0.5 ? 2 : 1;
     await supabase.from("eris_boss_battles").update({ boss_hp: newHp, participants, phase }).eq("id", bossId);
     return { ...boss, boss_hp: newHp, participants, phase, defeated: newHp <= 0 };
-  } catch { return null; }
+    } catch { return null; }
+  });
 }
 
 // ─── PETS ───────────────────────────────────────────────────────────────────
@@ -357,6 +369,28 @@ export async function resolveHeist(heistId, status, loot = 0) {
   const supabase = getSupabase();
   if (!supabase) return;
   try { await supabase.from("eris_heists").update({ status, loot }).eq("id", heistId); } catch (e) { log(`[DB] ${e.message}`); }
+}
+
+export async function claimHeistExecution(heistId) {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from("eris_heists")
+      .update({ status: "executing" })
+      .eq("id", heistId)
+      .eq("status", "recruiting")
+      .select("*")
+      .single();
+    if (error) {
+      if (error.code === "PGRST116" || /0 rows|No rows/i.test(error.message || "")) return null;
+      throw new Error(error.message);
+    }
+    return data || null;
+  } catch (e) {
+    log(`[DB] claimHeistExecution: ${e.message}`);
+    return null;
+  }
 }
 
 // ─── AUCTIONS ───────────────────────────────────────────────────────────────

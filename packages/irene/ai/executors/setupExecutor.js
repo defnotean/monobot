@@ -7,6 +7,7 @@ import { parseEmbedColor } from "../../events/guildMemberAdd.js";
 import { log } from "../../utils/logger.js";
 import { isGuildCategory } from "../../utils/channelTypes.js";
 import { validateAssignableRole } from "./customCommandExecutor.js";
+import { isGuildOwnerMember } from "../../utils/permissions.js";
 
 const HANDLED = new Set([
   "set_welcome_channel", "set_access_role", "setup_verification",
@@ -22,6 +23,38 @@ const HANDLED = new Set([
   "learn_rules_from_channel",
   "customize_welcome",
 ]);
+
+function hasGuildPermission(member, permission) {
+  if (isGuildOwnerMember(member)) return true;
+  return Boolean(member?.permissions?.has?.(PermissionFlagsBits.Administrator) || member?.permissions?.has?.(permission));
+}
+
+function hasChannelPermission(channel, member, permission) {
+  if (isGuildOwnerMember(member)) return true;
+  const scoped = channel?.permissionsFor?.(member);
+  if (scoped?.has?.(PermissionFlagsBits.Administrator) || scoped?.has?.(permission)) return true;
+  return hasGuildPermission(member, permission);
+}
+
+function requireGuildPermission(guild, actor, permission, label) {
+  if (!hasGuildPermission(actor, permission)) return `You need ${label}.`;
+  if (!hasGuildPermission(guild.members?.me, permission)) return `I need ${label}.`;
+  return null;
+}
+
+function requireChannelSend(channel, actor, botMember, label = "post there") {
+  if (!hasChannelPermission(channel, actor, PermissionFlagsBits.ViewChannel)
+    || !hasChannelPermission(channel, actor, PermissionFlagsBits.SendMessages)) {
+    return `You need View Channel and Send Messages to ${label}.`;
+  }
+  if (!hasChannelPermission(channel, botMember, PermissionFlagsBits.ViewChannel)
+    || !hasChannelPermission(channel, botMember, PermissionFlagsBits.SendMessages)) {
+    return `I need View Channel and Send Messages to ${label}.`;
+  }
+  if (!hasChannelPermission(channel, actor, PermissionFlagsBits.EmbedLinks)) return `You need Embed Links to ${label}.`;
+  if (!hasChannelPermission(channel, botMember, PermissionFlagsBits.EmbedLinks)) return `I need Embed Links to ${label}.`;
+  return null;
+}
 
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
@@ -47,8 +80,10 @@ export async function execute(toolName, input, message, ctx) {
 
     case "setup_verification": {
       // Pre-check permissions
-      if (!guild.members.me.permissions.has("ManageRoles")) return "i need the **Manage Roles** permission to set up verification";
-      if (!guild.members.me.permissions.has("ManageChannels")) return "i need the **Manage Channels** permission to lock down channels";
+      const rolePermErr = requireGuildPermission(guild, message.member, PermissionFlagsBits.ManageRoles, "Manage Roles");
+      if (rolePermErr) return rolePermErr;
+      const channelPermErr = requireGuildPermission(guild, message.member, PermissionFlagsBits.ManageChannels, "Manage Channels");
+      if (channelPermErr) return channelPermErr;
 
       // Find or validate the verified role
       const roleName = input.verified_role;
@@ -589,6 +624,8 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "setup_ticket": {
+      const channelPermErr = requireGuildPermission(guild, message.member, PermissionFlagsBits.ManageChannels, "Manage Channels");
+      if (channelPermErr) return channelPermErr;
       const {
         setTicketCategory, setTicketViewRoles, setTicketPingRoles, setTicketWelcome,
         setTicketPanel, setTicketPanelMessage, setTicketPanelChannel, setTicketAutoCategory,
@@ -801,10 +838,14 @@ export async function execute(toolName, input, message, ctx) {
         const payload = { embeds: [panelEmbed], components: [new ActionRowBuilder().addComponents(panelBtn)] };
 
         if (existingMsg) {
+          const sendPermErr = requireChannelSend(panelCh, message.member, guild.members?.me, "update the ticket panel");
+          if (sendPermErr) return sendPermErr;
           await existingMsg.edit(payload);
           setTicketPanelMessage(guild.id, panelCh.id, existingMsg.id);
           panelNote = ` Panel updated in #${panelCh.name}.`;
         } else {
+          const sendPermErr = requireChannelSend(panelCh, message.member, guild.members?.me, "post the ticket panel");
+          if (sendPermErr) return sendPermErr;
           const posted = await panelCh.send(payload);
           setTicketPanelMessage(guild.id, panelCh.id, posted.id);
           panelNote = ` Panel posted in #${panelCh.name}.`;
@@ -819,6 +860,8 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "setup_stats_channels": {
+      const channelPermErr = requireGuildPermission(guild, message.member, PermissionFlagsBits.ManageChannels, "Manage Channels");
+      if (channelPermErr) return channelPermErr;
       const { updateStatsChannels } = await import("../../utils/stats.js");
       const category = input.category
         ? guild.channels.cache.find((c) => c.name.toLowerCase() === input.category.toLowerCase() && c.type === ChannelType.GuildCategory)
@@ -856,6 +899,12 @@ export async function execute(toolName, input, message, ctx) {
     case "setup_reaction_roles": {
       const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const sendPermErr = requireChannelSend(ch, message.member, guild.members?.me, "post reaction roles");
+      if (sendPermErr) return sendPermErr;
+      if (!hasChannelPermission(ch, message.member, PermissionFlagsBits.AddReactions)) return "You need Add Reactions to set up reaction roles.";
+      if (!hasChannelPermission(ch, guild.members?.me, PermissionFlagsBits.AddReactions)) return "I need Add Reactions to set up reaction roles.";
+      const rolePermErr = requireGuildPermission(guild, message.member, PermissionFlagsBits.ManageRoles, "Manage Roles");
+      if (rolePermErr) return rolePermErr;
       if (!input.roles?.length) return "No roles provided";
 
       const lines = [];
@@ -957,6 +1006,10 @@ export async function execute(toolName, input, message, ctx) {
     case "setup_role_picker": {
       const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const sendPermErr = requireChannelSend(ch, message.member, guild.members?.me, "post the role picker");
+      if (sendPermErr) return sendPermErr;
+      const rolePermErr = requireGuildPermission(guild, message.member, PermissionFlagsBits.ManageRoles, "Manage Roles");
+      if (rolePermErr) return rolePermErr;
       if (!input.roles?.length) return "No roles provided";
 
       const BUTTON_STYLES = { primary: ButtonStyle.Primary, secondary: ButtonStyle.Secondary, success: ButtonStyle.Success, danger: ButtonStyle.Danger };
@@ -1012,6 +1065,10 @@ export async function execute(toolName, input, message, ctx) {
     case "setup_dropdown_roles": {
       const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const sendPermErr = requireChannelSend(ch, message.member, guild.members?.me, "post the dropdown role picker");
+      if (sendPermErr) return sendPermErr;
+      const rolePermErr = requireGuildPermission(guild, message.member, PermissionFlagsBits.ManageRoles, "Manage Roles");
+      if (rolePermErr) return rolePermErr;
       if (!input.roles?.length) return "No roles provided";
       if (input.roles.length > 25) return "Max 25 roles per dropdown menu";
 
@@ -1125,6 +1182,10 @@ export async function execute(toolName, input, message, ctx) {
     case "setup_color_roles": {
       const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const sendPermErr = requireChannelSend(ch, message.member, guild.members?.me, "post the color role picker");
+      if (sendPermErr) return sendPermErr;
+      const rolePermErr = requireGuildPermission(guild, message.member, PermissionFlagsBits.ManageRoles, "Manage Roles");
+      if (rolePermErr) return rolePermErr;
 
       const colors = input.colors ?? [];
       if (!colors.length) return "No colors provided";
@@ -1259,6 +1320,8 @@ export async function execute(toolName, input, message, ctx) {
     case "sticky_message": {
       const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const sendPermErr = requireChannelSend(ch, message.member, guild.members?.me, "post the sticky message");
+      if (sendPermErr) return sendPermErr;
 
       const { setStickyMessage, updateStickyMessageId } = await import("../../database.js");
 

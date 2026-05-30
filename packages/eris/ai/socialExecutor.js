@@ -677,17 +677,23 @@ export async function executeSocialTool(toolName, input, message) {
     case "use_item": {
       const itemName = input.item || input.item_name;
       if (!itemName) return "what item do you want to use?";
-      const has = await db.hasItem(userId, itemName);
-      if (!has) return `you don't have a ${itemName}`;
+      return db.withUserLock(userId, async () => {
+        const has = await db.hasItem(userId, itemName);
+        if (!has) return `you don't have a ${itemName}`;
 
-      switch (itemName) {
+        const consume = async () => {
+          const removedType = await db.removeFromInventory(userId, itemName);
+          return removedType !== null;
+        };
+
+        switch (itemName) {
         case "Lucky Charm": {
-          await db.removeFromInventory(userId, itemName);
+          if (!await consume()) return `you don't have a ${itemName}`;
           await db.addToInventory(userId, itemName, "active");
           return "lucky charm activated! +5% gambling luck for 1 hour";
         }
         case "Rob Shield": {
-          await db.removeFromInventory(userId, itemName);
+          if (!await consume()) return `you don't have a ${itemName}`;
           await db.addToInventory(userId, itemName, "active");
           return "rob shield activated! you're protected from robbery for 12 hours";
         }
@@ -695,24 +701,24 @@ export async function executeSocialTool(toolName, input, message) {
           return "life saver is passive — it'll automatically save you from losing coins once";
         }
         case "Double Daily": {
-          await db.removeFromInventory(userId, itemName);
+          if (!await consume()) return `you don't have a ${itemName}`;
           await db.addToInventory(userId, itemName, "active");
           return "double daily activated! your next daily reward will be doubled";
         }
         case "XP Boost": {
-          await db.removeFromInventory(userId, itemName);
+          if (!await consume()) return `you don't have a ${itemName}`;
           await db.addToInventory(userId, itemName, "active");
           return "xp boost activated! 2x coin earnings from messages for 2 hours";
         }
         case "Mystery Box": {
-          await db.removeFromInventory(userId, itemName);
+          if (!await consume()) return `you don't have a ${itemName}`;
           const { openMysteryBox } = await import("./economy.js");
           const result = openMysteryBox();
           await db.updateBalance(userId, result.coins, "mystery_box", result.label);
           return `opened mystery box: ${result.label}`;
         }
         case "Chaos Orb": {
-          await db.removeFromInventory(userId, itemName);
+          if (!await consume()) return `you don't have a ${itemName}`;
           const { openMysteryBox: openBox } = await import("./economy.js");
           let total = 0;
           const results = [];
@@ -727,20 +733,21 @@ export async function executeSocialTool(toolName, input, message) {
         case "Pet Armor": {
           const pet = await db.getPetBattleStats(userId);
           if (!pet) return "you don't have a pet";
-          await db.removeFromInventory(userId, itemName);
+          if (!await consume()) return `you don't have a ${itemName}`;
           await db.trainPet(userId, "defense"); // +1-3
           return "pet armor equipped! +defense for your pet";
         }
         case "Speed Boots": {
           const pet = await db.getPetBattleStats(userId);
           if (!pet) return "you don't have a pet";
-          await db.removeFromInventory(userId, itemName);
+          if (!await consume()) return `you don't have a ${itemName}`;
           await db.trainPet(userId, "speed");
           return "speed boots equipped! +speed for your pet";
         }
         default:
           return `${itemName} doesn't have a use action. it's just a flex item or passive`;
-      }
+        }
+      });
     }
 
     default:

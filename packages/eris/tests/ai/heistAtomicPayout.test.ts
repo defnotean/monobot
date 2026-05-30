@@ -11,6 +11,7 @@ let forceDebitFail = false;
 
 vi.mock("../../database.js", () => ({
   getActiveHeist: vi.fn(),
+  claimHeistExecution: vi.fn(async () => ({ id: "claimed" })),
   getBalance: vi.fn(async (uid: string) => ({ balance: balances.get(uid) ?? 0 })),
   resolveHeist: vi.fn(async () => {}),
   updateBalance: vi.fn(async (uid: string, delta: number, type: string) => {

@@ -386,29 +386,30 @@ export async function claimDaily(userId) {
     const bonus = Math.min(streak * 10, 150);
     const coins = base + bonus;
 
-    // Fail-closed ordering: stamp the cooldown (last_daily + streak) and AWAIT
-    // it BEFORE crediting. If the process crashes between stamp and credit the
-    // user merely loses one claim's coins (recoverable) rather than being able
-    // to re-claim forever. If the stamp write itself fails, abort WITHOUT
-    // crediting. The durable fix is the atomic claim RPC (migration 003).
     try {
-      const { error: stampErr } = await sb.from("eris_economy")
-        .update({ daily_streak: streak, last_daily: now.toISOString() })
-        .eq("user_id", userId);
-      if (stampErr) throw new Error(stampErr.message);
+      const { data, error } = await sb.rpc("eris_claim_reward", {
+        p_user_id: userId,
+        p_kind: "daily",
+        p_coins: coins,
+        p_streak: streak,
+        p_cooldown_secs: 20 * 3_600,
+        p_now: now.toISOString(),
+      });
+      if (error) throw new Error(error.message);
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) return { success: false, hoursLeft: 20 };
       if (_economyCache[userId]) {
+        _economyCache[userId].balance = Number(row.balance);
         _economyCache[userId].daily_streak = streak;
         _economyCache[userId].last_daily = now.toISOString();
+        _economyCache[userId].total_earned = (_economyCache[userId].total_earned || 0) + coins;
       }
+      await logTransaction(userId, "daily", coins, Number(row.balance), `streak:${streak}`);
+      return { success: true, coins, streak: Number(row.streak ?? streak), bonus, newBalance: Number(row.balance) };
     } catch (e) {
-      log(`[DB] claimDaily stamp failed (no credit): ${e.message}`);
+      log(`[DB] claimDaily atomic claim failed (no credit): ${e.message}`);
       return { success: false, error: "claim_failed" };
     }
-
-    // Credit via the unsafe helper (lock already held)
-    const newBalance = await _updateBalanceUnsafe(userId, coins, "daily", `streak:${streak}`);
-
-    return { success: true, coins, streak, bonus, newBalance };
   });
 }
 
@@ -810,22 +811,30 @@ export async function claimWeekly(userId) {
     }
     const streak = lastWeekly && (now.getTime() - lastWeekly.getTime()) < 336 * 3_600_000 ? (econ.weekly_streak || 0) + 1 : 1;
     const coins = 500 + streak * 100;
-    // Fail-closed ordering: stamp the cooldown BEFORE crediting (see claimDaily).
     try {
-      const { error: stampErr } = await sb.from("eris_economy")
-        .update({ last_weekly: now.toISOString(), weekly_streak: streak })
-        .eq("user_id", userId);
-      if (stampErr) throw new Error(stampErr.message);
+      const { data, error } = await sb.rpc("eris_claim_reward", {
+        p_user_id: userId,
+        p_kind: "weekly",
+        p_coins: coins,
+        p_streak: streak,
+        p_cooldown_secs: 168 * 3_600,
+        p_now: now.toISOString(),
+      });
+      if (error) throw new Error(error.message);
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) return { success: false, hoursLeft: 168 };
       if (_economyCache[userId]) {
+        _economyCache[userId].balance = Number(row.balance);
         _economyCache[userId].last_weekly = now.toISOString();
         _economyCache[userId].weekly_streak = streak;
+        _economyCache[userId].total_earned = (_economyCache[userId].total_earned || 0) + coins;
       }
+      await logTransaction(userId, "weekly", coins, Number(row.balance), `streak:${streak}`);
+      return { success: true, coins, streak: Number(row.streak ?? streak), newBalance: Number(row.balance) };
     } catch (e) {
-      log(`[DB] claimWeekly stamp failed (no credit): ${e.message}`);
+      log(`[DB] claimWeekly atomic claim failed (no credit): ${e.message}`);
       return { success: false, error: "claim_failed" };
     }
-    const newBal = await _updateBalanceUnsafe(userId, coins, "weekly", `streak:${streak}`);
-    return { success: true, coins, streak, newBalance: newBal };
   });
 }
 
@@ -844,22 +853,30 @@ export async function claimMonthly(userId) {
     }
     const streak = lastMonthly && (now.getTime() - lastMonthly.getTime()) < 1440 * 3_600_000 ? (econ.monthly_streak || 0) + 1 : 1;
     const coins = 5000 + streak * 1000;
-    // Fail-closed ordering: stamp the cooldown BEFORE crediting (see claimDaily).
     try {
-      const { error: stampErr } = await sb.from("eris_economy")
-        .update({ last_monthly: now.toISOString(), monthly_streak: streak })
-        .eq("user_id", userId);
-      if (stampErr) throw new Error(stampErr.message);
+      const { data, error } = await sb.rpc("eris_claim_reward", {
+        p_user_id: userId,
+        p_kind: "monthly",
+        p_coins: coins,
+        p_streak: streak,
+        p_cooldown_secs: 720 * 3_600,
+        p_now: now.toISOString(),
+      });
+      if (error) throw new Error(error.message);
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) return { success: false, hoursLeft: 720 };
       if (_economyCache[userId]) {
+        _economyCache[userId].balance = Number(row.balance);
         _economyCache[userId].last_monthly = now.toISOString();
         _economyCache[userId].monthly_streak = streak;
+        _economyCache[userId].total_earned = (_economyCache[userId].total_earned || 0) + coins;
       }
+      await logTransaction(userId, "monthly", coins, Number(row.balance), `streak:${streak}`);
+      return { success: true, coins, streak: Number(row.streak ?? streak), newBalance: Number(row.balance) };
     } catch (e) {
-      log(`[DB] claimMonthly stamp failed (no credit): ${e.message}`);
+      log(`[DB] claimMonthly atomic claim failed (no credit): ${e.message}`);
       return { success: false, error: "claim_failed" };
     }
-    const newBal = await _updateBalanceUnsafe(userId, coins, "monthly", `streak:${streak}`);
-    return { success: true, coins, streak, newBalance: newBal };
   });
 }
 

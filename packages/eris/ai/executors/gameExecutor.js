@@ -267,6 +267,8 @@ export async function execute(toolName, input, message, _context) {
       if (!heist) return "no active heist";
       const parts = heist.participants || [];
       if (parts.length < 3) return `need ${3 - parts.length} more people before executing`;
+      const claimed = await db.claimHeistExecution(heist.id);
+      if (!claimed) return "that heist is already being executed";
       const successRate = Math.min(0.4 + (parts.length - 3) * 0.15, 0.85);
       const success = Math.random() < successRate;
       const targetBal = await db.getBalance(heist.target_user_id);

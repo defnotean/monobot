@@ -6,10 +6,9 @@ vi.hoisted(() => {
   process.env.SUPABASE_KEY = "test-anon-key-not-real";
 });
 
-// Real claimDaily (withEconLock + fail-closed stamp-then-credit ordering) runs
-// unmocked. We control whether the cooldown STAMP write succeeds to prove that
-// a stamp failure aborts WITHOUT crediting, and that on success the cooldown is
-// set so a second immediate claim is rejected.
+// Real claimDaily runs unmocked. We control whether the atomic claim RPC
+// succeeds to prove that an RPC failure aborts WITHOUT crediting, and that on
+// success the cooldown is set so a second immediate claim is rejected.
 type EconRow = {
   user_id: string;
   balance: number;
@@ -20,9 +19,7 @@ type EconRow = {
 };
 
 const econ: Map<string, EconRow> = new Map();
-// When true, the cooldown-stamp UPDATE (single .eq, has daily_streak/last_daily)
-// returns an error — simulating the stamp write failing.
-let failStamp = false;
+let failClaimRpc = false;
 
 function makeNoopChain(): any {
   const chain: any = {};
@@ -58,9 +55,6 @@ function makeEconChain() {
           const firstEq: any = {
             // Stamp path: caller awaits the result of this .eq() directly.
             then(resolve: any) {
-              if (isStamp && failStamp) {
-                return resolve({ data: null, error: { message: "simulated stamp write failure" } });
-              }
               if (isStamp) {
                 const row = econ.get(val1);
                 if (row) Object.assign(row, updates);
@@ -95,9 +89,26 @@ function makeMockSupabase() {
       if (table === "eris_economy") return makeEconChain();
       return makeNoopChain();
     },
-    // Force the CAS fallback for the credit so we drive the JS reorder, not the RPC.
-    rpc(_name: string, _args: any) {
-      return Promise.resolve({ data: null, error: { code: "PGRST202", message: "Could not find the function" } });
+    rpc(name: string, args: any) {
+      if (name !== "eris_claim_reward") {
+        return Promise.resolve({ data: null, error: { code: "PGRST202", message: "Could not find the function" } });
+      }
+      if (failClaimRpc) {
+        return Promise.resolve({ data: null, error: { message: "simulated claim rpc failure" } });
+      }
+      const row = econ.get(args.p_user_id);
+      if (!row) return Promise.resolve({ data: null, error: { message: "missing row" } });
+      const now = new Date(args.p_now);
+      const last = row.last_daily ? new Date(row.last_daily) : null;
+      if (last && now.getTime() - last.getTime() < args.p_cooldown_secs * 1000) {
+        return Promise.resolve({ data: [], error: null });
+      }
+      row.balance += args.p_coins;
+      row.total_earned += args.p_coins;
+      row.version += 1;
+      row.last_daily = args.p_now;
+      row.daily_streak = args.p_streak;
+      return Promise.resolve({ data: [{ balance: row.balance, streak: row.daily_streak }], error: null });
     },
   };
 }
@@ -121,18 +132,18 @@ function seedEcon(userId: string, balance: number) {
 describe("claimDaily fail-closed ordering", () => {
   beforeEach(async () => {
     econ.clear();
-    failStamp = false;
+    failClaimRpc = false;
     await initDatabase();
   });
 
-  it("a stamp-write failure aborts WITHOUT crediting coins", async () => {
-    const userId = "stamp-fails";
+  it("an atomic claim failure aborts WITHOUT crediting coins", async () => {
+    const userId = "claim-fails";
     seedEcon(userId, 500);
 
-    failStamp = true;
+    failClaimRpc = true;
     const result = await claimDaily(userId);
 
-    // Claim must report failure and credit nothing — stamping precedes crediting.
+    // Claim must report failure and credit nothing.
     expect(result.success).toBe(false);
     expect((await getBalance(userId)).balance).toBe(500);
   });

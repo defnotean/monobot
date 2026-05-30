@@ -10,6 +10,7 @@ import * as db from "../database.js";
 // stake mutation and the game-state delete). Reject re-entrant presses at the
 // door so the second click sees a clear "still processing" message instead.
 const _inflightGameKeys = new Set();
+const _claimedActivityEvents = new Set();
 
 export default async function interactionCreate(interaction) {
   // ─── Button interactions (games) ──────────────────────────────────────
@@ -156,7 +157,7 @@ async function handleGameButton(interaction) {
         const playerValue = handValue(playerHand);
 
         if (playerValue > 21) {
-          const newBalance = await db.updateBalanceUnsafe(userId, -stake, "gamble_loss", "blackjack:bust");
+          const newBalance = (await db.getBalance(userId)).balance;
           await db.recordGameResult(userId, "blackjack", false, stake, 0);
           const embed = blackjackResultEmbed(playerHand, dealerHand, playerValue, handValue(dealerHand), "BUST!", -stake, stake, newBalance);
           const quip = await randomQuip({ won: false, game: "blackjack", amount: stake });
@@ -173,10 +174,13 @@ async function handleGameButton(interaction) {
         else if (playerValue < dealerValue) { resultText = "Dealer Wins"; won = false; }
         else { resultText = "Push (Tie)"; won = null; }
 
-        const payout = won === true ? stake : won === false ? -stake : 0;
-        const newBalance = await db.updateBalanceUnsafe(userId, payout, won ? "gamble_win" : won === false ? "gamble_loss" : "gamble_push", `blackjack:${resultText}`);
+        const credit = won === true ? stake * 2 : won === null ? stake : 0;
+        const newBalance = credit > 0
+          ? await db.updateBalanceUnsafe(userId, credit, won ? "gamble_win" : "gamble_push", `blackjack:${resultText}`)
+          : (await db.getBalance(userId)).balance;
         if (won !== null) await db.recordGameResult(userId, "blackjack", won, stake, won ? stake * 2 : 0);
 
+        const payout = won === true ? stake : won === false ? -stake : 0;
         const embed = blackjackResultEmbed(playerHand, dealerHand, playerValue, dealerValue, resultText, payout, stake, newBalance);
         const quip = await randomQuip({ won: !!won, game: "blackjack", amount: stake });
         return interaction.update({ embeds: [embed], components: [], content: quip });
@@ -825,6 +829,13 @@ async function handleGameButton(interaction) {
     const parts = id.split("_"); // activity_event_dig_cave_enter_userId
     const eventUserId = parts[parts.length - 1];
     if (userId !== eventUserId) return interaction.reply({ content: "this event isn't for you", flags: MessageFlags.Ephemeral });
+
+    const eventKey = `activity:${interaction.message?.id || id}:${userId}`;
+    if (_claimedActivityEvents.has(eventKey)) {
+      return interaction.reply({ content: "you already claimed this event", flags: MessageFlags.Ephemeral });
+    }
+    _claimedActivityEvents.add(eventKey);
+    setTimeout(() => _claimedActivityEvents.delete(eventKey), 30 * 60 * 1000).unref?.();
 
     const activity = parts[2]; // dig, fish, hunt
     const eventType = parts[3]; // cave, giant, nest

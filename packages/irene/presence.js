@@ -321,7 +321,7 @@ export function startPresenceAPI(client) {
 
       // ── Health
       if (path === "/api/health") {
-        j(200, { status: "online", uptime: Math.round(process.uptime()), memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024), db_connected: true, bot: client.user?.tag || "connecting...", guilds: client.guilds?.cache.size || 0 });
+        j(200, { ok: true });
 
       // ── Stats
       } else if (path === "/api/stats") {

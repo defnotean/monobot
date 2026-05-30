@@ -369,7 +369,8 @@ export async function executeEconomyTool(toolName, input, message) {
 
       if (!verified) return `challenge not complete yet — progress: ${progress}/${target}`;
 
-      await db.completeDailyChallenge(challenge.id, message.author.id);
+      const newlyCompleted = await db.completeDailyChallenge(challenge.id, message.author.id);
+      if (!newlyCompleted) return "challenge already claimed";
       await db.updateBalance(message.author.id, challenge.reward, "challenge_reward", challenge.challenge_type || challenge.type);
       return `challenge complete! earned **${challenge.reward}** coins 🎉`;
     }

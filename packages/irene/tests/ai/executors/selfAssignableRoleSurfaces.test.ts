@@ -45,14 +45,26 @@ function harness(role = dangerousRole()) {
   const guild = makeGuild({
     channels: [channel],
     roles: [role],
-    botPermissions: [PermissionFlagsBits.ManageRoles, PermissionFlagsBits.ManageChannels],
+    botPermissions: [
+      PermissionFlagsBits.ManageRoles,
+      PermissionFlagsBits.ManageChannels,
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.EmbedLinks,
+    ],
     botHighestRolePosition: 100,
   });
   channel.guild = guild;
   const actor = makeMember({
     user: makeUser({ id: "actor", username: "actor", tag: "actor#0001" }),
     guild,
-    permissions: [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles],
+    permissions: [
+      PermissionFlagsBits.ManageGuild,
+      PermissionFlagsBits.ManageRoles,
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.EmbedLinks,
+    ],
     highestRolePosition: 50,
   });
   guild.members.cache.set(actor.id, actor);

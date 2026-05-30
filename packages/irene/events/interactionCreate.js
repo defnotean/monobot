@@ -10,9 +10,12 @@ import { handleTicketWizard } from "../commands/setup/ticket.js";
 import { validateAssignableRole } from "../ai/executors/customCommandExecutor.js";
 
 export const name = "interactionCreate";
+const ticketCreateLocks = new Set();
 
-function safeTicketNameFor(user) {
-  return user?.username?.toLowerCase().replace(/[^a-z0-9]/g, "") || "";
+function ticketOwnerIdFromChannel(channel) {
+  const topic = channel?.topic || "";
+  const match = topic.match(/(?:^|\s)ticket_owner:(\d{5,32})(?:\s|$)/);
+  return match?.[1] || null;
 }
 
 function canCloseTicket(interaction, requestedById = null, expectedChannelId = null) {
@@ -20,8 +23,7 @@ function canCloseTicket(interaction, requestedById = null, expectedChannelId = n
   if (expectedChannelId && channel?.id !== expectedChannelId) return false;
   if (member?.permissions?.has?.("ManageChannels")) return true;
   if (requestedById && user?.id !== requestedById) return false;
-  const safeName = safeTicketNameFor(user);
-  return Boolean(channel?.name?.startsWith("ticket-") && safeName && channel.name.includes(safeName));
+  return ticketOwnerIdFromChannel(channel) === user?.id;
 }
 
 export async function execute(interaction) {
@@ -506,38 +508,48 @@ export async function execute(interaction) {
         const typeCategoryId = pickedType?.category_id && interaction.guild.channels.cache.get(pickedType.category_id) ? pickedType.category_id : null;
         const effectiveCategoryId = typeCategoryId || cfg.category_id;
         if (!effectiveCategoryId) return interaction.editReply({ embeds: [errorEmbed("Not Configured", "Ticket system hasn't been set up yet. An admin should run `/ticket setup`.")] }).catch(() => {});
-
-        // Prevent duplicate open tickets for the same user IN THE SAME CATEGORY.
-        // Opening one support ticket + one appeal ticket is fine; two support
-        // tickets is not.
-        const typePrefix = pickedType ? `${pickedType.key}-` : "";
-        const safeName = `${typePrefix}ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-        const existing = interaction.guild.channels.cache.find(c => c.name === safeName && c.parentId === effectiveCategoryId);
-        if (existing) return interaction.editReply({ content: `You already have an open ticket: ${existing}` }).catch(() => {});
-
-        // Defaults: only the opener + bot get channel access. The ticket
-        // channel inherits whatever perms the admin configured on the parent
-        // category. Explicit view/ping IDs are opt-in; auto_category is an
-        // opt-in DYNAMIC layer — roles in that category are resolved fresh
-        // here so a role added AFTER setup still shows up automatically.
-        const { view_role_ids: viewRoleIds, ping_role_ids: pingRoleIds } = await resolveTicketRoles(interaction.guild);
-
-        const overwrites = [
-          { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
-          { id: interaction.client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
-        ];
-        for (const roleId of viewRoleIds) {
-          overwrites.push({ id: roleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] });
+        const lockKey = `${interaction.guild.id}:${effectiveCategoryId}:${interaction.user.id}`;
+        if (ticketCreateLocks.has(lockKey)) {
+          return interaction.editReply({ content: "Ticket creation is already in progress for you." }).catch(() => {});
         }
+        ticketCreateLocks.add(lockKey);
 
-        const ticketCh = await interaction.guild.channels.create({
-          name: safeName,
-          type: ChannelType.GuildText,
-          parent: effectiveCategoryId,
-          permissionOverwrites: overwrites,
-          reason: `Ticket opened by ${interaction.user.tag}${pickedType ? ` (type: ${pickedType.label})` : ""}`,
-        });
+        try {
+          // Prevent duplicate open tickets for the same user IN THE SAME CATEGORY.
+          // Opening one support ticket + one appeal ticket is fine; two support
+          // tickets is not.
+          const typePrefix = pickedType ? `${pickedType.key}-` : "";
+          const safeName = `${typePrefix}ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+          const existing = interaction.guild.channels.cache.find(c =>
+            c.parentId === effectiveCategoryId
+            && (ticketOwnerIdFromChannel(c) === interaction.user.id || c.name === safeName)
+          );
+          if (existing) return interaction.editReply({ content: `You already have an open ticket: ${existing}` }).catch(() => {});
+
+          // Defaults: only the opener + bot get channel access. The ticket
+          // channel inherits whatever perms the admin configured on the parent
+          // category. Explicit view/ping IDs are opt-in; auto_category is an
+          // opt-in DYNAMIC layer — roles in that category are resolved fresh
+          // here so a role added AFTER setup still shows up automatically.
+          const { view_role_ids: viewRoleIds, ping_role_ids: pingRoleIds } = await resolveTicketRoles(interaction.guild);
+
+          const overwrites = [
+            { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+            { id: interaction.client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+          ];
+          for (const roleId of viewRoleIds) {
+            overwrites.push({ id: roleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] });
+          }
+
+          const ticketCh = await interaction.guild.channels.create({
+            name: safeName,
+            type: ChannelType.GuildText,
+            parent: effectiveCategoryId,
+            topic: `ticket_owner:${interaction.user.id}`,
+            permissionOverwrites: overwrites,
+            reason: `Ticket opened by ${interaction.user.tag}${pickedType ? ` (type: ${pickedType.label})` : ""}`,
+          });
 
         const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = await import("discord.js");
         const row = new ActionRowBuilder().addComponents(
@@ -565,7 +577,10 @@ export async function execute(interaction) {
           embeds: [welcomeEmbed],
           components: [row],
         });
-        await interaction.editReply({ content: `Ticket created: ${ticketCh}` }).catch(() => {});
+          await interaction.editReply({ content: `Ticket created: ${ticketCh}` }).catch(() => {});
+        } finally {
+          ticketCreateLocks.delete(lockKey);
+        }
       } catch (err) {
         log(`[Ticket] Create error: ${err.message}`);
         await interaction.editReply({ content: `Failed to create ticket: ${err.message}` }).catch(() => {});

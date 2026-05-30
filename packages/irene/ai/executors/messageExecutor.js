@@ -21,6 +21,16 @@ function hasChannelPermission(channel, member, permission) {
   return Boolean(member?.permissions?.has?.(PermissionFlagsBits.Administrator) || member?.permissions?.has?.(permission));
 }
 
+function canReadChannel(channel, member) {
+  return hasChannelPermission(channel, member, PermissionFlagsBits.ViewChannel)
+    && hasChannelPermission(channel, member, PermissionFlagsBits.ReadMessageHistory);
+}
+
+function canSendToChannel(channel, member) {
+  return hasChannelPermission(channel, member, PermissionFlagsBits.ViewChannel)
+    && hasChannelPermission(channel, member, PermissionFlagsBits.SendMessages);
+}
+
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
 
@@ -35,10 +45,10 @@ export async function execute(toolName, input, message, ctx) {
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
         if (!hasChannelPermission(channel, message.member, PermissionFlagsBits.ManageMessages)) {
-          return "You need Manage Messages to pin messages.";
+          return "You need Manage Messages to edit bot messages.";
         }
         if (!hasChannelPermission(channel, guild.members?.me, PermissionFlagsBits.ManageMessages)) {
-          return "I need Manage Messages to pin messages.";
+          return "I need Manage Messages to edit messages.";
         }
 
         const target = await channel.messages.fetch(input.message_id);
@@ -77,6 +87,12 @@ export async function execute(toolName, input, message, ctx) {
           ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
+        if (!canReadChannel(channel, message.member)) {
+          return "You need View Channel and Read Message History to read messages there.";
+        }
+        if (!canReadChannel(channel, guild.members?.me)) {
+          return "I need View Channel and Read Message History there.";
+        }
 
         const count = Math.min(Math.max(input.count || 10, 1), 100);
         const fetchOpts = { limit: count };
@@ -136,6 +152,12 @@ export async function execute(toolName, input, message, ctx) {
           ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
+        if (!canReadChannel(channel, message.member)) {
+          return "You need View Channel and Read Message History to search messages there.";
+        }
+        if (!canReadChannel(channel, guild.members?.me)) {
+          return "I need View Channel and Read Message History there.";
+        }
 
         if (!input.keyword) return "A keyword is required to search messages";
 
@@ -170,10 +192,10 @@ export async function execute(toolName, input, message, ctx) {
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
         if (!hasChannelPermission(channel, message.member, PermissionFlagsBits.ManageMessages)) {
-          return "You need Manage Messages to unpin messages.";
+          return "You need Manage Messages to pin messages.";
         }
         if (!hasChannelPermission(channel, guild.members?.me, PermissionFlagsBits.ManageMessages)) {
-          return "I need Manage Messages to unpin messages.";
+          return "I need Manage Messages to pin messages.";
         }
 
         const target = await channel.messages.fetch(input.message_id);
@@ -192,6 +214,12 @@ export async function execute(toolName, input, message, ctx) {
           ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
+        if (!hasChannelPermission(channel, message.member, PermissionFlagsBits.ManageMessages)) {
+          return "You need Manage Messages to unpin messages.";
+        }
+        if (!hasChannelPermission(channel, guild.members?.me, PermissionFlagsBits.ManageMessages)) {
+          return "I need Manage Messages to unpin messages.";
+        }
 
         const target = await channel.messages.fetch(input.message_id);
         if (!target) return `Couldn't find message with ID ${input.message_id}`;
@@ -209,6 +237,12 @@ export async function execute(toolName, input, message, ctx) {
           ? findChannel(guild, input.channel_id || input.channel_name)
           : message.channel;
         if (!channel) return `Couldn't find channel "${input.channel_name}"`;
+        if (!canReadChannel(channel, message.member)) {
+          return "You need View Channel and Read Message History to list pins there.";
+        }
+        if (!canReadChannel(channel, guild.members?.me)) {
+          return "I need View Channel and Read Message History there.";
+        }
 
         const pinned = await channel.messages.fetchPinned();
         if (!pinned.size) return `No pinned messages in #${channel.name}`;
@@ -274,8 +308,12 @@ export async function execute(toolName, input, message, ctx) {
     case "send_message": {
       const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      if (!canSendToChannel(ch, message.member)) return "You need View Channel and Send Messages in that channel.";
+      if (!canSendToChannel(ch, guild.members?.me)) return "I need View Channel and Send Messages in that channel.";
       const hasEmbed = input.embed_title || input.embed_description || input.embed_image || input.embed_fields;
       if (hasEmbed) {
+        if (!hasChannelPermission(ch, message.member, PermissionFlagsBits.EmbedLinks)) return "You need Embed Links in that channel.";
+        if (!hasChannelPermission(ch, guild.members?.me, PermissionFlagsBits.EmbedLinks)) return "I need Embed Links in that channel.";
         const NAMED_COLORS = { red: 0xED4245, blue: 0x3498db, green: 0x57F287, yellow: 0xFEE75C, orange: 0xff8c00, purple: 0x9b59b6, pink: 0xEB459E, white: 0xffffff, black: 0x2b2d31, blurple: 0x5865f2, cyan: 0x1abc9c, teal: 0x1abc9c, gold: 0xF1C40F, magenta: 0xE91E63 };
         let color = 0x2b2d31; // default: dark embed (blends with Discord dark mode)
         if (input.embed_color) {
@@ -391,6 +429,10 @@ export async function execute(toolName, input, message, ctx) {
     case "send_animated_message": {
       const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      if (!canSendToChannel(ch, message.member)) return "You need View Channel and Send Messages in that channel.";
+      if (!canSendToChannel(ch, guild.members?.me)) return "I need View Channel and Send Messages in that channel.";
+      if (!hasChannelPermission(ch, message.member, PermissionFlagsBits.EmbedLinks)) return "You need Embed Links in that channel.";
+      if (!hasChannelPermission(ch, guild.members?.me, PermissionFlagsBits.EmbedLinks)) return "I need Embed Links in that channel.";
       const {
         animateEmbed, typewriterFrames, progressBarFrames, countdownFrames,
         revealFrames, loadingFrames, sparkleFrames, statusFrames,
@@ -451,6 +493,10 @@ export async function execute(toolName, input, message, ctx) {
     case "create_thread": {
       const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      if (!canSendToChannel(ch, message.member)) return "You need View Channel and Send Messages in that channel.";
+      if (!canSendToChannel(ch, guild.members?.me)) return "I need View Channel and Send Messages in that channel.";
+      if (!hasChannelPermission(ch, message.member, PermissionFlagsBits.CreatePublicThreads)) return "You need Create Public Threads in that channel.";
+      if (!hasChannelPermission(ch, guild.members?.me, PermissionFlagsBits.CreatePublicThreads)) return "I need Create Public Threads in that channel.";
       const thread = await ch.threads.create({ name: input.name, autoArchiveDuration: parseInt(input.auto_archive) || 1440, reason: `Created ${by}` });
       return `Created thread "${thread.name}" in #${ch.name}`;
     }

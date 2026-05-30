@@ -135,12 +135,7 @@ const server = http.createServer(async (req, res) => {
     const ready = client.isReady();
     res.setHeader("Content-Type", "application/json");
     res.writeHead(ready ? 200 : 503);
-    res.end(JSON.stringify({
-      ok: ready,
-      discord: ready ? "ready" : "disconnected",
-      ws_status: client.ws?.status ?? null,
-      uptime: process.uptime(),
-    }));
+    res.end(JSON.stringify({ ok: ready }));
     return;
   }
   res.writeHead(200);
