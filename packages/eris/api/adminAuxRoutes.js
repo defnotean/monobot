@@ -11,7 +11,9 @@ const MAX_PROXY_BODY_BYTES = 1_048_576;
 // :3001/api/*. The caller must pass Eris dashboard auth before this proxy
 // runs; otherwise a remote request would become localhost from Irene's view.
 export async function proxyToIrene(req, res) {
-  const remappedPath = req.url.replace(/^\/api\/irene/, "/api");
+  const remappedPath = req.url
+    .replace(/^\/api\/irene\/(healthz|readyz)(?=$|\?)/, "/$1")
+    .replace(/^\/api\/irene/, "/api");
   const proxyUrl = `http://127.0.0.1:3001${remappedPath}`;
   try {
     const chunks = [];

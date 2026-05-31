@@ -127,15 +127,21 @@ const server = http.createServer(async (req, res) => {
     await handleApiRequest(req, res);
     return;
   }
-  // Discord-aware liveness probe — returns 503 when the gateway is not Ready,
-  // so the external healthcheck timer can detect "process alive but Discord
-  // WebSocket wedged" and restart us. Other paths (/twin/health, /) keep
-  // returning 200 so they're not affected.
-  if (req.url === "/healthz") {
+  // /healthz is process liveness for uptime monitors and should stay 200
+  // during Discord's normal reconnect churn. /readyz is the stricter
+  // Discord-gateway readiness probe for dashboards/automation.
+  if (req.url === "/healthz" || req.url === "/readyz") {
     const ready = client.isReady();
+    const liveness = req.url === "/healthz";
     res.setHeader("Content-Type", "application/json");
-    res.writeHead(ready ? 200 : 503);
-    res.end(JSON.stringify({ ok: ready }));
+    res.writeHead(liveness || ready ? 200 : 503);
+    res.end(JSON.stringify({
+      ok: liveness ? true : ready,
+      discord: ready ? "ready" : "disconnected",
+      ws_status: client.ws?.status ?? null,
+      bot: client.user?.tag || "connecting...",
+      uptime: process.uptime(),
+    }));
     return;
   }
   res.writeHead(200);
@@ -167,8 +173,8 @@ async function main() {
   // Start the HTTP server BEFORE attempting Discord login. If Cloudflare/Discord
   // is unreachable at boot (we've seen this routinely), client.login() throws
   // and the whole process used to exit before /admin or /healthz could come up.
-  // With the listen() in front, the admin panel + healthz are always reachable
-  // — /healthz just reports ws_status=disconnected until the gateway connects.
+  // With the listen() in front, the admin panel + probes are always reachable;
+  // /readyz reports ws_status=disconnected until the gateway connects.
   //
   // A bind failure (e.g. EADDRINUSE from a stale instance still holding the port
   // after a messy restart) must NOT take the whole bot down. Since uncaughtException

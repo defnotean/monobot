@@ -251,15 +251,15 @@ export function startPresenceAPI(client) {
     if (req.url === `/presence/${config.ownerId}` || req.url === "/presence") {
       res.writeHead(200);
       res.end(_cachedPresenceJson);
-    } else if (req.url === "/healthz") {
-      // Discord-aware liveness probe — returns 503 when the gateway is not
-      // Ready so the external healthcheck timer can detect "process alive but
-      // Discord WebSocket wedged" and restart us. /health (below) keeps
-      // returning 200 unconditionally for callers that just need a TCP probe.
+    } else if (req.url === "/healthz" || req.url === "/readyz") {
+      // /healthz is process liveness for uptime monitors and should stay 200
+      // during Discord's normal reconnect churn. /readyz is the stricter
+      // Discord-gateway readiness probe for dashboards/automation.
       const ready = client?.isReady?.() === true;
-      res.writeHead(ready ? 200 : 503);
+      const liveness = req.url === "/healthz";
+      res.writeHead(liveness || ready ? 200 : 503);
       res.end(JSON.stringify({
-        ok: ready,
+        ok: liveness ? true : ready,
         discord: ready ? "ready" : "disconnected",
         ws_status: client?.ws?.status ?? null,
         bot: client?.user?.tag || "connecting...",
