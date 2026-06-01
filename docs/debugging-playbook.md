@@ -181,8 +181,8 @@ Workspace symlink resolution broken. The #1 cause:
 - On Render: **Root Directory** is set to `packages/eris` or `packages/irene` instead of being **blank**. Set it blank — npm workspaces requires installing from the repo root.
 
 Also check:
-- `npm install` (not `npm ci`) — the latter can refuse to link workspaces if the lockfile is even slightly off.
-- `package.json` workspaces array at root includes `"packages/*"`.
+- `npm ci` from the repository root — if it refuses to link workspaces, fix and commit the lockfile drift rather than papering over it with a local install.
+- `package.json` workspaces array at root includes `"packages/*"` and `"packages/eris/agent-ui"`; verify with `npm pkg get workspaces`.
 
 ## Tests pass but production breaks (the 2026-04-24 class)
 

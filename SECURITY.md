@@ -137,39 +137,26 @@ exports) check the invoking Discord user ID against `BOT_OWNER_ID` and refuse
 otherwise. This is a single-tenant trust model — there is no admin/sub-owner
 distinction.
 
-### Dashboard / aux-route localhost trust (`packages/eris/api/dashboard.js`, `packages/eris/api/adminAuxRoutes.js`)
+### Dashboard / aux-route auth (`packages/eris/api/dashboard.js`, `packages/eris/api/adminAuxRoutes.js`)
 
 The Eris dashboard API, the `/api/irene/*` cross-bot proxy, and `/api/logs`
-authorize a request when either (a) a valid `DASHBOARD_API_KEY` /
-`TWIN_API_SECRET` bearer token is presented, or (b) the connection originates
-from localhost. The localhost check keys on `req.socket.remoteAddress`
-(`127.0.0.1` / `::1` / `::ffff:127.0.0.1`) — the kernel-assigned peer address of
-the TCP connection, which a remote client cannot spoof — and **not** on any
-client-supplied header such as `X-Forwarded-For`. Every dashboard surface
-(including the two aux routes, which run before the generic API handler) is also
-behind the same per-IP rate limiter (30 req/min, shared bucket).
+authorize non-health requests with an explicit `Authorization: Bearer
+DASHBOARD_API_KEY` header. `TWIN_API_SECRET` is reserved for `/api/twin/*`
+endpoints: read-only state uses a bearer check and state-changing twin calls
+use body-bound HMAC signatures.
 
-This is safe under the **documented topology**: the bot's HTTP port is either
-not exposed to the public internet at all, or reached only through an
-outbound-only tunnel — no inbound proxy terminates connections on loopback in
-front of it. In that topology, "connection from `127.0.0.1`" genuinely means
-"a process already on this host," and a host-local process is already inside the
-trust boundary (it can read the same `.env`, the same token).
+Localhost dashboard bypass is disabled by default. Operators can set
+`DASHBOARD_ALLOW_LOCALHOST_BYPASS=1` for trusted single-user local development,
+but it must stay off behind public tunnels, hosted deployments, reverse
+proxies, or shared machines. Every dashboard surface, including the aux routes
+that run before the generic API handler, is behind the same per-IP limiter
+(30 req/min, shared bucket). CORS allowlists exact origins only.
 
-It is, however, **deployment-fragile**. If a loopback-terminating reverse proxy
-is ever placed in front of these ports — e.g. nginx listening on `127.0.0.1`, a
-sidecar/service-mesh proxy, or an SSH-forwarded bind that lands on the loopback
-interface — then every forwarded *external* request arrives at the bot with
-`socket.remoteAddress = 127.0.0.1` and would inherit the unauthenticated
-localhost bypass. That would expose the dashboard, the `/api/irene/*` proxy, and
-`/api/logs` to anyone who can reach the proxy. This is **not** a bypass in the
-current/documented setup — it is a constraint on how these ports may be fronted.
-
-Mitigation if you must front these ports with a loopback-terminating proxy:
-either don't (expose them on a non-loopback bind the proxy forwards to with the
-real client address preserved and trusted accordingly), or require an explicit
-bearer token even from localhost by removing the loopback bypass for that
-deployment so `DASHBOARD_API_KEY` is always mandatory.
+The built-in Eris admin HTML is served with `frame-ancestors 'none'`,
+`X-Frame-Options: DENY`, and `Cache-Control: no-store`. The dashboard uses an
+`Authorization` header rather than ambient cookies, so ordinary browser CSRF
+does not carry credentials; if a future dashboard adds cookie auth, ship a CSRF
+token layer at the same time.
 
 ### PC-agent destructive-command gate (`packages/eris/utils/pcAgent.js`)
 
@@ -198,7 +185,7 @@ On top of the owner check, the PC-agent tool surface adds:
 | Destructive-command gate | S- | Destructive commands need explicit confirmation; opaque/elevated shell forms are hard-blocked. |
 | Secret hygiene | S | Environment-only secrets, gitignored `.env`, redacted logs, no hardcoded credentials. |
 | Twin HMAC channel | S | Body-bound HMAC, constant-time compare, timestamp skew window, replay cache pressure fail-closed. |
-| DB / authz | S locally | Parameterized local access behind owner/twin gates; service-role deployments must stay loopback/private. |
+| DB / authz | S | Parameterized access behind owner/twin gates; Irene refuses to boot with unhydrated default state when `REQUIRE_PERSISTENCE=1`. |
 | Rate limiting | S locally | Per-key plus process-wide caps; use shared state before horizontal scaling. |
 | Dependency freshness | S | `npm audit` currently reports zero vulnerabilities and CI fails on moderate-or-higher advisories. |
 | Deployment containment | S locally | Current documented topology is outbound-only/loopback; public exposure needs TLS and auth in front. |
@@ -208,25 +195,22 @@ On top of the owner check, the PC-agent tool surface adds:
 We try to be honest about what's not done. The following are known and on the
 list, in no particular order:
 
-1. **No CSP / sandboxing for the optional dashboard.** The dashboard
-   currently inherits whatever CSP the host serves; a strict policy isn't
-   shipped.
-2. **Audit log is append-only but not tamper-evident.** Owner with DB access
+1. **Audit log is append-only but not tamper-evident.** Owner with DB access
    can edit `eris_pc_audit` rows. A hash-chain or external WORM sink isn't
    wired up.
-3. **Twin secret rotation is offline-only.** No graceful dual-secret
+2. **Twin secret rotation is offline-only.** No graceful dual-secret
    acceptance window — operators must restart both processes.
-4. **Rate limiter is in-memory.** Multi-process or multi-host deploys do not
+3. **Rate limiter is in-memory.** Multi-process or multi-host deploys do not
    share state; a flooder can multiply their budget by the number of
    workers.
-5. **L3 firewall classifier is optional.** Self-hosters without Voyage or the
+4. **L3 firewall classifier is optional.** Self-hosters without Voyage or the
    Prompt Guard ONNX model run on L1+L2 only.
-6. **No formal threat model for the music subsystem.** Lavalink trust is
+5. **No formal threat model for the music subsystem.** Lavalink trust is
    assumed; an attacker who can reach the Lavalink port can do arbitrary
    playback / stream proxying.
-7. **No CSRF tokens on the dashboard's mutating endpoints.** SameSite=Lax
-   cookies plus the HMAC twin layer cover the most likely abuse paths, but
-   a defense-in-depth CSRF layer isn't shipped yet.
+6. **External dashboard CSP depends on the frontend host.** The built-in Eris
+   admin panel ships CSP/frame protections, but any separately hosted dashboard
+   must set its own equivalent headers.
 
 ## Secrets Handling
 

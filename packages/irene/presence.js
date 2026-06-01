@@ -12,6 +12,7 @@ import { log } from "./utils/logger.js";
 import { verifyTwinRequest, safeStringEqual } from "@defnotean/shared/twinSign";
 import { createRateLimiter } from "@defnotean/shared/rateLimit";
 import { getClientIp } from "@defnotean/shared/getClientIp";
+import { normalizeRequestPathname, parseRequestUrl } from "@defnotean/shared/httpRequest";
 
 // Per-source rate limit for /api/twin/state. The endpoint is Bearer-gated, so
 // "identity" reduces to source IP — anyone holding TWIN_API_SECRET can read
@@ -218,12 +219,10 @@ export function resolveTwinCommand(command) {
 
 export function startPresenceAPI(client) {
   const server = http.createServer(async (req, res) => {
-    // Aggressively normalize the incoming URL to collapse duplicate slashes 
-    // protecting against externally concatenated self-url environment string bugs.
-    if (req.url) {
-      req.url = req.url.replace(/\/+/g, '/');
-    }
-    const pathname = new URL(req.url || "/", `http://localhost:${config.port}`).pathname;
+    // Normalize only the path component; query values may legitimately contain
+    // `https://...` or duplicate slashes and must not be rewritten.
+    const requestUrl = parseRequestUrl(req.url, `http://localhost:${config.port}`);
+    const pathname = normalizeRequestPathname(requestUrl.pathname);
 
     // Only apply IP rate limiting to the public presence API.
     // We MUST exempt /tts/ because Lavalink makes a rapid HEAD request followed instantly by a GET request to play the audio.
@@ -266,13 +265,12 @@ export function startPresenceAPI(client) {
         bot: client?.user?.tag || "connecting...",
         uptime: process.uptime(),
       }));
-    } else if (req.url === "/health") {
+    } else if (pathname === "/health") {
       res.writeHead(200);
       res.end(JSON.stringify({ ok: true, user: config.ownerId, bot: client.user?.tag || "connecting..." }));
-    } else if (req.url?.startsWith("/tts/")) {
+    } else if (pathname.startsWith("/tts/")) {
       // Serve generated TTS audio files
-      const rawId = req.url.split("/tts/")[1] || "";
-      const id = rawId.split("?")[0].replace(/\/$/, "");
+      const id = (pathname.split("/tts/")[1] || "").replace(/\/$/, "");
       const entry = ttsAudioCache.get(id);
       if (entry) {
         // Support both old format (raw Buffer) and new format ({ buffer, contentType })
@@ -288,7 +286,7 @@ export function startPresenceAPI(client) {
         res.end(JSON.stringify({ error: "TTS audio not found or expired" }));
       }
     // ─── Dashboard API (for Base44 twin dashboard) ───
-    } else if (req.url?.startsWith("/api/")) {
+    } else if (pathname.startsWith("/api/")) {
       // Restricted CORS — only allow same-origin and configured dashboard domains
       const apiOrigin = req.headers.origin;
       const selfUrl = process.env.EXTERNAL_URL || process.env.RENDER_EXTERNAL_URL;
@@ -303,8 +301,8 @@ export function startPresenceAPI(client) {
 
       const db = await import("./database.js");
       const mem = await import("./ai/memory.js");
-      const url = new URL(req.url, `http://localhost:${config.port}`);
-      const path = url.pathname;
+      const url = requestUrl;
+      const path = pathname;
       const j = (code, data) => { res.writeHead(code); res.end(JSON.stringify(data)); };
 
       // ── Rate limiting for API endpoints (per-IP, 30 req/min)

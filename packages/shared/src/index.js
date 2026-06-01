@@ -14,6 +14,7 @@ export * from "./twinSign.js";
 export * from "./LRUCache.js";
 export * from "./safeFetch.js";
 export * from "./rateLimit.js";
+export * from "./httpRequest.js";
 export * from "./logRedact.js";
 export * from "./ai/promptBudget.js";
 export * from "./ai/innerState.js";

@@ -16,6 +16,7 @@ import { log } from "./utils/logger.js";
 import { maybeAutoDeploy } from "./utils/autoDeploy.js";
 import { sendAlert } from "@defnotean/shared/alert";
 import { handleAdminAuxRoute } from "./api/adminAuxRoutes.js";
+import { normalizeRequestPathname, parseRequestUrl } from "@defnotean/shared/httpRequest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -101,7 +102,8 @@ async function loadEvents() {
 const ADMIN_HTML_PATH = join(__dirname, "api", "admin.html");
 
 const server = http.createServer(async (req, res) => {
-  const pathname = new URL(req.url || "/", `http://localhost:${config.port}`).pathname;
+  const requestUrl = parseRequestUrl(req.url, `http://localhost:${config.port}`);
+  const pathname = normalizeRequestPathname(requestUrl.pathname);
   // Admin panel HTML. Block framing and caching so a saved dashboard token in
   // localStorage cannot be abused through clickjacking.
   if (pathname === "/admin" || pathname === "/admin/") {
@@ -123,7 +125,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.url?.startsWith("/api/")) {
+  if (pathname.startsWith("/api/")) {
     const { handleApiRequest } = await import("./api/dashboard.js");
     await handleApiRequest(req, res);
     return;

@@ -5,7 +5,8 @@
   "description": "Monorepo for the Eris + Irene Discord twin-bot system with shared core utilities",
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "packages/eris/agent-ui"
   ],
   "scripts": {
     "start:eris": "npm start --workspace=@defnotean/eris",

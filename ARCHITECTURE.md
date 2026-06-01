@@ -253,10 +253,9 @@ Where to cut into the system without spreading change across the codebase:
 - `dual.js` per bot — the AI orchestration loop is shaped for each bot's tool surface.
 
 **What is *not* in the codebase** (might be expected, isn't):
-- No CI other than the version-sync linter.
 - No staging environment — production tests happen in a dev guild ([docs/dev-guild-workflow.md](docs/dev-guild-workflow.md)).
 - No multi-shard sharding — one Node process per service.
 - No structured log shipping — `console.log` + a 5 MB-rotating `bot.log` per package.
-- No TypeScript compile step — ESM JS throughout, `tsconfig.json` only for editor JSDoc support.
+- No transpile step — ESM JS ships directly, while CI runs TypeScript `--noEmit` builds as type linting.
 
 If you're new to the repo, [docs/start-here.md](docs/start-here.md) is the 10-minute orientation; come back here when you need the system-level view.

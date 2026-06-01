@@ -74,7 +74,7 @@ at the repo root.
 | `SUPABASE_ANON_KEY` | Irene | No | — | Fallback used when `SUPABASE_KEY` is unset (see comment at `packages/irene/.env.example:138`). `packages/irene/config.js:268`. | Same as above |
 | `REQUIRE_PERSISTENCE` | Both | No | `0` | `1` makes a missing/invalid Supabase config fatal at startup instead of degrading silently. `packages/eris/config.js:284`, `packages/irene/config.js:269`. | n/a |
 | `DUAL_WRITE_PERSISTENCE` | Irene | No | `false` | Phase 1 of the per-entity DB refactor: when `true`, every write hits both the legacy `bot_data` blob and the new tables in `packages/irene/database/perEntity.js`. Apply migrations first. `packages/irene/config.js:297`. | n/a |
-| `TWIN_API_SECRET` | Both | No (required if you run the twin pair) | — | Shared HMAC secret for `/api/twin/*` requests. MUST match on both sides. Also gates the dashboard fallback at `packages/eris/api/dashboard.js:77`, `packages/irene/presence.js:223`. Read at `packages/eris/config.js:212`, `packages/irene/config.js:200`. Direct reads in `packages/eris/api/dashboard.js:283, 331`. | `openssl rand -hex 32` |
+| `TWIN_API_SECRET` | Both | No (required if you run the twin pair) | — | Shared secret for `/api/twin/*` requests: HMAC on state-changing calls, bearer on read-only twin state. It does not authorize normal dashboard routes. Read at `packages/eris/config.js:212`, `packages/irene/config.js:200`. | `openssl rand -hex 32` |
 | `IRENE_API_URL` | Eris | No | — | Base URL of the Irene HTTP API (where Eris sends outbound twin calls). `packages/eris/config.js:213`. | The public URL of your Irene deploy |
 | `ERIS_API_URL` | Irene | No | — | Base URL of the Eris HTTP API. `packages/irene/config.js:201`. | The public URL of your Eris deploy |
 | `TWIN_BOT_ID` | Eris | No | — | Irene's bot Discord ID. Used for `{{TWIN_BOT_ID}}` substitution in `prompts/eris-relationships.md` and for twin-detection in `events/messageCreate.js`. `packages/eris/config.js:214, 326`, `packages/eris/events/messageCreate.js:365`. | Discord -> right-click Irene -> Copy ID |
@@ -107,7 +107,8 @@ at the repo root.
 | `LAVALINK_SECURE` | Irene | No | `false` | `true` -> `wss://` + `https://` instead of `ws://` + `http://`. `packages/irene/config.js:207`. | Same |
 | `DREAM_CHANNEL_ID` | Eris | No | — | Channel where Eris posts random "dream"-style background thoughts. Feature disabled if absent. `packages/eris/config.js:293`. | Discord -> right-click channel -> Copy Channel ID |
 | `BRIEFING_CHANNEL_ID` | Eris | No | — | Channel where Eris posts daily briefings. Feature disabled if absent. `packages/eris/config.js:294`. | Same |
-| `DASHBOARD_API_KEY` | Both | No | — | Auth token for the `/api/*` dashboard endpoints. When unset, only `TWIN_API_SECRET` is accepted. Read at `packages/eris/api/dashboard.js:77`, `packages/irene/presence.js:223`. | `openssl rand -hex 32` |
+| `DASHBOARD_API_KEY` | Both | No | — | Auth token for non-health dashboard `/api/*` endpoints. When unset, remote dashboard requests are rejected; twin endpoints still use `TWIN_API_SECRET`/HMAC. Read at `packages/eris/api/dashboard.js`, `packages/irene/presence.js`. | `openssl rand -hex 32` |
+| `DASHBOARD_ALLOW_LOCALHOST_BYPASS` | Both | No | `0` | Set to `1` only for trusted single-user local development. It lets localhost dashboard requests skip `DASHBOARD_API_KEY`; keep it off behind tunnels, reverse proxies, and hosted deployments. | n/a |
 | `DASHBOARD_URL` | Both | No | — | Extra origin allowed by the dashboard CORS policy. Read at `packages/eris/api/dashboard.js:27`, `packages/irene/presence.js:183`. | Whatever URL serves your dashboard frontend |
 | `EXTERNAL_URL` | Both | No | — | Manual override for the bot's public URL when not on Render. Used for CORS allow-list and (Irene) the Lavalink TTS callback URL. Read at `packages/eris/api/dashboard.js:27`, `packages/irene/presence.js:141, 182`, `packages/irene/music/player.js:795`. | Your tunnel / reverse-proxy host |
 | `RENDER_EXTERNAL_URL` | Both | No (auto-injected by Render) | — | Public URL injected by Render. Drives the self-ping keep-alive and CORS allow-list. Read at `packages/eris/api/dashboard.js:27`, `packages/irene/presence.js:141, 182, 656`, `packages/irene/music/player.js:795`. | Render sets it automatically |
@@ -218,9 +219,9 @@ Bot-ID env vars also differ by side:
   `prompts/irene-personality.md`. Note that the *template variable name* is
   `{{TWIN_BOT_ID}}` on both sides — only the env var name differs.
 
-`TWIN_API_SECRET` doubles as the dashboard fallback credential when
-`DASHBOARD_API_KEY` is unset (`packages/eris/api/dashboard.js:77`,
-`packages/irene/presence.js:223`).
+`TWIN_API_SECRET` does not authorize normal dashboard routes. It is reserved
+for twin endpoints (`/api/twin/*`) through bearer checks on read-only state and
+HMAC signatures on state-changing twin calls.
 
 ## 5. Optional integrations
 
@@ -264,9 +265,10 @@ Irene's Lavalink TTS callback URL (`packages/irene/music/player.js:795`).
 it to wherever your dashboard frontend is hosted, separate from the bot's own
 URL.
 
-`DASHBOARD_API_KEY` is the per-dashboard credential. When it's unset, the
-dashboard accepts only `TWIN_API_SECRET` — set both when you want the dashboard
-and twin secrets to be different.
+`DASHBOARD_API_KEY` is the per-dashboard credential. When it's unset, remote
+dashboard requests are rejected. For local development only,
+`DASHBOARD_ALLOW_LOCALHOST_BYPASS=1` permits localhost requests without the
+dashboard key; keep that disabled for hosted or proxied deployments.
 
 `NODE_ENV` is set to `production` by `render.yaml` (root + per-package mirrors)
 but the application code never branches on it.

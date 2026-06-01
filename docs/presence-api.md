@@ -23,7 +23,7 @@ Single Node `http` server, started from `startPresenceAPI(client)` (`packages/ir
 | `/health` | GET | none | `{ ok, user, bot }` — Render healthcheck and self-ping target (around line 142) |
 | `/tts/:id` | GET | none, exempt from rate limit (Lavalink HEAD+GET) | Serves cached TTS audio buffer (around line 145) |
 | `/api/health` | GET | none | Uptime / memory / guild count (around line 212) |
-| `/api/stats`, `/api/mood`, `/api/relationships`, `/api/conversations`, `/api/conversations/:id`, `/api/memories`, `/api/personality`, `/api/monologue`, `/api/humanity`, `/api/episodes`, `/api/reminders` | GET (some PUT/DELETE) | `Bearer DASHBOARD_API_KEY` *or* `Bearer TWIN_API_SECRET` (around line 199) | Dashboard read/write surface for the Base44 twin dashboard |
+| `/api/stats`, `/api/mood`, `/api/relationships`, `/api/conversations`, `/api/conversations/:id`, `/api/memories`, `/api/personality`, `/api/monologue`, `/api/humanity`, `/api/episodes`, `/api/reminders` | GET (some PUT/DELETE) | `Bearer DASHBOARD_API_KEY`; localhost bypass only when `DASHBOARD_ALLOW_LOCALHOST_BYPASS=1` | Dashboard read/write surface for the Base44 twin dashboard |
 | `/api/twin/state` | GET | `Bearer TWIN_API_SECRET` (around line 441) | Side-effect-free snapshot: `{ bot, mood_score, energy, preoccupation, at }` |
 | `/api/twin/command` | POST | **HMAC** via `verifyTwinRequest` (around line 489) | Eris → Irene moderation relay |
 
@@ -130,7 +130,8 @@ Sub-actions `remind | note | fact | mood | status`. Routed through the shared `c
 **Irene side**:
 - `PORT` — defaults to `3001` (irene/config.js:65). Server bound in `presence.js:585`.
 - `DISCORD_USER_ID` — owner ID, used for the presence userId path and as the default trusted requester.
-- `DASHBOARD_API_KEY` (optional, alternate dashboard auth).
+- `DASHBOARD_API_KEY` (dashboard auth for remote non-health `/api/*` calls).
+- `DASHBOARD_ALLOW_LOCALHOST_BYPASS=1` (local development only; keep unset in hosted/proxied deployments).
 
 **Eris side**:
 - `IRENE_API_URL` — defaults to `https://irene-bot.onrender.com` (eris/config.js:75). This is what `ask_irene` and `twinState` POST/GET against.

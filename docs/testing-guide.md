@@ -1,13 +1,13 @@
 # Testing guide
 
-Both bots use **Vitest 2.1.9**. Tests don't connect to Discord or Supabase — pure unit tests with mocks. Safe to run anywhere.
+The workspaces use **Vitest**. Tests don't connect to Discord or Supabase — pure unit tests with mocks. Safe to run anywhere.
 
 ## TL;DR
 
 ```bash
-npm run test:eris                            # ~423 tests across 32 files
-npm run test:irene                           # ~218 tests across 19 files
-npm test                                     # both
+npm run test:eris                            # Eris workspace
+npm run test:irene                           # Irene workspace
+npm test --workspaces --if-present           # all workspaces
 
 npm run test:watch --workspace=@defnotean/eris   # watch mode
 npx vitest run packages/eris/tests/ai/getMoodTool.test.ts   # single file
@@ -486,12 +486,14 @@ process.env.GEMINI_API_KEY = "test-key";
 
 ## CI
 
-There's no GitHub Actions config in this repo as of writing. Tests run locally only. If you set up CI, the minimum should be:
+GitHub Actions is wired at `.github/workflows/test.yml`. It runs the same gates you should run locally before pushing:
 
 ```yaml
-- run: npm install
+- run: npm ci
 - run: npm run lint:version-sync
-- run: npm test
+- run: npm audit --audit-level=moderate
+- run: npm test --workspaces --if-present
+- run: npm run build --workspaces --if-present
 ```
 
 `lint:version-sync` is the guard against the 2026-04-24 hoisting bug class — catches divergent dep ranges across workspaces.

@@ -4,6 +4,7 @@ import { log } from "../utils/logger.js";
 import { verifyTwinRequest, safeStringEqual } from "@defnotean/shared/twinSign";
 import { createRateLimiter } from "@defnotean/shared/rateLimit";
 import { getClientIp } from "@defnotean/shared/getClientIp";
+import { normalizeRequestPathname, parseRequestUrl } from "@defnotean/shared/httpRequest";
 
 // Per-source rate limit for /api/twin/state. The endpoint is Bearer-gated, so
 // "identity" reduces to source IP — anyone holding TWIN_API_SECRET can read
@@ -145,8 +146,8 @@ export async function handleApiRequest(req, res) {
   // collapse all visitors into one key.
   if (enforceDashboardRateLimit(req, res)) return;
 
-  const url0 = new URL(req.url, `http://localhost:${config.port}`);
-  const isTwinPath = url0.pathname.startsWith("/api/twin/");
+  const url0 = parseRequestUrl(req.url, `http://localhost:${config.port}`);
+  const isTwinPath = normalizeRequestPathname(url0.pathname).startsWith("/api/twin/");
 
   // Twin API — require TWIN_API_SECRET (same as Irene)
   if (isTwinPath) {
@@ -174,8 +175,8 @@ export async function handleApiRequest(req, res) {
   }
 
   try {
-    const url = new URL(req.url, `http://localhost:${config.port}`);
-    const path = url.pathname;
+    const url = parseRequestUrl(req.url, `http://localhost:${config.port}`);
+    const path = normalizeRequestPathname(url.pathname);
 
     let body = null;
     let rawBody = "";

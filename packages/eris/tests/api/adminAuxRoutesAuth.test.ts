@@ -57,6 +57,12 @@ describe("Eris admin auxiliary routes", () => {
     expect(remapIreneProxyPath("/api/irene/stats")).toBe("/api/stats");
   });
 
+  it("normalizes only the proxied path and preserves query URL values", () => {
+    expect(remapIreneProxyPath("/api//irene//stats?target=https://example.com//asset")).toBe(
+      "/api/stats?target=https://example.com//asset",
+    );
+  });
+
   it("rejects unauthenticated remote /api/irene proxy requests before proxying", async () => {
     const res = makeRes();
 

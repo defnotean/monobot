@@ -25,7 +25,7 @@ A spare laptop with steady power and internet is plenty for both bots plus a few
 | **RAM** | 512 MB (one bot, no music) | 2 GB (both bots + Lavalink) |
 | **Disk** | 1 GB | 5 GB (logs + Lavalink jar + Java) |
 
-Runs on anything with **Node.js 20+** — Linux, macOS, Windows. Tested daily on Linux and Windows.
+Runs on anything with **Node.js 22.12+** — Linux, macOS, Windows. Tested daily on Linux and Windows.
 
 ## The 5-minute version (PM2)
 
@@ -35,7 +35,7 @@ Runs on anything with **Node.js 20+** — Linux, macOS, Windows. Tested daily on
 # Clone your fork (or the upstream repo, github.com/defnotean/monobot)
 git clone https://github.com/<your-fork>/monobot
 cd monobot
-npm install
+npm ci
 
 # fill in your .env files — see GETTING_STARTED.md for required vars
 cp packages/eris/.env.example  packages/eris/.env
@@ -120,7 +120,7 @@ PM2 works the same as Linux (`pm2 startup launchd`). Or write a `~/Library/Launc
 
 ### Docker
 
-No Dockerfile ships in the repo (yet). If you want a containerized deploy, the recipe is straightforward: Node 20 base image, copy the workspace, `npm ci`, `CMD ["npm", "run", "start:eris"]` (or `:irene`). Contributions welcome.
+No Dockerfile ships in the repo (yet). If you want a containerized deploy, the recipe is straightforward: Node 24 base image, copy the workspace, `npm ci`, `CMD ["npm", "run", "start:eris"]` (or `:irene`). Contributions welcome.
 
 ## Networking
 
@@ -229,7 +229,7 @@ Leave `SUPABASE_URL` / `SUPABASE_KEY` unset.
 - **Discord intents.** In the Developer Portal for each bot application: enable **Message Content Intent** and **Server Members Intent**. Missing these is the #1 reason "the bot doesn't see messages."
 - **Dynamic ISP IP** only matters if you exposed a port. Use a tunnel and forget about it.
 - **Power outage** = no auto-restart unless your process manager is wired to start on boot. Test by rebooting the machine — both bots should come back without you logging in.
-- **Update routine:** `git pull && npm install && pm2 restart all`. Pin your fork to a specific upstream commit if you want stability, or live-update from `main`.
+- **Update routine:** `git pull && npm ci && pm2 restart all`. Pin your fork to a specific upstream commit if you want stability, or live-update from `main`.
 - **Logs eat disk** slowly. PM2 caps at ~10 MB per stream by default; `journalctl` rotates on its own. If you `>` your own log file, set up `logrotate` or you'll wake up to a full disk eventually.
 - **Both bots on the same Discord account?** No — they're separate Discord applications with separate tokens. Create two bot applications in the Developer Portal.
 

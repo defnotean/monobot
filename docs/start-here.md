@@ -79,11 +79,11 @@ Big files — but they're sequential top-to-bottom. Skim by section comments.
 
 ## What's NOT in the codebase that you might expect
 
-- **No CI** other than `scripts/verify-version-sync.js`. You'd add GitHub Actions if you want lint/test/build gates.
+- **CI is active.** GitHub Actions runs clean installs on Node 22 and 24, version-sync linting, `npm audit --audit-level=moderate`, workspace tests, and workspace builds.
 - **No staging environment.** Render auto-deploys from `main`. Use a [dev guild](./dev-guild-workflow.md) to safely test moderation/AI changes.
 - **No multi-shard sharding.** One Node process per service. Sized for small-to-mid creator communities, not 10k-guild bots.
 - **No structured log shipping.** `console.log` + a 5MB-rotating `bot.log` per package.
-- **No type system.** ESM JS throughout. There's a `tsconfig.json` for editor JSDoc support but no compile step.
+- **Type linting is active.** Runtime code is ESM JS, but workspace builds run TypeScript in `--noEmit` mode with JS checking where enabled.
 
 ## Pick a track
 
@@ -124,8 +124,8 @@ Drop a file in [packages/eris/events/](../packages/eris/events/) (or `irene/even
 
 ## What to do after you finish reading
 
-1. Run `npm install` from the repo root.
-2. Run `npm test` to see ~641 tests pass (~423 Eris, ~218 Irene).
+1. Run `npm ci` from the repo root.
+2. Run `npm test --workspaces --if-present` to run the full workspace suite.
 3. Pick one of the [tracks above](#pick-a-track).
 4. Open the `.md` file it points to.
 

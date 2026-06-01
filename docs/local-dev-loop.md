@@ -305,7 +305,7 @@ The cache is loaded at boot — restart to pick up the change, OR use the in-mem
 
 ## Faster than running the bot at all
 
-For changes that don't need real Discord — pure-function tests, executor tests, DB layer tests — `npm test` is **way faster** than restarting the bot. ~641 tests run in seconds.
+For changes that don't need real Discord — pure-function tests, executor tests, DB layer tests — `npm test --workspaces --if-present` is **way faster** than restarting the bot.
 
 Reach for the bot only when:
 - You changed event handler logic

@@ -12,7 +12,7 @@
 </p>
 
 [![Tests](https://github.com/defnotean/monobot/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/defnotean/monobot/actions/workflows/test.yml)
-![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)
+![Node.js](https://img.shields.io/badge/node-%3E%3D22.12-339933?logo=node.js&logoColor=white)
 ![Discord.js](https://img.shields.io/badge/discord.js-v14-5865F2?logo=discord&logoColor=white)
 ![Supabase](https://img.shields.io/badge/supabase-persistence-3ECF8E?logo=supabase&logoColor=white)
 ![AI](https://img.shields.io/badge/AI-tool--calling-111827)
@@ -96,7 +96,7 @@ Monobot is self-hosted. You create Discord applications, provide tokens in envir
 ```bash
 git clone https://github.com/defnotean/monobot.git
 cd monobot
-npm install
+npm ci
 ```
 
 Run Eris:

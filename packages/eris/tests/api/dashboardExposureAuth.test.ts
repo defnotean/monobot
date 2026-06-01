@@ -40,6 +40,10 @@ const mockFs = vi.hoisted(() => ({
   readdirSync: vi.fn(() => []),
 }));
 
+const mockDiscordState = vi.hoisted(() => ({
+  ready: true,
+}));
+
 vi.mock("http", () => ({
   default: {
     createServer: mockHttp.createServer,
@@ -59,7 +63,7 @@ vi.mock("discord.js", () => ({
     on: vi.fn(),
     login: vi.fn(async () => "logged-in"),
     destroy: vi.fn(),
-    isReady: vi.fn(() => true),
+    isReady: vi.fn(() => mockDiscordState.ready),
     ws: { status: 0 },
     };
   }),
@@ -195,6 +199,26 @@ beforeEach(() => {
 });
 
 describe("Eris early dashboard HTTP routes", () => {
+  it("keeps /healthz live while Discord is disconnected", async () => {
+    mockDiscordState.ready = false;
+
+    const { status, body } = await call("/healthz");
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.discord).toBe("disconnected");
+  });
+
+  it("marks /readyz unavailable while Discord is disconnected", async () => {
+    mockDiscordState.ready = false;
+
+    const { status, body } = await call("/readyz");
+
+    expect(status).toBe(503);
+    expect(body.ok).toBe(false);
+    expect(body.discord).toBe("disconnected");
+  });
+
   it("rejects unauthenticated remote /api/irene requests before proxying to Irene", async () => {
     const { status, body } = await call("/api/irene/health");
 

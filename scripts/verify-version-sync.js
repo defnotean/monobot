@@ -36,18 +36,25 @@ function readJson(path) {
 
 function discoverWorkspaces() {
   const out = [];
-  for (const name of readdirSync(PACKAGES_DIR)) {
-    const dir = join(PACKAGES_DIR, name);
-    if (!statSync(dir).isDirectory()) continue;
+  const seen = new Set();
+  function walk(dir) {
     const pkgJson = join(dir, "package.json");
     try {
       statSync(pkgJson);
+      const pkg = readJson(pkgJson);
+      out.push({ name: pkg.name || dir, dir, pkg });
+      seen.add(dir);
     } catch {
-      continue;
     }
-    const pkg = readJson(pkgJson);
-    out.push({ name: pkg.name || name, dir, pkg });
+    for (const name of readdirSync(dir)) {
+      if (name === "node_modules" || name === "dist" || name === "coverage") continue;
+      const child = join(dir, name);
+      if (!statSync(child).isDirectory()) continue;
+      if (seen.has(child)) continue;
+      walk(child);
+    }
   }
+  walk(PACKAGES_DIR);
   return out;
 }
 

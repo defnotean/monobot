@@ -1,5 +1,5 @@
 {
-  "name": "eris-agent",
+  "name": "@defnotean/eris-agent",
   "version": "1.0.0",
   "description": "Eris Local PC Agent",
   "main": "main.js",
@@ -7,11 +7,11 @@
     "start": "electron ."
   },
   "dependencies": {
-    "@google/genai": "^1.48.0",
-    "@supabase/supabase-js": "^2.101.1",
+    "@google/genai": "2.7.0",
+    "@supabase/supabase-js": "2.106.2",
     "dotenv": "^17.4.0"
   },
   "devDependencies": {
-    "electron": "^33.4.1"
+    "electron": "^42.3.0"
   }
 }

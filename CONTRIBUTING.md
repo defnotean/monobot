@@ -121,9 +121,9 @@ Both bots use **vitest**. From the repo root:
 
 | Command | What it runs |
 |---|---|
-| `npm run test:eris` | Eris suite (~423 tests across 32 files) |
-| `npm run test:irene` | Irene suite (~218 tests across 19 files) |
-| `npm test` | both |
+| `npm run test:eris` | Eris workspace tests |
+| `npm run test:irene` | Irene workspace tests |
+| `npm test --workspaces --if-present` | all workspace tests |
 | `npm run dev:eris` / `npm run dev:irene` | run the bot with file-watch (faster inner loop than `start:*`) |
 | `npm run lint:version-sync` | guards that both bots pin identical shared dep versions |
 

@@ -21,7 +21,7 @@ The monorepo is mixed JS + TS, by design:
 
 **Rule of thumb:** new application code is `.js`. New tests are `.ts`. Don't convert a `.js` file to `.ts` as a side-effect of another change.
 
-Both bots' `tsconfig.json` set `"allowJs": true`, `"checkJs": false`, `"strict": true`, `"module": "NodeNext"`, `"target": "ES2022"`. The build (`npm run build`) is `tsc --noEmit` over the whole tree — it's a type lint, not a transpile. Production runs raw `.js` via `node`.
+Workspace build configs run TypeScript in `--noEmit` mode as a type lint, not a transpile. Runtime code still ships as raw `.js` via Node. Shared code uses `checkJs: true`, and bot packages type-check their configured JS/TS surfaces; keep JSDoc accurate when editing shared helpers.
 
 No ESLint, no Prettier. **Match the file you're editing.**
 

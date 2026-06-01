@@ -2,6 +2,7 @@ import http from "http";
 import { existsSync, readFileSync } from "fs";
 import config from "../config.js";
 import { requireDashboardAuth, enforceDashboardRateLimit } from "./dashboard.js";
+import { normalizeRequestPathname, parseRequestUrl } from "@defnotean/shared/httpRequest";
 
 const HOME_DIR = process.env.HOME || `/home/${process.env.USER || "defnotean"}`;
 const LOG_DIR = `${HOME_DIR}/.local/monobot-logs`;
@@ -11,7 +12,9 @@ const MAX_PROXY_BODY_BYTES = 1_048_576;
 // :3001/api/*. The caller must pass Eris dashboard auth before this proxy
 // runs; otherwise a remote request would become localhost from Irene's view.
 export function remapIreneProxyPath(reqUrl) {
-  return reqUrl
+  const parsed = parseRequestUrl(reqUrl, `http://localhost:${config.port}`);
+  const requestPath = `${normalizeRequestPathname(parsed.pathname)}${parsed.search}`;
+  return requestPath
     .replace(/^\/api\/irene\/(healthz|readyz)(?=$|\?)/, "/$1")
     .replace(/^\/api\/irene/, "/api");
 }
@@ -61,7 +64,7 @@ export async function proxyToIrene(req, res) {
 
 export function handleLogs(req, res) {
   try {
-    const u = new URL(req.url, `http://localhost:${config.port}`);
+    const u = parseRequestUrl(req.url, `http://localhost:${config.port}`);
     const bot = (u.searchParams.get("bot") || "eris").replace(/[^a-z]/gi, "");
     const lines = Math.min(2000, Math.max(10, parseInt(u.searchParams.get("lines") || "200", 10)));
     const path = `${LOG_DIR}/${bot}.log`;
@@ -83,7 +86,8 @@ export function handleLogs(req, res) {
 }
 
 export async function handleAdminAuxRoute(req, res) {
-  if (req.url?.startsWith("/api/irene/") || req.url === "/api/irene") {
+  const routePath = normalizeRequestPathname(parseRequestUrl(req.url, `http://localhost:${config.port}`).pathname);
+  if (routePath.startsWith("/api/irene/") || routePath === "/api/irene") {
     // These aux routes run BEFORE handleApiRequest, where the per-IP limiter
     // normally fires — so without this they'd be auth-gated but NOT rate-
     // limited. Enforce the SAME 30 req/min/IP bucket here (mirrors the order
@@ -94,7 +98,7 @@ export async function handleAdminAuxRoute(req, res) {
     return true;
   }
 
-  if (req.url?.startsWith("/api/logs")) {
+  if (routePath.startsWith("/api/logs")) {
     if (enforceDashboardRateLimit(req, res)) return true;
     if (!requireDashboardAuth(req, res)) return true;
     handleLogs(req, res);

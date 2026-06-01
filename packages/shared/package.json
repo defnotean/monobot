@@ -14,6 +14,8 @@
     "./alert": "./src/alert.js",
     "./rateLimit": "./src/rateLimit.js",
     "./getClientIp": "./src/getClientIp.js",
+    "./httpRequest": "./src/httpRequest.js",
+    "./httpRequest.js": "./src/httpRequest.js",
     "./logRedact": "./src/logRedact.js",
     "./logger": "./src/logger.js",
     "./firewall": "./src/ai/firewall.js",

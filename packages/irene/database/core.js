@@ -120,6 +120,12 @@ export function getSupabase() { return supabase; }
 
 export async function initDatabase() {
   if (!config.supabaseEnabled) {
+    if (config.requirePersistence) {
+      throw new Error(
+        "[DB] REQUIRE_PERSISTENCE=1 but SUPABASE_URL / SUPABASE_KEY are missing or invalid. " +
+        "Refusing to boot in in-memory mode. Set valid Supabase credentials or unset REQUIRE_PERSISTENCE."
+      );
+    }
     log("[DB] ⚠️  IRENE WITHOUT PERSISTENCE — all moderation state, settings,");
     log("[DB] ⚠️  warns, tickets, reminders, giveaways will RESET on every restart.");
     log("[DB] ⚠️  Set SUPABASE_URL/SUPABASE_KEY (see docs/self-hosting.md for");
@@ -131,6 +137,13 @@ export async function initDatabase() {
   try {
     supabase = createClient(config.supabaseUrl, config.supabaseKey);
   } catch (err) {
+    supabase = null;
+    if (config.requirePersistence) {
+      throw new Error(
+        `[DB] REQUIRE_PERSISTENCE=1 but Supabase client creation failed: ${err.message}. ` +
+        "Refusing to boot in in-memory mode."
+      );
+    }
     log(`[DB] Invalid Supabase config: ${err.message}`);
     return;
   }
@@ -187,6 +200,13 @@ export async function initDatabase() {
     }
   }
 
+  supabase = null;
+  if (config.requirePersistence) {
+    throw new Error(
+      "[DB] REQUIRE_PERSISTENCE=1 and all 3 Supabase init attempts failed. " +
+      "Refusing to boot in in-memory mode."
+    );
+  }
   log("[DB] All Supabase init attempts failed — running without persistence");
 }
 
