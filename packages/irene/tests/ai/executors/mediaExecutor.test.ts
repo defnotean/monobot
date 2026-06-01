@@ -19,6 +19,15 @@ vi.mock("../../../config.js", () => ({
 
 vi.mock("../../../utils/logger.js", () => ({ log: vi.fn() }));
 
+vi.mock("@defnotean/shared/gifCadence", () => ({
+  isExplicitGifRequest: vi.fn(() => true),
+  recordNaturalGif: vi.fn(),
+  shouldAllowNaturalGif: vi.fn(() => ({ allowed: true })),
+}));
+
+const safeFetch = vi.hoisted(() => vi.fn());
+vi.mock("@defnotean/shared/safeFetch", () => ({ safeFetch }));
+
 // @ts-expect-error - importing JS module without types
 import { execute } from "../../../ai/executors/mediaExecutor.js";
 // @ts-expect-error - importing JS module without types
@@ -47,6 +56,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.KLIPY_API_KEY;
+  vi.unstubAllGlobals();
 });
 
 describe("mediaExecutor — routing", () => {
@@ -63,6 +73,73 @@ describe("send_gif", () => {
     const { msg } = buildMessage();
     const r = await execute("send_gif", { query: "cat" }, msg, ctx);
     expect(String(r)).toMatch(/GIF feature not set up/i);
+  });
+
+  it("allows only resolved user mentions in GIF captions", async () => {
+    process.env.KLIPY_API_KEY = "test-key";
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        data: { data: [{ file: { sm: { gif: { url: "https://cdn.test/cat.gif" } } } }] },
+      }),
+    })));
+    const member = { id: "alice-id", user: { username: "alice" }, displayName: "Alice" };
+    const localGuild = {
+      id: "guild-1",
+      members: { cache: { find: (fn: (member: any) => boolean) => fn(member) ? member : null } },
+    };
+    const send = vi.fn(async () => ({}));
+    const msg = {
+      author: { id: "u1" },
+      content: "send a gif",
+      channel: { id: "c1", send },
+      attachments: { first: () => undefined },
+      guild: localGuild,
+    };
+
+    await execute(
+      "send_gif",
+      { query: "cat", caption: "hi @Alice @everyone <@999> <@&123>" },
+      msg,
+      { guild: localGuild } as any,
+    );
+
+    const payload = send.mock.calls[0][0] as any;
+    expect(payload.content).toContain("<@alice-id>");
+    expect(payload.content).toContain("everyone");
+    expect(payload.content).toContain("<@999>");
+    expect(payload.allowedMentions).toEqual({ parse: [], users: ["alice-id"] });
+  });
+
+  it("keeps the same mention restrictions on GIF URL fallback", async () => {
+    process.env.KLIPY_API_KEY = "test-key";
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        data: { data: [{ file: { sm: { gif: { url: "https://cdn.test/cat.gif" } } } }] },
+      }),
+    })));
+    const member = { id: "alice-id", user: { username: "alice" }, displayName: "Alice" };
+    const localGuild = {
+      id: "guild-1",
+      members: { cache: { find: (fn: (member: any) => boolean) => fn(member) ? member : null } },
+    };
+    const send = vi.fn()
+      .mockRejectedValueOnce(new Error("embed blocked"))
+      .mockResolvedValueOnce({});
+    const msg = {
+      author: { id: "u1" },
+      content: "send a gif",
+      channel: { id: "c1", send },
+      attachments: { first: () => undefined },
+      guild: localGuild,
+    };
+
+    await execute("send_gif", { query: "cat", caption: "hi @Alice @everyone" }, msg, { guild: localGuild } as any);
+
+    const fallbackPayload = send.mock.calls[1][0] as any;
+    expect(fallbackPayload.content).toContain("https://cdn.test/cat.gif");
+    expect(fallbackPayload.allowedMentions).toEqual({ parse: [], users: ["alice-id"] });
   });
 });
 
@@ -101,6 +178,52 @@ describe("show_image", () => {
     const r = await execute("show_image", {}, msg, ctx);
     expect(String(r)).toMatch(/no image query provided/i);
   });
+
+  it("keeps mention restrictions on image URL fallback", async () => {
+    safeFetch
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ query: { search: [{ title: "Cat" }] } }),
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ query: { pages: { "1": { original: { source: "https://cdn.test/cat.png" } } } } }),
+      });
+    const member = { id: "alice-id", user: { username: "alice" }, displayName: "Alice" };
+    const localGuild = {
+      id: "guild-1",
+      members: {
+        cache: {
+          filter: (fn: (member: any) => boolean) => {
+            const matches = [member].filter(fn);
+            return { size: matches.length, first: () => matches[0] };
+          },
+        },
+      },
+    };
+    const send = vi.fn()
+      .mockRejectedValueOnce(new Error("embed blocked"))
+      .mockResolvedValueOnce({});
+    const msg = {
+      author: { id: "u1" },
+      channel: { id: "c1", send },
+      attachments: { first: () => undefined },
+      guild: localGuild,
+    };
+
+    const r = await execute(
+      "show_image",
+      { query: "cat", caption: "hi @Alice @everyone <@999>" },
+      msg,
+      { guild: localGuild } as any,
+    );
+
+    expect(String(r)).toMatch(/posted image URL/i);
+    const fallbackPayload = send.mock.calls[1][0] as any;
+    expect(fallbackPayload.content).toContain("<@alice-id>");
+    expect(fallbackPayload.content).toContain("everyone");
+    expect(fallbackPayload.content).toContain("<@999>");
+    expect(fallbackPayload.content).toContain("https://cdn.test/cat.png");
+    expect(fallbackPayload.allowedMentions).toEqual({ parse: [], users: ["alice-id"] });
+  });
 });
 
 describe("send_file", () => {
@@ -134,6 +257,41 @@ describe("send_file", () => {
     // replaced with "_", so "my script!.js" → "my script_.js".
     expect(opts.files[0].name).toBe("my script_.js");
     expect(String(r)).toMatch(/posted "my script_\.js" as a file/);
+  });
+
+  it("restricts file captions to resolved user mentions only", async () => {
+    const member = { id: "alice-id", user: { username: "alice" }, displayName: "Alice" };
+    const localGuild = {
+      id: "guild-1",
+      members: {
+        cache: {
+          filter: (fn: (member: any) => boolean) => {
+            const matches = [member].filter(fn);
+            return { size: matches.length, first: () => matches[0] };
+          },
+        },
+      },
+    };
+    const send = vi.fn(async () => ({}));
+    const msg = {
+      author: { id: "u1" },
+      channel: { send },
+      attachments: { first: () => undefined },
+      guild: localGuild,
+    };
+
+    await execute(
+      "send_file",
+      { content: "hello", filename: "note.txt", caption: "hi @Alice @everyone <@999>" },
+      msg,
+      { guild: localGuild } as any,
+    );
+
+    const opts = send.mock.calls[0][0] as any;
+    expect(opts.content).toContain("<@alice-id>");
+    expect(opts.content).toContain("everyone");
+    expect(opts.content).toContain("<@999>");
+    expect(opts.allowedMentions).toEqual({ parse: [], users: ["alice-id"] });
   });
 });
 

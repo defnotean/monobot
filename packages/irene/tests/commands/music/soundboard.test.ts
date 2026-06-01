@@ -1,8 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const playSoundEffect = vi.fn(async () => {});
+const playerMocks = vi.hoisted(() => ({
+  playSoundEffect: vi.fn(async () => {}),
+  assertAllowedMusicUrl: vi.fn((url: string) => {
+    if (!/^https:\/\/(?:www\.)?(?:youtube\.com|youtu\.be|open\.spotify\.com|soundcloud\.com)\b/i.test(url)) {
+      throw new Error("Only YouTube, Spotify, and SoundCloud URLs are allowed for music playback.");
+    }
+    return url;
+  }),
+}));
 vi.mock("../../../music/player.js", () => ({
-  playSoundEffect,
+  playSoundEffect: playerMocks.playSoundEffect,
+  assertAllowedMusicUrl: playerMocks.assertAllowedMusicUrl,
 }));
 vi.mock("../../../utils/logger.js", () => ({ log: vi.fn() }));
 vi.mock("../../../utils/pagination.js", () => ({ paginate: vi.fn() }));
@@ -15,6 +24,7 @@ import * as pagination from "../../../utils/pagination.js";
 import * as soundboard from "../../../commands/music/soundboard.js";
 
 const paginate = pagination.paginate as unknown as ReturnType<typeof vi.fn>;
+const playSoundEffect = playerMocks.playSoundEffect;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -23,7 +33,7 @@ beforeEach(() => {
 });
 
 /** Add a sound for `guildId` directly through the command's add path. */
-async function addSound(guildId: string, name: string, url = "https://cdn/x.mp3") {
+async function addSound(guildId: string, name: string, url = "https://www.youtube.com/watch?v=sfx") {
   const interaction = makeInteraction({
     subcommand: "add",
     options: { name, url },
@@ -38,7 +48,7 @@ describe("/soundboard add", () => {
   it("blocks members without Manage Guild", async () => {
     const interaction = makeInteraction({
       subcommand: "add",
-      options: { name: "horn", url: "https://cdn/h.mp3" },
+      options: { name: "horn", url: "https://www.youtube.com/watch?v=h" },
       permissions: [],
     });
     await soundboard.execute(interaction);
@@ -59,7 +69,7 @@ describe("/soundboard add", () => {
     validateUrlAsync.mockRejectedValueOnce(new Error("private/loopback address not allowed"));
     const interaction = makeInteraction({
       subcommand: "add",
-      options: { name: "bad", url: "http://127.0.0.1/a.mp3" },
+      options: { name: "bad", url: "https://www.youtube.com/watch?v=bad" },
       permissions: [PermissionFlagsBits.ManageGuild],
       guild: makeGuild({ id: "g1" }),
     });
@@ -67,6 +77,21 @@ describe("/soundboard add", () => {
     await soundboard.execute(interaction);
 
     expect(repliedText(interaction)).toMatch(/private\/loopback/i);
+    expect(soundboard.getSoundboardData()).toEqual({});
+  });
+
+  it("rejects public URLs from non-music providers", async () => {
+    const interaction = makeInteraction({
+      subcommand: "add",
+      options: { name: "bad", url: "https://example.com/a.mp3" },
+      permissions: [PermissionFlagsBits.ManageGuild],
+      guild: makeGuild({ id: "g1" }),
+    });
+
+    await soundboard.execute(interaction);
+
+    expect(repliedText(interaction)).toMatch(/Direct file\/CDN URLs are no longer allowed/i);
+    expect(validateUrlAsync).not.toHaveBeenCalled();
     expect(soundboard.getSoundboardData()).toEqual({});
   });
 
@@ -83,7 +108,7 @@ describe("/soundboard add", () => {
   it("stores a valid sound and confirms", async () => {
     const interaction = makeInteraction({
       subcommand: "add",
-      options: { name: "Airhorn", url: "https://cdn/h.mp3", category: "Memes" },
+      options: { name: "Airhorn", url: "https://www.youtube.com/watch?v=h", category: "Memes" },
       permissions: [PermissionFlagsBits.ManageGuild],
     });
     await soundboard.execute(interaction);
@@ -115,7 +140,7 @@ describe("/soundboard play", () => {
 
   it("plays an existing sound via playSoundEffect", async () => {
     const guildId = "sb-guild-1";
-    await addSound(guildId, "airhorn", "https://cdn/airhorn.mp3");
+    await addSound(guildId, "airhorn", "https://www.youtube.com/watch?v=airhorn");
 
     const vc = makeChannel({ type: 2 });
     const interaction = makeInteraction({
@@ -126,13 +151,30 @@ describe("/soundboard play", () => {
     interaction.member.voice.channel = vc;
     await soundboard.execute(interaction);
 
-    expect(playSoundEffect).toHaveBeenCalledWith(guildId, "https://cdn/airhorn.mp3", vc);
+    expect(playSoundEffect).toHaveBeenCalledWith(guildId, "https://www.youtube.com/watch?v=airhorn", vc);
     expect(repliedText(interaction)).toMatch(/Playing Sound/i);
+  });
+
+  it("revalidates stored sounds before playback", async () => {
+    const guildId = "sb-guild-stored";
+    soundboard.initSoundboardData({ soundboard: { [guildId]: { old: { url: "https://example.com/old.mp3" } } } });
+
+    const interaction = makeInteraction({
+      subcommand: "play",
+      options: { name: "old" },
+      guild: makeGuild({ id: guildId }),
+    });
+    interaction.member.voice.channel = makeChannel({ type: 2 });
+
+    await soundboard.execute(interaction);
+
+    expect(repliedText(interaction)).toMatch(/Direct file\/CDN URLs are no longer allowed/i);
+    expect(playSoundEffect).not.toHaveBeenCalled();
   });
 
   it("surfaces a Play Failed error when playSoundEffect throws", async () => {
     const guildId = "sb-guild-2";
-    await addSound(guildId, "bruh", "https://cdn/bruh.mp3");
+    await addSound(guildId, "bruh", "https://www.youtube.com/watch?v=bruh");
     playSoundEffect.mockRejectedValueOnce(new Error("no node"));
 
     const interaction = makeInteraction({

@@ -64,6 +64,10 @@ $$;
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
-    grant execute on function public.eris_damage_boss(text, text, integer) to anon;
+    revoke execute on function public.eris_damage_boss(text, text, integer) from anon, authenticated;
+  end if;
+  revoke execute on function public.eris_damage_boss(text, text, integer) from public;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function public.eris_damage_boss(text, text, integer) to service_role;
   end if;
 end $$;

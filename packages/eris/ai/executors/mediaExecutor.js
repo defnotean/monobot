@@ -32,6 +32,35 @@ function truncate(str, max = 1500) {
   return str.length > max ? str.slice(0, max) + "\n...(truncated)" : str;
 }
 
+function resolveCaptionMentions(caption, guild) {
+  let content = (caption || "").trim();
+  const allowedUsers = new Set();
+  if (content && guild) {
+    content = content.replace(/@(\w+)/g, (match, name) => {
+      const lower = name.toLowerCase();
+      if (lower === "everyone" || lower === "here") return name;
+      const matches = guild.members.cache.filter(m =>
+        m.user.username.toLowerCase() === lower
+        || m.displayName.toLowerCase() === lower
+        || m.user.globalName?.toLowerCase() === lower
+      );
+      if (matches.size === 1) {
+        const member = matches.first();
+        allowedUsers.add(member.id);
+        return `<@${member.id}>`;
+      }
+      return match;
+    });
+  }
+  return {
+    content,
+    allowedMentions: {
+      parse: [],
+      ...(allowedUsers.size ? { users: [...allowedUsers] } : {}),
+    },
+  };
+}
+
 export async function execute(toolName, input, message, _context) {
   if (!HANDLED.has(toolName)) return undefined;
 
@@ -73,6 +102,7 @@ export async function execute(toolName, input, message, _context) {
         // @everyone/@here so we don't accidentally mass-ping. Without these
         // guards we'd ping whichever member the cache iterator yielded first.
         let resolvedCaption = input.caption || "";
+        const resolvedMentionIds = new Set();
         if (resolvedCaption && message.guild) {
           resolvedCaption = resolvedCaption.replace(/@(\w+)/g, (match, name) => {
             const lower = name.toLowerCase();
@@ -82,11 +112,24 @@ export async function execute(toolName, input, message, _context) {
               || m.displayName.toLowerCase() === lower
               || m.user.globalName?.toLowerCase() === lower
             );
-            if (matches.size === 1) return `<@${matches.first().id}>`;
+            if (matches.size === 1) {
+              const member = matches.first();
+              resolvedMentionIds.add(member.id);
+              return `<@${member.id}>`;
+            }
             return match; // 0 or 2+ matches — keep literal text, don't ping
           });
         }
-        const sendOpts = resolvedCaption ? { content: resolvedCaption, embeds: [embed] } : { embeds: [embed] };
+        const sendOpts = resolvedCaption
+          ? {
+              content: resolvedCaption,
+              embeds: [embed],
+              allowedMentions: {
+                parse: [],
+                ...(resolvedMentionIds.size ? { users: [...resolvedMentionIds] } : {}),
+              },
+            }
+          : { embeds: [embed] };
         await message.channel.send(sendOpts);
         if (!explicitGif) recordNaturalGif(gifScope);
         return `sent gif for ${query}`;
@@ -134,12 +177,12 @@ export async function execute(toolName, input, message, _context) {
       try {
         const { EmbedBuilder } = await import("discord.js");
         const embed = new EmbedBuilder().setImage(imageUrl).setColor(config.colors?.gif || 0x2b2d31);
-        const caption = (input.caption || "").trim();
+        const { content: caption, allowedMentions } = resolveCaptionMentions(input.caption, message.guild);
         await message.channel.send({
           ...(caption ? { content: caption } : {}),
           embeds: [embed],
           // A caption is the bot's own text — never let it mass-ping the server.
-          allowedMentions: { parse: ["users"] },
+          allowedMentions,
         });
         return `posted a real photo of "${query}" (via ${source}) with your caption — the user can see the image now, so don't re-describe what's in it`;
       } catch (e) {
@@ -158,11 +201,11 @@ export async function execute(toolName, input, message, _context) {
         if (buffer.length > 7_000_000) return "that content is too large to attach (>7MB) — trim it down";
         const { AttachmentBuilder } = await import("discord.js");
         const attachment = new AttachmentBuilder(buffer, { name: filename });
-        const caption = (input.caption || "").trim();
+        const { content: caption, allowedMentions } = resolveCaptionMentions(input.caption, message.guild);
         await message.channel.send({
           ...(caption ? { content: caption } : {}),
           files: [attachment],
-          allowedMentions: { parse: ["users"] },
+          allowedMentions,
         });
         return `posted "${filename}" as a file attachment with your caption — done; do NOT also paste the contents inline`;
       } catch (e) {
@@ -188,8 +231,8 @@ export async function execute(toolName, input, message, _context) {
         if (!bytes) return `couldn't generate that image${lastErr ? ` (${lastErr.message})` : ""} — maybe try show_image (real photo) or send_gif`;
         const { AttachmentBuilder } = await import("discord.js");
         const attachment = new AttachmentBuilder(Buffer.from(bytes, "base64"), { name: "generated.png" });
-        const caption = (input.caption || "").trim();
-        await message.channel.send({ ...(caption ? { content: caption } : {}), files: [attachment], allowedMentions: { parse: ["users"] } });
+        const { content: caption, allowedMentions } = resolveCaptionMentions(input.caption, message.guild);
+        await message.channel.send({ ...(caption ? { content: caption } : {}), files: [attachment], allowedMentions });
         return `generated and posted an image for "${prompt}" — the user can see it, don't re-describe it`;
       } catch (e) {
         return `image generation failed: ${e.message}`;
@@ -236,8 +279,8 @@ export async function execute(toolName, input, message, _context) {
         const { AttachmentBuilder } = await import("discord.js");
         const ext = (outImg.mimeType || "image/png").split("/")[1] || "png";
         const attachmentOut = new AttachmentBuilder(Buffer.from(String(outImg.data ?? ""), "base64"), { name: `edited.${ext}` });
-        const caption = (input.caption || "").trim();
-        await message.channel.send({ ...(caption ? { content: caption } : {}), files: [attachmentOut], allowedMentions: { parse: ["users"] } });
+        const { content: caption, allowedMentions } = resolveCaptionMentions(input.caption, message.guild);
+        await message.channel.send({ ...(caption ? { content: caption } : {}), files: [attachmentOut], allowedMentions });
         return `edited the image (${instruction}) and posted the result — the user can see it`;
       } catch (e) {
         return `image edit failed: ${e.message}`;

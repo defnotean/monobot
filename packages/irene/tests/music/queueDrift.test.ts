@@ -70,7 +70,7 @@ describe("queue drift guards — playSong rejects stale/dead queue references", 
     const queue: any = createQueue(GUILD, { id: "vc1" } as any, { id: "tc1" } as any);
     const player = makePlayer();
     queue.player = player; // grab the spy now — deleteQueue nulls queue.player
-    queue.songs = [{ title: "Song A", url: "https://x/a" }];
+    queue.songs = [{ title: "Song A", url: "https://www.youtube.com/watch?v=queue-drift-a" }];
 
     // stop → deleteQueue sets _destroyed, nulls the player, removes from map.
     deleteQueue(GUILD);
@@ -93,13 +93,13 @@ describe("queue drift guards — playSong rejects stale/dead queue references", 
     const stale: any = createQueue(GUILD, { id: "vc1" } as any, { id: "tc1" } as any);
     const stalePlayer = makePlayer();
     stale.player = stalePlayer; // grab spy now — deleteQueue nulls stale.player
-    stale.songs = [{ title: "Stale Song", url: "https://x/stale" }];
+    stale.songs = [{ title: "Stale Song", url: "https://www.youtube.com/watch?v=queue-drift-stale" }];
 
     // Replace it with a brand-new queue for the same guild.
     deleteQueue(GUILD);
     const fresh: any = createQueue(GUILD, { id: "vc2" } as any, { id: "tc2" } as any);
     fresh.player = makePlayer();
-    fresh.songs = [{ title: "Fresh Song", url: "https://x/fresh" }];
+    fresh.songs = [{ title: "Fresh Song", url: "https://www.youtube.com/watch?v=queue-drift-fresh" }];
 
     // queues.has(GUILD) is TRUE now (fresh exists) — the old guard would have
     // let this through. isQueueLive must reject it on identity mismatch.
@@ -116,7 +116,7 @@ describe("queue drift guards — playSong rejects stale/dead queue references", 
 
     const queue: any = createQueue(GUILD, { id: "vc1" } as any, { id: "tc1" } as any);
     queue.player = makePlayer();
-    queue.songs = [{ title: "Song A", url: "https://x/a" }];
+    queue.songs = [{ title: "Song A", url: "https://www.youtube.com/watch?v=queue-drift-live" }];
 
     await playSong(queue);
 

@@ -16,6 +16,9 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
+  v_ticket_price INTEGER := 100;
+  v_house_seed INTEGER := 500;
+  v_day_ms BIGINT := 86400000;
   v_state JSONB;
   v_now_ms BIGINT := floor(extract(epoch from clock_timestamp()) * 1000)::bigint;
   v_draw_at BIGINT;
@@ -32,9 +35,14 @@ BEGIN
   IF p_count IS NULL OR p_count <= 0 OR p_count > 100 THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_count');
   END IF;
+  IF p_ticket_price IS DISTINCT FROM v_ticket_price
+     OR p_house_seed IS DISTINCT FROM v_house_seed
+     OR p_day_ms IS DISTINCT FROM v_day_ms THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'invalid_lottery_config');
+  END IF;
 
   INSERT INTO public.bot_data (id, data)
-  VALUES ('eris_lottery', jsonb_build_object('drawAt', v_now_ms + p_day_ms, 'pot', p_house_seed, 'tickets', '{}'::jsonb, 'history', '[]'::jsonb))
+  VALUES ('eris_lottery', jsonb_build_object('drawAt', v_now_ms + v_day_ms, 'pot', v_house_seed, 'tickets', '{}'::jsonb, 'history', '[]'::jsonb))
   ON CONFLICT (id) DO NOTHING;
 
   SELECT COALESCE(b.data, '{}'::jsonb) INTO v_state
@@ -42,7 +50,7 @@ BEGIN
   WHERE b.id = 'eris_lottery'
   FOR UPDATE;
 
-  v_draw_at := COALESCE((v_state->>'drawAt')::bigint, v_now_ms + p_day_ms);
+  v_draw_at := COALESCE((v_state->>'drawAt')::bigint, v_now_ms + v_day_ms);
   IF v_now_ms >= v_draw_at THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'draw_pending');
   END IF;
@@ -52,7 +60,7 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'reason', 'ticket_cap', 'held', v_existing, 'max', 999000);
   END IF;
 
-  v_cost := p_count::bigint * p_ticket_price;
+  v_cost := p_count::bigint * v_ticket_price;
   INSERT INTO public.eris_economy (user_id, balance, daily_streak, last_daily, total_earned, total_lost, total_gambled, total_stolen, total_stolen_from, last_rob_attempt, version)
   VALUES (p_user_id, 100, 0, NULL, 0, 0, 0, 0, 0, NULL, 0)
   ON CONFLICT (user_id) DO NOTHING;
@@ -73,7 +81,7 @@ BEGIN
   WHERE e.user_id = p_user_id
   RETURNING e.balance INTO v_new_balance;
 
-  v_pot := COALESCE((v_state->>'pot')::bigint, p_house_seed) + v_cost;
+  v_pot := COALESCE((v_state->>'pot')::bigint, v_house_seed) + v_cost;
   v_tickets := COALESCE(v_state->'tickets', '{}'::jsonb);
   v_tickets := jsonb_set(v_tickets, ARRAY[p_user_id], to_jsonb(v_existing + p_count), true);
   v_state := jsonb_set(v_state, '{drawAt}', to_jsonb(v_draw_at), true);
@@ -99,6 +107,9 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
+  v_house_seed INTEGER := 500;
+  v_day_ms BIGINT := 86400000;
+  v_rollover_fraction NUMERIC := 0.30;
   v_state JSONB;
   v_now_ms BIGINT := floor(extract(epoch from clock_timestamp()) * 1000)::bigint;
   v_draw_at BIGINT;
@@ -116,8 +127,14 @@ DECLARE
   v_new_state JSONB;
   v_new_balance BIGINT;
 BEGIN
+  IF p_house_seed IS DISTINCT FROM v_house_seed
+     OR p_day_ms IS DISTINCT FROM v_day_ms
+     OR p_rollover_fraction IS DISTINCT FROM v_rollover_fraction THEN
+    RETURN jsonb_build_object('drawFired', false, 'reason', 'invalid_lottery_config');
+  END IF;
+
   INSERT INTO public.bot_data (id, data)
-  VALUES ('eris_lottery', jsonb_build_object('drawAt', v_now_ms + p_day_ms, 'pot', p_house_seed, 'tickets', '{}'::jsonb, 'history', '[]'::jsonb))
+  VALUES ('eris_lottery', jsonb_build_object('drawAt', v_now_ms + v_day_ms, 'pot', v_house_seed, 'tickets', '{}'::jsonb, 'history', '[]'::jsonb))
   ON CONFLICT (id) DO NOTHING;
 
   SELECT COALESCE(b.data, '{}'::jsonb) INTO v_state
@@ -125,12 +142,12 @@ BEGIN
   WHERE b.id = 'eris_lottery'
   FOR UPDATE;
 
-  v_draw_at := COALESCE((v_state->>'drawAt')::bigint, v_now_ms + p_day_ms);
+  v_draw_at := COALESCE((v_state->>'drawAt')::bigint, v_now_ms + v_day_ms);
   IF v_now_ms < v_draw_at THEN
     RETURN jsonb_build_object('drawFired', false, 'reason', 'not_due');
   END IF;
 
-  v_pot := GREATEST(0, COALESCE((v_state->>'pot')::bigint, p_house_seed));
+  v_pot := GREATEST(0, COALESCE((v_state->>'pot')::bigint, v_house_seed));
   v_history := COALESCE(v_state->'history', '[]'::jsonb);
   v_tickets := COALESCE(v_state->'tickets', '{}'::jsonb);
 
@@ -147,7 +164,7 @@ BEGIN
 
   IF v_total <= 0 THEN
     v_new_state := jsonb_build_object(
-      'drawAt', v_now_ms + p_day_ms,
+      'drawAt', v_now_ms + v_day_ms,
       'pot', v_pot,
       'tickets', '{}'::jsonb,
       'history', jsonb_build_array(jsonb_build_object('at', v_now_ms, 'winner', NULL, 'pot', v_pot, 'tickets', 0, 'note', 'no buyers - rolled over')) || v_history
@@ -157,7 +174,7 @@ BEGIN
     RETURN jsonb_build_object('drawFired', true, 'noBuyers', true, 'pot', v_pot, 'state', v_new_state);
   END IF;
 
-  v_roll := floor(COALESCE(p_roll, random()) * v_total)::bigint + 1;
+  v_roll := floor(random() * v_total)::bigint + 1;
   IF v_roll < 1 THEN v_roll := 1; END IF;
   IF v_roll > v_total THEN v_roll := v_total; END IF;
 
@@ -181,7 +198,7 @@ BEGIN
     RETURN jsonb_build_object('drawFired', false, 'payoutFailed', true, 'reason', 'no_winner_selected');
   END IF;
 
-  v_rollover := floor(v_pot * p_rollover_fraction)::bigint;
+  v_rollover := floor(v_pot * v_rollover_fraction)::bigint;
   v_prize := v_pot - v_rollover;
 
   INSERT INTO public.eris_economy (user_id, balance, daily_streak, last_daily, total_earned, total_lost, total_gambled, total_stolen, total_stolen_from, last_rob_attempt, version)
@@ -197,8 +214,8 @@ BEGIN
   RETURNING e.balance INTO v_new_balance;
 
   v_new_state := jsonb_build_object(
-    'drawAt', v_now_ms + p_day_ms,
-    'pot', v_rollover + p_house_seed,
+    'drawAt', v_now_ms + v_day_ms,
+    'pot', v_rollover + v_house_seed,
     'tickets', '{}'::jsonb,
     'history', jsonb_build_array(jsonb_build_object(
       'at', v_now_ms,
@@ -230,7 +247,13 @@ $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    GRANT EXECUTE ON FUNCTION public.eris_buy_lottery_ticket(TEXT, INTEGER, INTEGER, INTEGER, BIGINT) TO anon, authenticated, service_role;
-    GRANT EXECUTE ON FUNCTION public.eris_claim_lottery_draw(NUMERIC, INTEGER, BIGINT, NUMERIC) TO anon, authenticated, service_role;
+    REVOKE EXECUTE ON FUNCTION public.eris_buy_lottery_ticket(TEXT, INTEGER, INTEGER, INTEGER, BIGINT) FROM anon, authenticated;
+    REVOKE EXECUTE ON FUNCTION public.eris_claim_lottery_draw(NUMERIC, INTEGER, BIGINT, NUMERIC) FROM anon, authenticated;
+  END IF;
+  REVOKE EXECUTE ON FUNCTION public.eris_buy_lottery_ticket(TEXT, INTEGER, INTEGER, INTEGER, BIGINT) FROM PUBLIC;
+  REVOKE EXECUTE ON FUNCTION public.eris_claim_lottery_draw(NUMERIC, INTEGER, BIGINT, NUMERIC) FROM PUBLIC;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT EXECUTE ON FUNCTION public.eris_buy_lottery_ticket(TEXT, INTEGER, INTEGER, INTEGER, BIGINT) TO service_role;
+    GRANT EXECUTE ON FUNCTION public.eris_claim_lottery_draw(NUMERIC, INTEGER, BIGINT, NUMERIC) TO service_role;
   END IF;
 END $$;

@@ -45,9 +45,8 @@
  *   `safeFetch` re-runs this validation on every redirect hop (manual 3xx
  *   handling, `redirect: "manual"`), so a public initial host that 302s to
  *   `http://169.254.169.254/` is refused at hop 2.
- *   NOTE: there is still a tiny TOCTOU window between `dns.lookup` and the
- *   underlying `fetch`'s own resolution — for full pinning you'd need a
- *   custom agent with `lookup` override. Acceptable for current threat model.
+ *   The fetch connection is pinned with a custom dispatcher lookup override,
+ *   so the TCP connection uses the same public IP that was just validated.
  *
  * @section Content-length cap
  *   Bodies are streamed via `res.body.getReader()` and aborted with
@@ -95,10 +94,12 @@
 
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { Agent } from "undici";
 
 const MAX_REDIRECTS = 3;
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 const DEFAULT_TIMEOUT_MS = 10_000;
+const PINNED_DISPATCHERS = new Map();
 
 // IPv4 ranges that must never be reachable from a user-supplied URL.
 // Loopback, RFC1918 private, link-local + cloud metadata, and the 0.0.0.0/8
@@ -207,6 +208,31 @@ export async function validateUrlAsync(rawUrl) {
 }
 
 /**
+ * Return an Undici dispatcher whose connect-time DNS lookup is pinned to a
+ * previously validated public IP. The original URL hostname is still used for
+ * Host and TLS SNI; only the socket target is fixed.
+ * @param {string} ip
+ */
+function dispatcherForIp(ip) {
+  const family = isIP(ip);
+  const key = `${family}:${ip}`;
+  let dispatcher = PINNED_DISPATCHERS.get(key);
+  if (!dispatcher) {
+    dispatcher = new Agent(/** @type {any} */ ({
+      connect: {
+        /** @param {string} _host @param {any} opts @param {any} cb */
+        lookup: (_host, opts, cb) => {
+          const callback = typeof opts === "function" ? opts : cb;
+          callback(null, ip, family);
+        },
+      },
+    }));
+    PINNED_DISPATCHERS.set(key, dispatcher);
+  }
+  return dispatcher;
+}
+
+/**
  * SSRF-safe fetch.
  * - Validates URL + DNS-resolved IP at each hop
  * - Manual 3xx redirect handling, max 3 hops
@@ -239,14 +265,15 @@ export async function safeFetch(rawUrl, opts = {}) {
     let currentUrl = rawUrl;
     let hops = 0;
     while (true) {
-      await validateUrlAsync(currentUrl);
-      const res = await fetch(currentUrl, {
+      const { ip } = await validateUrlAsync(currentUrl);
+      const res = await fetch(currentUrl, /** @type {any} */ ({
         method: opts.method || "GET",
         headers,
         body: opts.body,
         redirect: "manual",
         signal: controller.signal,
-      });
+        dispatcher: dispatcherForIp(ip),
+      }));
 
       // Follow 3xx manually so we can re-validate the Location target.
       if (res.status >= 300 && res.status < 400) {

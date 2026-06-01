@@ -3,6 +3,22 @@ import { successEmbed, errorEmbed, infoEmbed, musicEmbed } from "../../utils/emb
 import { log } from "../../utils/logger.js";
 import { paginate } from "../../utils/pagination.js";
 import { validateUrlAsync } from "@defnotean/shared/safeFetch";
+import { assertAllowedMusicUrl } from "../../music/player.js";
+
+const SOUND_URL_DENIAL = "Soundboard clips must use YouTube, Spotify, or SoundCloud URLs. Direct file/CDN URLs are no longer allowed.";
+
+function soundboardUrlErrorMessage(err) {
+  const message = err?.message || "";
+  return /Only YouTube, Spotify, and SoundCloud/i.test(message)
+    ? SOUND_URL_DENIAL
+    : message || SOUND_URL_DENIAL;
+}
+
+async function validateSoundboardUrl(url) {
+  const safeUrl = assertAllowedMusicUrl(url);
+  await validateUrlAsync(safeUrl);
+  return safeUrl;
+}
 
 // ─── Soundboard Store ──────────────────────────────────────────────────────────
 // Key: guildId, Value: { soundName: { url, category?, duration? } }
@@ -138,16 +154,17 @@ export async function execute(interaction) {
         flags: 64,
       });
     }
+    let safeUrl;
     try {
-      await validateUrlAsync(url);
+      safeUrl = await validateSoundboardUrl(url);
     } catch (err) {
       return interaction.reply({
-        embeds: [errorEmbed("Invalid URL", err.message || "that URL is not allowed")],
+        embeds: [errorEmbed("Invalid URL", soundboardUrlErrorMessage(err))],
         flags: 64,
       });
     }
 
-    if (!addSound(guildId, name, url, category, duration)) {
+    if (!addSound(guildId, name, safeUrl, category, duration)) {
       return interaction.reply({
         embeds: [errorEmbed("Soundboard Full", `max ${MAX_SOUNDS_PER_GUILD} sounds per guild`)],
         flags: 64,
@@ -183,9 +200,9 @@ export async function execute(interaction) {
 
     // Import player dynamically to use playSoundEffect
     try {
-      await validateUrlAsync(url);
+      const safeUrl = await validateSoundboardUrl(url);
       const { playSoundEffect } = await import("../../music/player.js");
-      await playSoundEffect(guildId, url, interaction.member.voice.channel);
+      await playSoundEffect(guildId, safeUrl, interaction.member.voice.channel);
 
       await interaction.reply({
         embeds: [musicEmbed("Playing Sound", `**${name}**`)],
@@ -193,7 +210,7 @@ export async function execute(interaction) {
     } catch (error) {
       log(`[Soundboard] Play error for "${name}": ${error.message}`);
       await interaction.reply({
-        embeds: [errorEmbed("Play Failed", error.message)],
+        embeds: [errorEmbed("Play Failed", soundboardUrlErrorMessage(error))],
         flags: 64,
       });
     }

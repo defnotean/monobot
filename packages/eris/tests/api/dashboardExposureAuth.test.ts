@@ -52,7 +52,8 @@ vi.mock("http", () => ({
 vi.mock("fs", () => mockFs);
 
 vi.mock("discord.js", () => ({
-  Client: vi.fn().mockImplementation(() => ({
+  Client: vi.fn(function Client() {
+    return {
     commands: null,
     once: vi.fn(),
     on: vi.fn(),
@@ -60,7 +61,8 @@ vi.mock("discord.js", () => ({
     destroy: vi.fn(),
     isReady: vi.fn(() => true),
     ws: { status: 0 },
-  })),
+    };
+  }),
   Collection: class Collection<K, V> extends Map<K, V> {},
   GatewayIntentBits: {
     Guilds: 1,

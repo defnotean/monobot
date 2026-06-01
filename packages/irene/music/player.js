@@ -544,7 +544,10 @@ export async function playSong(queue, _retries = 0) {
       if (song.encodedTrack) {
         track = { encoded: song.encodedTrack, info: { title: song.title } };
       } else {
-        const identifier = song.lavalinkTrack || song.url;
+        let identifier = song.lavalinkTrack || song.url;
+        if (isHttpUrl(identifier)) {
+          identifier = assertAllowedMusicUrl(identifier);
+        }
         log(`[Music] Resolving: ${identifier}`);
         const result = await node.rest.resolve(identifier);
         log(`[Music] Resolve result: loadType=${result?.loadType}, hasData=${!!result?.data}`);
@@ -625,15 +628,65 @@ import fetch from "node-fetch";
 import { safeFetch } from "@defnotean/shared/safeFetch";
 const spotifyExt = /** @type {any} */ (getPreview)(fetch);
 
-// Strict allowlist for the Spotify HTML-scrape fallback. The old check was a
-// bare `.includes('spotify.com')`, which `evil.com/spotify.com` (or
-// `spotify.com.evil.com`) trivially bypasses to point our fetch at an
-// attacker-controlled host. Validate the parsed hostname instead.
+const ALLOWED_MUSIC_HOSTS = [
+  "spotify.com",
+  "youtube.com",
+  "youtu.be",
+  "soundcloud.com",
+  "on.soundcloud.com",
+];
+
+function hostMatches(host, allowedHost) {
+  if (host === allowedHost) return true;
+  if (allowedHost === "youtu.be" || allowedHost === "on.soundcloud.com") return false;
+  return host.endsWith(`.${allowedHost}`);
+}
+
+function parseHttpUrl(rawUrl) {
+  let parsed;
+  try { parsed = new URL(String(rawUrl || "").trim()); }
+  catch { return null; }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  return parsed;
+}
+
+function isHttpUrl(rawUrl) {
+  return !!parseHttpUrl(rawUrl);
+}
+
+export function parseAllowedMusicUrl(rawUrl) {
+  const parsed = parseHttpUrl(rawUrl);
+  if (!parsed) return null;
+  const host = parsed.hostname.toLowerCase();
+  return ALLOWED_MUSIC_HOSTS.some((allowed) => hostMatches(host, allowed)) ? parsed : null;
+}
+
+export function isAllowedMusicUrl(rawUrl) {
+  return !!parseAllowedMusicUrl(rawUrl);
+}
+
+export function assertAllowedMusicUrl(rawUrl) {
+  const parsed = parseAllowedMusicUrl(rawUrl);
+  if (!parsed) {
+    throw new Error("Only YouTube, Spotify, and SoundCloud URLs are allowed for music playback.");
+  }
+  return normalizeMusicUrlForResolve(parsed);
+}
+
+function normalizeMusicUrlForResolve(parsedUrl) {
+  const normalized = new URL(parsedUrl.toString());
+  normalized.hash = "";
+  if (isSpotifyHost(normalized.toString())) {
+    normalized.search = "";
+  }
+  return normalized.toString();
+}
+
 function isSpotifyHost(rawUrl) {
-  let host;
-  try { host = new URL(rawUrl).hostname.toLowerCase(); }
-  catch { return false; }
-  return host === "spotify.com" || host === "open.spotify.com" || host.endsWith(".spotify.com");
+  const parsed = parseHttpUrl(rawUrl);
+  if (!parsed) return false;
+  const host = parsed.hostname.toLowerCase();
+  return hostMatches(host, "spotify.com");
 }
 
 export { isSpotifyHost };
@@ -645,21 +698,26 @@ export async function searchPlaylist(query) {
     const node = shoukaku.nodes.values().next().value;
     if (!node) { log("[Music] No Lavalink nodes available"); return null; }
 
-    // Only handle playlist URLs
-    if (!query.includes("youtube.com/playlist") && !query.includes("list=") && !query.includes("spotify.com")) {
+    const parsedMusicUrl = parseAllowedMusicUrl(query);
+    if (!parsedMusicUrl) {
+      if (isHttpUrl(query)) log(`[Music] Rejected playlist URL from untrusted host: ${query}`);
       return null;
     }
 
-    // Strip tracking parameters from Spotify links which can cause LavaSrc plugin to fail
-    let resolveQuery = query;
-    if (resolveQuery.includes("spotify.com") && resolveQuery.includes("?")) {
-      resolveQuery = resolveQuery.split("?")[0];
+    const isSpotifyUrl = isSpotifyHost(parsedMusicUrl.toString());
+    const isYouTubePlaylist = hostMatches(parsedMusicUrl.hostname.toLowerCase(), "youtube.com")
+      && (parsedMusicUrl.pathname === "/playlist" || parsedMusicUrl.searchParams.has("list"));
+    const isSoundCloudUrl = hostMatches(parsedMusicUrl.hostname.toLowerCase(), "soundcloud.com")
+      || hostMatches(parsedMusicUrl.hostname.toLowerCase(), "on.soundcloud.com");
+    if (!isSpotifyUrl && !isYouTubePlaylist && !isSoundCloudUrl) {
+      return null;
     }
 
+    const resolveQuery = normalizeMusicUrlForResolve(parsedMusicUrl);
     const result = await node.rest.resolve(resolveQuery);
 
     // Spotify Fallback check
-    if ((result?.loadType === "empty" || result?.loadType === "NO_MATCHES" || result?.loadType === "error" || result?.loadType === "LOAD_FAILED" || !result) && resolveQuery.includes("spotify.com")) {
+    if ((result?.loadType === "empty" || result?.loadType === "NO_MATCHES" || result?.loadType === "error" || result?.loadType === "LOAD_FAILED" || !result) && isSpotifyUrl) {
       try {
         const tracksRaw = await spotifyExt.getTracks(resolveQuery);
         if (tracksRaw && tracksRaw.length > 0) {
@@ -706,14 +764,18 @@ export async function searchSong(query) {
     const node = shoukaku.nodes.values().next().value;
     if (!node) { log("[Music] No Lavalink nodes available"); return null; }
 
-    // Strip tracking parameters from Spotify links which can cause LavaSrc plugin to fail
-    let resolveQuery = query;
-    if (resolveQuery.includes("spotify.com") && resolveQuery.includes("?")) {
-      resolveQuery = resolveQuery.split("?")[0];
+    let resolveQuery = String(query || "").trim();
+    const parsedMusicUrl = parseAllowedMusicUrl(resolveQuery);
+    if (isHttpUrl(resolveQuery)) {
+      if (!parsedMusicUrl) {
+        log(`[Music] Rejected track URL from untrusted host: ${resolveQuery}`);
+        return null;
+      }
+      resolveQuery = normalizeMusicUrlForResolve(parsedMusicUrl);
     }
 
     // If it's a URL, resolve directly. Otherwise prefix with ytsearch:
-    const searchQuery = resolveQuery.startsWith("http://") || resolveQuery.startsWith("https://")
+    const searchQuery = parsedMusicUrl
       ? resolveQuery
       : `ytsearch:${resolveQuery}`;
 
@@ -1070,6 +1132,8 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
 }
 
 export async function playSoundEffect(guildId, url, voiceChannel) {
+  const resolveUrl = assertAllowedMusicUrl(url);
+
   let queue = getQueue(guildId);
   if (!queue) {
     queue = createQueue(guildId, voiceChannel, null);
@@ -1079,7 +1143,7 @@ export async function playSoundEffect(guildId, url, voiceChannel) {
   const node = shoukaku.nodes.values().next().value;
   if (!node) throw new Error("No Lavalink nodes available");
 
-  const result = await node.rest.resolve(url);
+  const result = await node.rest.resolve(resolveUrl);
   let track;
   if (result?.loadType === "track") track = result.data;
   else if (result?.loadType === "search") track = result.data?.[0];
@@ -1091,10 +1155,10 @@ export async function playSoundEffect(guildId, url, voiceChannel) {
 
   const sfxSong = {
     title: "Sound Effect",
-    url: url,
+    url: resolveUrl,
     duration: "SFX",
     thumbnail: null,
-    lavalinkTrack: url,
+    lavalinkTrack: resolveUrl,
     requestedBy: "Soundboard",
     isTTS: true, // Acts exactly like a TTS priority skip
     encodedTrack: track.encoded,

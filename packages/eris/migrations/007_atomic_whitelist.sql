@@ -39,12 +39,18 @@ BEGIN
 END;
 $$;
 
--- Grant to Supabase API roles when present (cloud); local self-host connects as
--- the DB owner and EXECUTE defaults to PUBLIC, so no grant is needed there.
+-- Whitelist mutation is owner-gated in the bot and must not be directly
+-- callable through client API roles.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    GRANT EXECUTE ON FUNCTION public.bot_whitelist_add(TEXT, JSONB) TO anon, authenticated, service_role;
-    GRANT EXECUTE ON FUNCTION public.bot_whitelist_remove(TEXT) TO anon, authenticated, service_role;
+    REVOKE EXECUTE ON FUNCTION public.bot_whitelist_add(TEXT, JSONB) FROM anon, authenticated;
+    REVOKE EXECUTE ON FUNCTION public.bot_whitelist_remove(TEXT) FROM anon, authenticated;
+  END IF;
+  REVOKE EXECUTE ON FUNCTION public.bot_whitelist_add(TEXT, JSONB) FROM PUBLIC;
+  REVOKE EXECUTE ON FUNCTION public.bot_whitelist_remove(TEXT) FROM PUBLIC;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT EXECUTE ON FUNCTION public.bot_whitelist_add(TEXT, JSONB) TO service_role;
+    GRANT EXECUTE ON FUNCTION public.bot_whitelist_remove(TEXT) TO service_role;
   END IF;
 END $$;

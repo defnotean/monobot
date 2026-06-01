@@ -81,6 +81,16 @@ const DESTRUCTIVE_PATTERNS = [
     new RegExp(`\\bpwsh(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
     new RegExp(`\\bcmd(\\.exe)?\\b[^|]*${WS}\\/c\\b`, "iu"),
 ];
+const HARD_BLOCK_PATTERNS = [
+    new RegExp(`\\bpowershell(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
+    new RegExp(`\\bpwsh(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
+    new RegExp(`\\bcmd(\\.exe)?\\b[^|]*${WS}\\/c\\b`, "iu"),
+    new RegExp(`\\b(?:bash|sh|zsh|fish)${WS}+-c\\b`, "iu"),
+    /\b(?:Invoke-Expression|iex)\b/iu,
+    /\bStart-Process\b[^|]*(?:^|\s)-Verb\s+RunAs\b/iu,
+    /\bSet-ExecutionPolicy\b/iu,
+    new RegExp(`\\b(?:curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\\b[^|]*(?:\\||;|&&)${WS}*(?:sh|bash|pwsh|powershell|iex|Invoke-Expression)\\b`, "iu"),
+];
 const CHAIN_SPLIT = /(?:&&|\|\||;|\||&|`|\$\()/u;
 
 function normalizeForMatch(command) {
@@ -92,6 +102,12 @@ function normalizeForMatch(command) {
 }
 function matchDestructive(normalized) {
     for (const pat of DESTRUCTIVE_PATTERNS) {
+        if (pat.test(normalized)) return pat.source;
+    }
+    return null;
+}
+function matchHardBlocked(normalized) {
+    for (const pat of HARD_BLOCK_PATTERNS) {
         if (pat.test(normalized)) return pat.source;
     }
     return null;
@@ -112,6 +128,42 @@ function looksDestructive(command) {
         }
     }
     return null;
+}
+// Returns the matched pattern source if the command uses an opaque/elevated
+// shell form that is never allowed, even with renderer/user confirmation.
+function looksHardBlocked(command) {
+    if (!command || typeof command !== 'string') return null;
+    const normalized = normalizeForMatch(command);
+    if (!normalized) return null;
+    const whole = matchHardBlocked(normalized);
+    if (whole) return whole;
+    if (CHAIN_SPLIT.test(normalized)) {
+        for (const part of normalized.split(CHAIN_SPLIT)) {
+            const trimmed = part.trim();
+            if (!trimmed) continue;
+            const hit = matchHardBlocked(trimmed);
+            if (hit) return hit;
+        }
+    }
+    return null;
+}
+
+function gateShellCommand(command, { confirm } = {}) {
+    const hardBlocked = looksHardBlocked(command);
+    if (hardBlocked) {
+        return {
+            ok: false,
+            reason: `refusing - this shell form is not allowed even with confirm (matched /${hardBlocked}/). use a direct, reviewable command instead.`
+        };
+    }
+    const destructive = looksDestructive(command);
+    if (destructive && !confirm) {
+        return {
+            ok: false,
+            reason: `refusing - destructive command (matched /${destructive}/); set confirm: true to override`
+        };
+    }
+    return { ok: true };
 }
 
 // ─── LOCAL-COMMAND AUTHENTICATION ──────────────────────────────────────────────
@@ -155,7 +207,7 @@ function verifyLocalCommand(row, { ownerId, secret, now = Date.now() } = {}) {
 
 // Exported for unit tests (required from a non-Electron context). Under Electron
 // these are also used directly within this module.
-module.exports = { looksDestructive, verifyLocalCommand, normalizeForMatch };
+module.exports = { looksDestructive, looksHardBlocked, gateShellCommand, verifyLocalCommand, normalizeForMatch };
 
 // ─── ELECTRON ────────────────────────────────────────────────────────────────
 // Guarded require: when this file is loaded outside Electron (e.g. a vitest
@@ -288,13 +340,12 @@ async function pollCommands() {
                 await supabase.from('local_commands').update({ status: 'error', result: `rejected: ${auth.reason}` }).eq('id', cmd.id);
                 continue;
             }
-            // Block destructive commands unless the row carries an explicit
-            // confirm flag — same gate the bot applies, re-enforced host-side.
-            const destructive = looksDestructive(cmd.command);
-            if (destructive && !cmd.confirm) {
-                const reason = `refusing — destructive command (matched /${destructive}/); set confirm: true to override`;
-                mainWindow?.webContents.send('agent-log', `Blocked command ${cmd.id}: ${reason}`);
-                await supabase.from('local_commands').update({ status: 'error', result: reason }).eq('id', cmd.id);
+            // Enforce the bot-side command policy host-side. Hard-blocked shell
+            // forms are never confirmable because the command is not reviewable.
+            const gate = gateShellCommand(cmd.command, { confirm: cmd.confirm });
+            if (!gate.ok) {
+                mainWindow?.webContents.send('agent-log', `Blocked command ${cmd.id}: ${gate.reason}`);
+                await supabase.from('local_commands').update({ status: 'error', result: gate.reason }).eq('id', cmd.id);
                 continue;
             }
             await supabase.from('local_commands').update({ status: 'running' }).eq('id', cmd.id);
@@ -418,11 +469,11 @@ if (app) app.whenReady().then(() => {
         if (isPcAgentDisabled()) {
             return { output: 'PC agent is disabled (PC_AGENT_DISABLED=1).', exitCode: 1 };
         }
-        // Re-enforce the destructive-command gate host-side: the renderer is
-        // not trusted, so block destructive matches unless caller confirms.
-        const destructive = looksDestructive(command);
-        if (destructive && !confirm) {
-            return { output: `refusing — destructive command (matched /${destructive}/). re-run with confirm to override.`, exitCode: 1 };
+        // The renderer is not trusted. Enforce hard-blocks even when it passes
+        // confirm=true, then allow only confirmable destructive forms.
+        const gate = gateShellCommand(command, { confirm });
+        if (!gate.ok) {
+            return { output: gate.reason, exitCode: 1 };
         }
         return new Promise(resolve => {
             exec(command, { shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/bash', timeout: 60000, cwd: cwd || undefined }, (err, stdout, stderr) => {

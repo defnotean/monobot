@@ -44,6 +44,7 @@ import { buildMemoryContext } from "../../ai/memory.js";
 import { spotlight } from "../../ai/firewall.js";
 import { getMentionRegex } from "./gates.js";
 import { channelTypeLabel } from "../../utils/channelTypes.js";
+import { safeFetch } from "@defnotean/shared/safeFetch";
 
 // Sanitize and normalize a Discord display name before injecting it into the
 // system prompt or history. Matches Eris's pattern (eris/events/messageCreate.js
@@ -162,13 +163,10 @@ export async function collectImages(message) {
   const images = await Promise.all(allImageAttachments.map(async (a) => {
     const block = { type: "image", source: { type: "url", url: a.url } };
     try {
-      const res = await fetch(a.url, { signal: AbortSignal.timeout(5000) });
-      if (res.ok) {
-        const buf = Buffer.from(await res.arrayBuffer());
-        if (buf.length <= 1_000_000) {
-          block._cachedBase64 = buf.toString("base64");
-          block._cachedMime = res.headers.get("content-type") || "image/png";
-        }
+      const res = await safeFetch(a.url, { binary: true, maxBytes: 1_000_000, timeoutMs: 5_000 });
+      if (res.status >= 200 && res.status < 300 && res.bytes) {
+        block._cachedBase64 = res.bytes.toString("base64");
+        block._cachedMime = res.headers.get("content-type") || "image/png";
       }
     } catch {}
     return block;

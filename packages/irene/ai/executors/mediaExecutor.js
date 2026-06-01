@@ -15,6 +15,37 @@ const HANDLED = new Set([
   "send_gif", "show_image", "send_file", "edit_image", "set_gif_style",
 ]);
 
+function resolveCaptionMentions(caption, guild) {
+  const allowedUsers = new Set();
+  let content = (caption || "").trim();
+  if (content && guild) {
+    content = content.replace(/@(\w+)/g, (match, name) => {
+      const lower = name.toLowerCase();
+      if (lower === "everyone" || lower === "here") return name;
+      const predicate = m =>
+        m.user.username.toLowerCase() === lower
+        || m.displayName.toLowerCase() === lower
+        || m.user.globalName?.toLowerCase() === lower;
+      const matches = guild.members.cache.filter
+        ? guild.members.cache.filter(predicate)
+        : null;
+      const member = matches
+        ? (matches.size === 1 ? matches.first() : null)
+        : guild.members.cache.find?.(predicate);
+      if (!member) return match;
+      allowedUsers.add(member.id);
+      return `<@${member.id}>`;
+    });
+  }
+  return {
+    content,
+    allowedMentions: {
+      parse: [],
+      ...(allowedUsers.size ? { users: [...allowedUsers] } : {}),
+    },
+  };
+}
+
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
 
@@ -46,22 +77,16 @@ export async function execute(toolName, input, message, ctx) {
       {
         const color = useEmbed ? 0xFFFFFF : 0x2b2d31;
         const embed = new EmbedBuilder().setImage(gifUrl).setColor(color);
-        let resolvedCaption = input.caption || "";
-        if (resolvedCaption && guild) {
-          resolvedCaption = resolvedCaption.replace(/@(\w+)/g, (match, name) => {
-            const member = guild.members.cache.find(m => m.user.username.toLowerCase() === name.toLowerCase() || m.displayName.toLowerCase() === name.toLowerCase());
-            return member ? `<@${member.id}>` : match;
-          });
-        }
+        const { content: resolvedCaption, allowedMentions } = resolveCaptionMentions(input.caption, guild);
         const sendOpts = resolvedCaption
-          ? { content: resolvedCaption, embeds: [embed] }
-          : { embeds: [embed] };
+          ? { content: resolvedCaption, embeds: [embed], allowedMentions }
+          : { embeds: [embed], allowedMentions };
         try {
           await message.channel.send(sendOpts);
         } catch (err) {
           log(`[GIF] Embed send failed: ${err.message} — falling back to URL`);
-          const fallback = input.caption ? `${input.caption}\n${gifUrl}` : gifUrl;
-          await message.channel.send(fallback).catch(() => {});
+          const fallback = resolvedCaption ? `${resolvedCaption}\n${gifUrl}` : gifUrl;
+          await message.channel.send({ content: fallback, allowedMentions }).catch(() => {});
         }
       }
       if (!explicitGif) recordNaturalGif(gifScope);
@@ -109,18 +134,18 @@ export async function execute(toolName, input, message, ctx) {
 
       if (!imageUrl) return `couldn't find a good photo of "${query}" — tell the user in your own words (maybe describe it instead)`;
 
+      const { content: caption, allowedMentions } = resolveCaptionMentions(input.caption, guild);
       try {
         const embed = new EmbedBuilder().setImage(imageUrl).setColor(config.colors?.gif || 0x2b2d31);
-        const caption = (input.caption || "").trim();
         await message.channel.send({
           ...(caption ? { content: caption } : {}),
           embeds: [embed],
-          allowedMentions: { parse: ["users"] }, // never mass-ping from a caption
+          allowedMentions,
         });
         return `posted a real photo of "${query}" (via ${source}) with your caption — the user can see the image now, so don't re-describe what's in it`;
       } catch (e) {
         log(`[show_image] send failed: ${e.message} — falling back to URL`);
-        try { await message.channel.send((input.caption ? `${input.caption}\n` : "") + imageUrl); return `posted image URL for "${query}"`; }
+        try { await message.channel.send({ content: caption ? `${caption}\n${imageUrl}` : imageUrl, allowedMentions }); return `posted image URL for "${query}"`; }
         catch (e2) { return `found an image but couldn't post it: ${e2.message}`; }
       }
     }
@@ -136,11 +161,11 @@ export async function execute(toolName, input, message, ctx) {
         if (buffer.length > 7_000_000) return "that content is too large to attach (>7MB) — trim it down";
         const { AttachmentBuilder } = await import("discord.js");
         const attachment = new AttachmentBuilder(buffer, { name: filename });
-        const caption = (input.caption || "").trim();
+        const { content: caption, allowedMentions } = resolveCaptionMentions(input.caption, guild);
         await message.channel.send({
           ...(caption ? { content: caption } : {}),
           files: [attachment],
-          allowedMentions: { parse: ["users"] },
+          allowedMentions,
         });
         return `posted "${filename}" as a file attachment with your caption — done; do NOT also paste the contents inline`;
       } catch (e) {
@@ -187,8 +212,8 @@ export async function execute(toolName, input, message, ctx) {
         const { AttachmentBuilder } = await import("discord.js");
         const ext = (outImg.mimeType || "image/png").split("/")[1] || "png";
         const attachmentOut = new AttachmentBuilder(Buffer.from(outImg.data, "base64"), { name: `edited.${ext}` });
-        const caption = (input.caption || "").trim();
-        await message.channel.send({ ...(caption ? { content: caption } : {}), files: [attachmentOut], allowedMentions: { parse: ["users"] } });
+        const { content: caption, allowedMentions } = resolveCaptionMentions(input.caption, guild);
+        await message.channel.send({ ...(caption ? { content: caption } : {}), files: [attachmentOut], allowedMentions });
         return `edited the image (${instruction}) and posted the result — the user can see it`;
       } catch (e) {
         return `image edit failed: ${e.message}`;

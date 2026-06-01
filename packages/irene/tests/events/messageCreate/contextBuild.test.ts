@@ -13,8 +13,11 @@ vi.mock("../../../utils/channelTypes.js", () => ({
 vi.mock("../../../ai/firewall.js", () => ({
   spotlight: vi.fn((text) => text),
 }));
+const safeFetch = vi.hoisted(() => vi.fn());
+vi.mock("@defnotean/shared/safeFetch", () => ({ safeFetch }));
 
 import {
+  collectImages,
   safeIdentityName,
   resolveDiscordReferences,
   buildUserTurn,
@@ -173,6 +176,39 @@ describe("contextBuild / buildUserTurn", () => {
     expect(Array.isArray(userContent)).toBe(true);
     expect(userContent[0].type).toBe("text");
     expect(userContent[1]).toBe(imgPart);
+  });
+});
+
+describe("contextBuild / collectImages", () => {
+  it("prefetches image attachments through capped safeFetch before caching bytes", async () => {
+    safeFetch.mockResolvedValueOnce({
+      status: 200,
+      bytes: Buffer.from("image-bytes"),
+      headers: { get: () => "image/png" },
+    });
+    const attachment = { contentType: "image/png", name: "pic.png", url: "https://cdn.test/pic.png" };
+    const message = { attachments: new Collection([["a1", attachment]]) };
+
+    const result = await collectImages(message);
+
+    expect(safeFetch).toHaveBeenCalledWith("https://cdn.test/pic.png", {
+      binary: true,
+      maxBytes: 1_000_000,
+      timeoutMs: 5_000,
+    });
+    expect(result.allImageAttachments).toEqual([attachment]);
+    expect(result.images[0]._cachedBase64).toBe(Buffer.from("image-bytes").toString("base64"));
+    expect(result.images[0]._cachedMime).toBe("image/png");
+  });
+
+  it("leaves the URL image block uncached when safeFetch rejects an oversized body", async () => {
+    safeFetch.mockRejectedValueOnce(new Error("response too large"));
+    const attachment = { contentType: "image/png", name: "pic.png", url: "https://cdn.test/huge.png" };
+    const message = { attachments: new Collection([["a1", attachment]]) };
+
+    const result = await collectImages(message);
+
+    expect(result.images[0]).toEqual({ type: "image", source: { type: "url", url: "https://cdn.test/huge.png" } });
   });
 });
 

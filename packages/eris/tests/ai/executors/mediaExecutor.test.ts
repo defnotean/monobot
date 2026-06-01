@@ -9,14 +9,138 @@ vi.mock("@defnotean/shared/safeFetch", () => ({
   safeFetch: vi.fn(),
 }));
 
+vi.mock("../../../config.js", () => ({
+  default: {
+    klipyApiKey: "test-klipy-key",
+    colors: { gif: 0x2b2d31 },
+  },
+}));
+
 import { safeFetch } from "@defnotean/shared/safeFetch";
 import { execute } from "../../../ai/executors/mediaExecutor.js";
 
 const mockSafeFetch = safeFetch as unknown as ReturnType<typeof vi.fn>;
 
+function makeMemberCache(members: Array<{ id: string; username: string; displayName: string; globalName?: string }>) {
+  return {
+    filter(predicate: (member: any) => boolean) {
+      const matches = members
+        .map((member) => ({
+          id: member.id,
+          displayName: member.displayName,
+          user: {
+            username: member.username,
+            globalName: member.globalName,
+          },
+        }))
+        .filter(predicate);
+
+      return {
+        size: matches.length,
+        first: () => matches[0],
+      };
+    },
+  };
+}
+
 describe("mediaExecutor", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  describe("send_gif", () => {
+    it("allows only intentionally resolved user mentions in GIF captions", async () => {
+      mockSafeFetch.mockResolvedValueOnce({
+        status: 200,
+        text: JSON.stringify({
+          data: {
+            data: [{
+              file: {
+                hd: { gif: { url: "https://cdn.example.test/reaction.gif" } },
+              },
+            }],
+          },
+        }),
+      });
+
+      const message = {
+        content: "send gif",
+        author: { id: "author-1" },
+        guild: {
+          id: "guild-1",
+          members: {
+            cache: makeMemberCache([
+              {
+                id: "111111111111111111",
+                username: "alice",
+                displayName: "Alice",
+                globalName: "Alice",
+              },
+            ]),
+          },
+        },
+        channel: {
+          id: "channel-1",
+          send: vi.fn().mockResolvedValue({}),
+        },
+      };
+
+      const input = {
+        query: "celebrate",
+        caption: "hi @alice <@999999999999999999> <@&888888888888888888> @everyone @here",
+      };
+
+      const result = await execute("send_gif", input, message, {});
+
+      expect(result).toBe("sent gif for celebrate");
+      expect(message.channel.send).toHaveBeenCalledTimes(1);
+
+      const sendArgs = (message.channel.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(sendArgs.content).toContain("<@111111111111111111>");
+      expect(sendArgs.content).toContain("<@999999999999999999>");
+      expect(sendArgs.content).toContain("<@&888888888888888888>");
+      expect(sendArgs.content).toContain("everyone");
+      expect(sendArgs.content).toContain("here");
+      expect(sendArgs.allowedMentions).toEqual({
+        parse: [],
+        users: ["111111111111111111"],
+      });
+    });
+
+    it("disables mention parsing for raw GIF captions with no resolved users", async () => {
+      mockSafeFetch.mockResolvedValueOnce({
+        status: 200,
+        text: JSON.stringify({
+          data: {
+            data: [{
+              file: {
+                hd: { gif: { url: "https://cdn.example.test/reaction.gif" } },
+              },
+            }],
+          },
+        }),
+      });
+
+      const message = {
+        content: "send gif",
+        author: { id: "author-1" },
+        channel: {
+          id: "channel-1",
+          send: vi.fn().mockResolvedValue({}),
+        },
+      };
+
+      const input = {
+        query: "warning",
+        caption: "<@999999999999999999> <@&888888888888888888> @everyone @here",
+      };
+
+      const result = await execute("send_gif", input, message, {});
+
+      expect(result).toBe("sent gif for warning");
+      const sendArgs = (message.channel.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(sendArgs.allowedMentions).toEqual({ parse: [] });
+    });
   });
 
   describe("create_meme", () => {
@@ -87,6 +211,48 @@ describe("mediaExecutor", () => {
 
       // Ensure it never sent the message to the channel
       expect(message.channel.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("caption mention policy", () => {
+    it("restricts non-GIF media captions to resolved users only", async () => {
+      const message = {
+        content: "send file",
+        author: { id: "author-1" },
+        guild: {
+          id: "guild-1",
+          members: {
+            cache: makeMemberCache([
+              {
+                id: "111111111111111111",
+                username: "alice",
+                displayName: "Alice",
+                globalName: "Alice",
+              },
+            ]),
+          },
+        },
+        channel: {
+          id: "channel-1",
+          send: vi.fn().mockResolvedValue({}),
+        },
+      };
+
+      const result = await execute("send_file", {
+        filename: "note.txt",
+        content: "hello",
+        caption: "hi @alice <@999999999999999999> @everyone @here",
+      }, message, {});
+
+      expect(result).toMatch(/posted "note\.txt"/);
+      const sendArgs = (message.channel.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(sendArgs.content).toContain("<@111111111111111111>");
+      expect(sendArgs.content).toContain("<@999999999999999999>");
+      expect(sendArgs.content).toContain("everyone");
+      expect(sendArgs.allowedMentions).toEqual({
+        parse: [],
+        users: ["111111111111111111"],
+      });
     });
   });
 });

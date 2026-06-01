@@ -35,6 +35,10 @@ $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    GRANT EXECUTE ON FUNCTION public.eris_consume_inventory_item(TEXT, TEXT) TO anon, authenticated, service_role;
+    REVOKE EXECUTE ON FUNCTION public.eris_consume_inventory_item(TEXT, TEXT) FROM anon, authenticated;
+  END IF;
+  REVOKE EXECUTE ON FUNCTION public.eris_consume_inventory_item(TEXT, TEXT) FROM PUBLIC;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT EXECUTE ON FUNCTION public.eris_consume_inventory_item(TEXT, TEXT) TO service_role;
   END IF;
 END $$;

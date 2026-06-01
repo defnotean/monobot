@@ -99,13 +99,15 @@ BEGIN
 END;
 $$;
 
--- Grant to the Supabase API roles when they exist (cloud). On a self-hosted
--- local Postgres those roles are absent and PostgREST connects as the DB owner;
--- functions are EXECUTE-able by PUBLIC by default, so no grant is needed there.
--- Conditional so the same migration applies cleanly to both targets.
+-- Reward claim economics are bot-controlled. Revoke default/client execution
+-- and leave this callable only through the backend service role.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    GRANT EXECUTE ON FUNCTION public.eris_claim_reward(TEXT, TEXT, BIGINT, INTEGER, BIGINT, TIMESTAMPTZ) TO anon, authenticated, service_role;
+    REVOKE EXECUTE ON FUNCTION public.eris_claim_reward(TEXT, TEXT, BIGINT, INTEGER, BIGINT, TIMESTAMPTZ) FROM anon, authenticated;
+  END IF;
+  REVOKE EXECUTE ON FUNCTION public.eris_claim_reward(TEXT, TEXT, BIGINT, INTEGER, BIGINT, TIMESTAMPTZ) FROM PUBLIC;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT EXECUTE ON FUNCTION public.eris_claim_reward(TEXT, TEXT, BIGINT, INTEGER, BIGINT, TIMESTAMPTZ) TO service_role;
   END IF;
 END $$;

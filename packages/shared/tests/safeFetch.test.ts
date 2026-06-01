@@ -141,6 +141,17 @@ describe("safeFetch — request issuance + redirect re-validation + size cap", (
     expect(init.redirect).toBe("manual");
   });
 
+  it("pins fetch connections to the validated address with an Undici dispatcher", async () => {
+    const spy = vi.fn(async () => new Response("ok", { status: 200 }));
+    globalThis.fetch = spy as any;
+
+    await safeFetch("https://1.1.1.1/pinned");
+
+    const init = spy.mock.calls[0][1] as RequestInit & { dispatcher?: unknown };
+    expect(init.dispatcher).toBeDefined();
+    expect(typeof (init.dispatcher as { dispatch?: unknown }).dispatch).toBe("function");
+  });
+
   it("re-validates a 3xx Location and refuses a redirect to a private IP", async () => {
     const spy = vi.fn(async () =>
       new Response(null, { status: 302, headers: new Headers({ location: "http://10.0.0.5/admin" }) }),

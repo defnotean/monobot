@@ -41,10 +41,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "discord.js": "14.26.3"
+    "discord.js": "14.26.3",
+    "undici": "6.24.1"
   },
   "devDependencies": {
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.8"
   },
   "author": "defnotean",
   "license": "ISC"

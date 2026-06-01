@@ -57,3 +57,14 @@ begin
   return next;
 end;
 $$;
+
+REVOKE EXECUTE ON FUNCTION public.eris_add_bank_balance(text, integer, integer) FROM PUBLIC;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    REVOKE EXECUTE ON FUNCTION public.eris_add_bank_balance(text, integer, integer) FROM anon, authenticated;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT EXECUTE ON FUNCTION public.eris_add_bank_balance(text, integer, integer) TO service_role;
+  END IF;
+END $$;

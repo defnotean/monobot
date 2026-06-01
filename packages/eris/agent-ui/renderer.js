@@ -95,12 +95,53 @@ let allRepos = [];
 let termHistory = [], termIdx = -1;
 
 // ─── MONACO ────────────────────────────────────────────────────────────────────
-// Only bootstrap Monaco in a real browser. When this file is loaded under a
-// CommonJS test runner (to unit-test the pure guard helpers above) there is no
-// DOM and no AMD `require`, so skip the editor init entirely.
-if (typeof document !== 'undefined' && typeof require !== 'undefined' && require.config) {
-require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } });
-require(['vs/editor/editor.main'], () => {
+function createPlainTextEditor() {
+    const wrap = document.getElementById('editor-wrap');
+    if (!wrap) return;
+    const textarea = document.createElement('textarea');
+    textarea.className = 'plain-editor';
+    textarea.spellcheck = false;
+    textarea.style.cssText = [
+        'display:none',
+        'width:100%',
+        'height:100%',
+        'box-sizing:border-box',
+        'resize:none',
+        'border:0',
+        'outline:0',
+        'padding:12px',
+        'background:#0d0e10',
+        'color:#e2e3ec',
+        'font:13px/22px "JetBrains Mono", monospace'
+    ].join(';');
+    let changeHandler = null;
+    textarea.addEventListener('input', () => changeHandler && changeHandler());
+    textarea.addEventListener('keydown', (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+            event.preventDefault();
+            saveFile();
+        }
+    });
+    wrap.appendChild(textarea);
+    editor = {
+        getValue: () => textarea.value,
+        setValue: (value) => { textarea.value = value || ''; },
+        getDomNode: () => textarea,
+        layout: () => {},
+        addCommand: () => {},
+        onDidChangeModelContent: (handler) => { changeHandler = handler; },
+    };
+    monacoReady = true;
+    const noEditor = document.getElementById('no-editor');
+    if (noEditor) noEditor.style.display = 'flex';
+    editor.onDidChangeModelContent(() => {
+        const t = openTabs.find(x => x.path === activeTab);
+        if (t && !t.dirty) { t.dirty = true; renderTabs(); }
+    });
+}
+
+function bootstrapLocalMonaco() {
+if (typeof monaco === 'undefined' || !monaco.editor) return false;
     monaco.editor.defineTheme('irene', {
         base: 'vs-dark', inherit: true,
         rules: [
@@ -133,7 +174,13 @@ require(['vs/editor/editor.main'], () => {
         const t = openTabs.find(x => x.path === activeTab);
         if (t && !t.dirty) { t.dirty = true; renderTabs(); }
     });
-});
+return true;
+}
+
+// Use only renderer-local code. If a local Monaco bundle has been provided by
+// the app shell, use it; otherwise fall back to a plaintext editor.
+if (typeof document !== 'undefined') {
+    if (!bootstrapLocalMonaco()) createPlainTextEditor();
 }
 
 // Exported for unit tests when loaded under CommonJS (no DOM). In the browser
@@ -414,7 +461,12 @@ the code content inside
             if (info) {
                 const outEl = document.createElement('div');
                 outEl.className = 'step-output';
-                outEl.innerHTML = stepLogs.join('<br>') + (output.length > 300 ? '<br><span style="opacity:0.5">...output truncated</span' : '<br><span style="opacity:0.5">' + esc(output) + '</span>');
+                appendTextLines(outEl, stepLogs.join('\n'));
+                outEl.appendChild(document.createElement('br'));
+                const outputEl = document.createElement('span');
+                outputEl.style.opacity = '0.5';
+                outputEl.textContent = output.length > 300 ? '...output truncated' : output;
+                outEl.appendChild(outputEl);
                 info.appendChild(outEl);
             }
         }
@@ -508,6 +560,13 @@ function append(html) {
     scrollChat();
     return wrap;
 }
+function appendTextLines(parent, text) {
+    const lines = String(text || '').split(/\r?\n/);
+    lines.forEach((line, i) => {
+        if (i) parent.appendChild(document.createElement('br'));
+        parent.appendChild(document.createTextNode(line));
+    });
+}
 function scrollChat() { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; }
 function esc(s) {
     return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -582,20 +641,57 @@ async function loadRepos() {
 
 function renderRepos(repos) {
     const list = document.getElementById('repo-list');
-    list.innerHTML = repos.map(r => `
-        <div class="repo-item" onclick="cloneRepo('${esc(r.url)}','${esc(r.name)}')">
-          <div class="repo-name">
-            ${esc(r.name)} ${r.private ? '<span class="lock">🔒</span>' : ''}
-            ${r.fork ? '<span class="lock" title="Fork">🍴</span>' : ''}
-          </div>
-          ${r.description ? `<div class="repo-desc">${esc(r.description)}</div>` : ''}
-          <div class="repo-meta">
-            ${r.language ? `<span class="lang-dot lang-${r.language.toLowerCase()}" style="background:${langColor(r.language)}"></span><span>${r.language}</span>` : ''}
-            ${r.stars ? `<span>★ ${r.stars}</span>` : ''}
-          </div>
-        </div>`).join('');
-}
+    list.innerHTML = '';
+    repos.forEach(r => {
+        const item = document.createElement('div');
+        item.className = 'repo-item';
+        item.addEventListener('click', () => cloneRepo(r.url, r.name));
 
+        const name = document.createElement('div');
+        name.className = 'repo-name';
+        name.appendChild(document.createTextNode(r.name || ''));
+        if (r.private) {
+            const lock = document.createElement('span');
+            lock.className = 'lock';
+            lock.textContent = ' private';
+            name.appendChild(lock);
+        }
+        if (r.fork) {
+            const fork = document.createElement('span');
+            fork.className = 'lock';
+            fork.title = 'Fork';
+            fork.textContent = ' fork';
+            name.appendChild(fork);
+        }
+        item.appendChild(name);
+
+        if (r.description) {
+            const desc = document.createElement('div');
+            desc.className = 'repo-desc';
+            desc.textContent = r.description;
+            item.appendChild(desc);
+        }
+
+        const meta = document.createElement('div');
+        meta.className = 'repo-meta';
+        if (r.language) {
+            const dot = document.createElement('span');
+            dot.className = `lang-dot lang-${String(r.language).toLowerCase().replace(/[^a-z0-9_-]/g, '')}`;
+            dot.style.background = langColor(r.language);
+            const lang = document.createElement('span');
+            lang.textContent = r.language;
+            meta.appendChild(dot);
+            meta.appendChild(lang);
+        }
+        if (r.stars) {
+            const stars = document.createElement('span');
+            stars.textContent = `star ${r.stars}`;
+            meta.appendChild(stars);
+        }
+        item.appendChild(meta);
+        list.appendChild(item);
+    });
+}
 function filterRepos(q) {
     const filtered = q ? allRepos.filter(r => r.name.toLowerCase().includes(q.toLowerCase()) || r.description.toLowerCase().includes(q.toLowerCase())) : allRepos;
     renderRepos(filtered);
@@ -714,10 +810,14 @@ function activateTab(p) {
     editor.getDomNode().style.display = '';
     const ext = p.split('.').pop().toLowerCase();
     const langMap = { js:'javascript', ts:'typescript', jsx:'javascript', tsx:'typescript', py:'python', html:'html', css:'css', json:'json', md:'markdown', sh:'shell', ps1:'powershell', yml:'yaml', yaml:'yaml', rs:'rust', go:'go' };
-    const model = monaco.editor.createModel(tab.content, langMap[ext]||'plaintext', monaco.Uri.file(p));
-    const old = editor.getModel();
-    editor.setModel(model);
-    if (old) try { old.dispose(); } catch {}
+    if (typeof monaco !== 'undefined' && monaco.editor && editor.setModel) {
+        const model = monaco.editor.createModel(tab.content, langMap[ext]||'plaintext', monaco.Uri.file(p));
+        const old = editor.getModel();
+        editor.setModel(model);
+        if (old) try { old.dispose(); } catch {}
+    } else {
+        editor.setValue(tab.content);
+    }
     editor.layout();
     renderTabs();
 }

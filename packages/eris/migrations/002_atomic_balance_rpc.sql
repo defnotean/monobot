@@ -85,6 +85,15 @@ BEGIN
 END;
 $$;
 
--- Allow the anon / authenticated / service_role to call it. Adjust to taste —
--- the bot connects with the service_role key.
-GRANT EXECUTE ON FUNCTION public.eris_add_balance(TEXT, BIGINT, TEXT, TEXT) TO anon, authenticated, service_role;
+-- The bot connects with the service_role key; client API roles must not be able
+-- to mint or burn balances directly.
+REVOKE EXECUTE ON FUNCTION public.eris_add_balance(TEXT, BIGINT, TEXT, TEXT) FROM PUBLIC;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    REVOKE EXECUTE ON FUNCTION public.eris_add_balance(TEXT, BIGINT, TEXT, TEXT) FROM anon, authenticated;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT EXECUTE ON FUNCTION public.eris_add_balance(TEXT, BIGINT, TEXT, TEXT) TO service_role;
+  END IF;
+END $$;

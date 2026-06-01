@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { createRequire } from "module";
+import { readFileSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
 // agent-ui/renderer.js is a browser script. Its DOM/Monaco/agent bootstrap is
 // guarded behind `typeof document/agent !== 'undefined'` so the file loads
@@ -7,6 +10,8 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 // @ts-expect-error - importing CJS JS module without types
 const { looksDestructive, resolveInFolder } = require("../../agent-ui/renderer.js");
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const agentUiDir = join(__dirname, "..", "..", "agent-ui");
 
 describe("renderer looksDestructive (plan-step gate)", () => {
   const destructive = [
@@ -72,5 +77,34 @@ describe("renderer resolveInFolder (writeFile containment)", () => {
 
   it("returns null when no folder is selected", () => {
     expect(resolveInFolder(null, "a.js")).toBeNull();
+  });
+});
+
+describe("agent-ui renderer supply-chain and log rendering invariants", () => {
+  it("does not load Monaco or its AMD loader from a remote CDN", () => {
+    const indexHtml = readFileSync(join(agentUiDir, "index.html"), "utf8");
+    const rendererJs = readFileSync(join(agentUiDir, "renderer.js"), "utf8");
+
+    expect(indexHtml).not.toMatch(/<script[^>]+https?:\/\/[^>]+monaco/i);
+    expect(indexHtml).not.toMatch(/loader\.min\.js/i);
+    expect(rendererJs).not.toMatch(/cdnjs\.cloudflare\.com\/ajax\/libs\/monaco-editor/i);
+    expect(rendererJs).not.toMatch(/require\.config\(\{\s*paths:\s*\{\s*vs:/);
+  });
+
+  it("renders plan step logs with text nodes instead of raw HTML", () => {
+    const rendererJs = readFileSync(join(agentUiDir, "renderer.js"), "utf8");
+
+    expect(rendererJs).toContain("appendTextLines(outEl, stepLogs.join('\\n'))");
+    expect(rendererJs).toContain("outputEl.textContent");
+    expect(rendererJs).not.toContain("outEl.innerHTML = stepLogs.join('<br>')");
+  });
+
+  it("renders remote GitHub repo data without inline HTML handlers", () => {
+    const rendererJs = readFileSync(join(agentUiDir, "renderer.js"), "utf8");
+
+    expect(rendererJs).toContain("item.addEventListener('click', () => cloneRepo(r.url, r.name))");
+    expect(rendererJs).toContain("desc.textContent = r.description");
+    expect(rendererJs).not.toContain("onclick=\"cloneRepo");
+    expect(rendererJs).not.toContain("list.innerHTML = repos.map");
   });
 });

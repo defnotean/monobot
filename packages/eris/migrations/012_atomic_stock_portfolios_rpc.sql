@@ -39,6 +39,9 @@ SET search_path = public
 AS $$
 DECLARE
   v_symbol TEXT := upper(trim(coalesce(p_symbol, '')));
+  v_market_state JSONB;
+  v_price NUMERIC;
+  v_max_position_value NUMERIC := 1000000000000;
   v_current_shares BIGINT := 0;
   v_new_shares BIGINT;
   v_cost BIGINT;
@@ -50,6 +53,19 @@ BEGIN
   END IF;
   IF v_symbol = '' OR p_shares IS NULL OR p_shares <= 0 OR p_price IS NULL OR p_price <= 0 THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_trade');
+  END IF;
+
+  SELECT COALESCE(b.data, '{}'::jsonb) INTO v_market_state
+  FROM public.bot_data b
+  WHERE b.id = 'eris_stocks';
+
+  v_price := CASE
+    WHEN jsonb_typeof(v_market_state #> ARRAY['tickers', v_symbol, 'price']) = 'number'
+      THEN (v_market_state #>> ARRAY['tickers', v_symbol, 'price'])::numeric
+    ELSE NULL
+  END;
+  IF v_price IS NULL OR v_price <= 0 THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'unknown_ticker');
   END IF;
 
   INSERT INTO public.eris_economy (user_id, balance, daily_streak, last_daily, total_earned, total_lost, total_gambled, total_stolen, total_stolen_from, last_rob_attempt, version)
@@ -70,11 +86,11 @@ BEGIN
   END IF;
 
   v_new_shares := v_current_shares + p_shares;
-  IF (v_new_shares::numeric * p_price) > p_max_position_value THEN
-    RETURN jsonb_build_object('ok', false, 'reason', 'position_too_large', 'maxValue', p_max_position_value);
+  IF (v_new_shares::numeric * v_price) > v_max_position_value THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'position_too_large', 'maxValue', v_max_position_value);
   END IF;
 
-  v_cost := ceil(p_price * p_shares)::bigint;
+  v_cost := ceil(v_price * p_shares)::bigint;
   IF v_cost <= 0 THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'price_calc_invalid');
   END IF;
@@ -99,7 +115,7 @@ BEGIN
     'ok', true,
     'symbol', v_symbol,
     'shares', p_shares,
-    'pricePerShare', p_price,
+    'pricePerShare', v_price,
     'totalCost', v_cost,
     'newBalance', v_new_balance,
     'newShares', v_new_shares
@@ -120,6 +136,8 @@ SET search_path = public
 AS $$
 DECLARE
   v_symbol TEXT := upper(trim(coalesce(p_symbol, '')));
+  v_market_state JSONB;
+  v_price NUMERIC;
   v_current_shares BIGINT := 0;
   v_new_shares BIGINT;
   v_proceeds BIGINT;
@@ -130,6 +148,19 @@ BEGIN
   END IF;
   IF v_symbol = '' OR p_shares IS NULL OR p_shares <= 0 OR p_price IS NULL OR p_price <= 0 THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_trade');
+  END IF;
+
+  SELECT COALESCE(b.data, '{}'::jsonb) INTO v_market_state
+  FROM public.bot_data b
+  WHERE b.id = 'eris_stocks';
+
+  v_price := CASE
+    WHEN jsonb_typeof(v_market_state #> ARRAY['tickers', v_symbol, 'price']) = 'number'
+      THEN (v_market_state #>> ARRAY['tickers', v_symbol, 'price'])::numeric
+    ELSE NULL
+  END;
+  IF v_price IS NULL OR v_price <= 0 THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'unknown_ticker');
   END IF;
 
   INSERT INTO public.eris_economy (user_id, balance, daily_streak, last_daily, total_earned, total_lost, total_gambled, total_stolen, total_stolen_from, last_rob_attempt, version)
@@ -146,7 +177,7 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'reason', 'insufficient_shares', 'held', COALESCE(v_current_shares, 0), 'requested', p_shares);
   END IF;
 
-  v_proceeds := floor(p_price * p_shares)::bigint;
+  v_proceeds := floor(v_price * p_shares)::bigint;
   IF v_proceeds <= 0 THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'price_calc_invalid');
   END IF;
@@ -173,7 +204,7 @@ BEGIN
     'ok', true,
     'symbol', v_symbol,
     'shares', p_shares,
-    'pricePerShare', p_price,
+    'pricePerShare', v_price,
     'totalProceeds', v_proceeds,
     'newBalance', v_new_balance,
     'remainingShares', v_new_shares
@@ -184,8 +215,16 @@ $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    GRANT SELECT, INSERT, UPDATE, DELETE ON public.eris_stock_portfolios TO anon, authenticated, service_role;
-    GRANT EXECUTE ON FUNCTION public.eris_buy_stock_shares(TEXT, TEXT, BIGINT, NUMERIC, NUMERIC) TO anon, authenticated, service_role;
-    GRANT EXECUTE ON FUNCTION public.eris_sell_stock_shares(TEXT, TEXT, BIGINT, NUMERIC) TO anon, authenticated, service_role;
+    REVOKE SELECT, INSERT, UPDATE, DELETE ON public.eris_stock_portfolios FROM anon, authenticated;
+    REVOKE EXECUTE ON FUNCTION public.eris_buy_stock_shares(TEXT, TEXT, BIGINT, NUMERIC, NUMERIC) FROM anon, authenticated;
+    REVOKE EXECUTE ON FUNCTION public.eris_sell_stock_shares(TEXT, TEXT, BIGINT, NUMERIC) FROM anon, authenticated;
+  END IF;
+  REVOKE SELECT, INSERT, UPDATE, DELETE ON public.eris_stock_portfolios FROM PUBLIC;
+  REVOKE EXECUTE ON FUNCTION public.eris_buy_stock_shares(TEXT, TEXT, BIGINT, NUMERIC, NUMERIC) FROM PUBLIC;
+  REVOKE EXECUTE ON FUNCTION public.eris_sell_stock_shares(TEXT, TEXT, BIGINT, NUMERIC) FROM PUBLIC;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON public.eris_stock_portfolios TO service_role;
+    GRANT EXECUTE ON FUNCTION public.eris_buy_stock_shares(TEXT, TEXT, BIGINT, NUMERIC, NUMERIC) TO service_role;
+    GRANT EXECUTE ON FUNCTION public.eris_sell_stock_shares(TEXT, TEXT, BIGINT, NUMERIC) TO service_role;
   END IF;
 END $$;
