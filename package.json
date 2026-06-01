@@ -23,7 +23,7 @@
     "new:executor": "node scripts/scaffold-executor.js"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.12.0"
   },
   "author": "defnotean",
   "license": "ISC",

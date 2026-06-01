@@ -55,11 +55,13 @@ Heap pressure short of OOM is observable on demand via `/api/health` (`memory: <
 
 ## 3. Health-check endpoints
 
-There is **no `/healthz`**. The endpoints that exist:
+Primary endpoints:
 
 | Endpoint | Bot | Auth | Returns |
 |---|---|---|---|
 | `GET /` | Eris | none | text "Eris is awake." |
+| `GET /healthz` | both | none | process liveness; returns 200 while the HTTP process is alive |
+| `GET /readyz` | both | none | Discord gateway readiness; returns 503 while reconnecting |
 | `GET /health` | Irene | none | `{ok, user, bot}` — bot tag once gateway is up |
 | `GET /api/health` | both | none | `{status, uptime, memory, db_connected, bot, guilds}` |
 | `GET /presence` (and `/presence/<ownerId>`) | Irene | none, IP rate-limited 1/sec | live Discord presence cache |
@@ -68,11 +70,11 @@ There is **no `/healthz`**. The endpoints that exist:
 Sample curl for a self-host liveness probe:
 
 ```bash
-curl -fsS http://localhost:3000/api/health    # Eris
-curl -fsS http://localhost:3001/api/health    # Irene  (default PORT)
+curl -fsS http://localhost:3000/healthz    # Eris liveness
+curl -fsS http://localhost:3001/healthz    # Irene liveness (default PORT)
 ```
 
-Note that `/health` and `/api/health` only confirm the **HTTP server** is alive — they don't verify the Discord gateway is connected. The `bot` field in the JSON falls back to `"connecting..."` if `client.user` is unset, so a probe that requires `bot != "connecting..."` is a closer approximation to "gateway up."
+Use `/healthz` for public uptime monitors. Use `/readyz` for dashboards or restart automation that specifically need the Discord gateway to be connected. The `bot` field in the JSON falls back to `"connecting..."` if `client.user` is unset.
 
 Irene's `index.js` also runs a 10-minute self-ping to `${RENDER_EXTERNAL_URL}/health` to keep Render's free tier from spinning down. Lines logged as `[KeepAlive] Pinged self`.
 
@@ -184,5 +186,5 @@ pm2 start "tail -F ~/.pm2/logs/eris-out.log ~/.pm2/logs/irene-out.log | \
 
 **Health-probe alert (any uptime monitor — UptimeRobot, BetterStack, Healthchecks.io):**
 
-- HTTP GET `/api/health` every 60s, alert if non-200 for ≥3 checks.
-- Optionally also assert `body.bot != "connecting..."` to catch a stuck Discord gateway (HTTP server up, but bot disconnected).
+- HTTP GET `/healthz` every 60s, alert if non-200 for ≥3 checks.
+- For Discord gateway alerts, separately check `/readyz` and require a longer failure window so normal reconnects do not count as uptime downtime.

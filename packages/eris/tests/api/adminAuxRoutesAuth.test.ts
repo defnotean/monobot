@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
 // @ts-expect-error - importing JS module without types
-import { handleAdminAuxRoute } from "../../api/adminAuxRoutes.js";
+import { handleAdminAuxRoute, remapIreneProxyPath } from "../../api/adminAuxRoutes.js";
 
 type MockReq = {
   url: string;
@@ -51,6 +51,12 @@ beforeEach(() => {
 });
 
 describe("Eris admin auxiliary routes", () => {
+  it("maps Irene readiness probes to top-level Irene probe paths", () => {
+    expect(remapIreneProxyPath("/api/irene/healthz")).toBe("/healthz");
+    expect(remapIreneProxyPath("/api/irene/readyz?bot=irene")).toBe("/readyz?bot=irene");
+    expect(remapIreneProxyPath("/api/irene/stats")).toBe("/api/stats");
+  });
+
   it("rejects unauthenticated remote /api/irene proxy requests before proxying", async () => {
     const res = makeRes();
 

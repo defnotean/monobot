@@ -63,11 +63,11 @@ describe("CI workflow", () => {
     expect(existsSync(join(ROOT, WORKFLOW))).toBe(true);
   });
 
-  it("references a Node 20/22/24 matrix and the expected steps", () => {
+  it("references a supported Node matrix and the expected steps", () => {
     const wf = readText(WORKFLOW);
-    // Node 18 is intentionally excluded — the fetch path (undici) needs the
-    // `File` global, which only exists from Node 20+. Production runs Node 24.
-    expect(wf).toContain("node-version: [20, 22, 24]");
+    // Node 20 is intentionally excluded because current Electron and Discord
+    // voice packages require Node >=22.12. Production runs Node 24.
+    expect(wf).toContain("node-version: [22, 24]");
     expect(wf).toContain("npm ci");
     expect(wf).toContain("npm run lint:version-sync");
     expect(wf).toContain("npm test --workspaces --if-present");

@@ -12,9 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Node 18 dropped: the fetch path (undici) references the `File` global,
-        # which only exists from Node 20+. Production runs Node 24.
-        node-version: [20, 22, 24]
+        # Production runs Node 24. Node 20 was dropped because current Electron
+        # and Discord voice packages require Node >=22.12.
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

@@ -268,7 +268,7 @@ document.addEventListener('keydown', (e) => {
 // Status badges
 async function refreshStatus() {
   for (const bot of BOTS) {
-    const url = bot === 'eris' ? '/healthz' : '/api/irene/health';
+    const url = bot === 'eris' ? '/readyz' : '/api/irene/readyz';
     try {
       const r = await authFetch(url, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
