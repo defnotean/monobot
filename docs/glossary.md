@@ -123,7 +123,7 @@ Eris's runtime tool-set bundles, cached: `twin`, `chat`, `chatOwner`, `full`, `f
 A fast-model fire-and-forget acknowledgement sent while the worker model is still thinking. Eris's `dual.js` exposes a `quickReply()` function. Saves the user from staring at silence.
 
 ### REQUIRE_PERSISTENCE
-Env-var fail-fast switch. When `REQUIRE_PERSISTENCE=true` the bot refuses to start if Supabase credentials are missing or the initial connect fails — so prod can't silently boot into in-memory-only mode and discard writes. Off by default for self-hosters running ephemeral.
+Env-var fail-fast switch. When `REQUIRE_PERSISTENCE=1` the bot refuses to start if Supabase credentials are missing or the initial connect fails — so prod can't silently boot into in-memory-only mode and discard writes. Off by default for self-hosters running ephemeral.
 
 ### RPC fallback
 The JS economy path tries the [atomic balance RPC](#atomic-balance-rpc) first; if Postgres reports the function is missing (older migration state, self-hosted instance without `002_atomic_balance_rpc.sql` applied), it falls back to a [version-CAS](#version-cas) loop. Two paths, same correctness guarantee.

@@ -70,10 +70,10 @@ If you only read four files in the whole codebase, read these:
 
 | Bot | File | Approx. size | What it owns |
 |---|---|---|---|
-| Eris | [packages/eris/events/messageCreate.js](../packages/eris/events/messageCreate.js) | ~1,328 lines | The whole AI pipeline |
-| Eris | [packages/eris/ai/executor.js](../packages/eris/ai/executor.js) + [ai/executors/*](../packages/eris/ai/executors/) | ~1,500 lines | All tool dispatch |
-| Irene | [packages/irene/events/messageCreate.js](../packages/irene/events/messageCreate.js) | ~1,830 lines | Same role; auto-mod runs first |
-| Irene | [packages/irene/ai/executor.js](../packages/irene/ai/executor.js) + [ai/executors/*](../packages/irene/ai/executors/) | ~1,663 lines | All tool dispatch |
+| Eris | [packages/eris/events/messageCreate.js](../packages/eris/events/messageCreate.js) | ~190 lines | Message ingress; pipeline stages live in `events/messageCreate/*` |
+| Eris | [packages/eris/ai/executor.js](../packages/eris/ai/executor.js) + [ai/executors/*](../packages/eris/ai/executors/) | ~4,400 lines combined | All tool dispatch |
+| Irene | [packages/irene/events/messageCreate.js](../packages/irene/events/messageCreate.js) | ~750 lines | Same role; auto-mod runs first |
+| Irene | [packages/irene/ai/executor.js](../packages/irene/ai/executor.js) + [ai/executors/*](../packages/irene/ai/executors/) | ~7,800 lines combined | All tool dispatch |
 
 Big files — but they're sequential top-to-bottom. Skim by section comments.
 
@@ -120,7 +120,7 @@ Drop a file in [packages/eris/events/](../packages/eris/events/) (or `irene/even
 - **Don't fix drift in an unrelated PR.** Some files exist in both bots and have intentionally diverged (`personality.js`, `longmemory.js`, `firewall.js`, `bumpReminder*.js`). Check both bot implementations before touching any of them.
 - **Tests don't connect to Discord or Supabase.** Safe to run anywhere.
 - **There is no staging.** Production tests happen in your dev guild — see [dev-guild-workflow.md](./dev-guild-workflow.md).
-- **Pin dep versions exact across workspaces.** A 2026-04-24 incident took prod down because `discord.js@^14.14.1` and `^14.26.2` resolved to the same hoisted version with subtly broken APIs. `npm run lint:version-sync` enforces this.
+- **Pin shared third-party dep versions exact across workspaces.** A 2026-04-24 incident took prod down because `discord.js@^14.14.1` and `^14.26.2` resolved to the same hoisted version with subtly broken APIs. `npm run lint:version-sync` enforces identical non-local dependency ranges across workspaces.
 
 ## What to do after you finish reading
 

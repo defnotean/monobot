@@ -15,15 +15,16 @@ P0 + P1 hardening pass across the monorepo. High-level summary:
 
 ### Added
 - CI workflow (`.github/workflows/test.yml`): runs the version-sync lint,
-  the full test suite, and the `tsc --noEmit` typecheck across a Node 18/20/22
-  matrix on push and pull request — the target the README CI badge points at.
+  `npm audit --audit-level=moderate`, the full test suite, and the
+  `tsc --noEmit` typecheck across a Node 22/24 matrix on push and pull
+  request — the target the README CI badge points at.
 
 ### Changed
-- Dev loop now uses `node --watch index.js` (Node 18+ native watch) for both
+- Dev loop now uses `node --watch index.js` (Node 22.12.0+ in this repo) for both
   bots instead of the broken `tsx --watch index.ts` (only `index.js` ships),
   so `npm run dev:eris` / `dev:irene` work on a clean checkout.
-- Render `buildCommand` switched from `npm install` to `npm ci` in all three
-  blueprints so deploys honour the committed lockfile.
+- Render `buildCommand` switched from `npm install` to `npm ci` for both
+  services so deploys honour the committed lockfile.
 
 ### Fixed
 - Documentation honesty: corrected the `ARCHITECTURE.md` tool-surface claim
@@ -185,6 +186,5 @@ the repository.
 - All Discord IDs, webhook URLs, and provider keys are now env-only; nothing
   identifying the original deployment ships in the repository.
 
-[Unreleased]: https://github.com/defnotean/MonoBot/compare/v3.2.0...HEAD
-[3.2.0]: https://github.com/defnotean/MonoBot/compare/v3.1.0...v3.2.0
-[3.1.0]: https://github.com/defnotean/MonoBot/releases/tag/v3.1.0
+[Unreleased]: https://github.com/defnotean/monobot/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/defnotean/monobot/releases/tag/v3.2.0

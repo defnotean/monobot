@@ -20,9 +20,9 @@ Single Node `http` server, started from `startPresenceAPI(client)` (`packages/ir
 | Path | Method | Auth | Purpose |
 | --- | --- | --- | --- |
 | `/presence/:userId`, `/presence` | GET | none, IP rate-limited 1/s (around line 110) | Cached Discord presence (status, activities, Spotify) — Lanyard replacement |
-| `/health` | GET | none | `{ ok, user, bot }` — Render healthcheck and self-ping target (around line 142) |
+| `/health` | GET | none | `{ ok, user, bot }` — public self-ping / liveness target (around line 142) |
 | `/tts/:id` | GET | none, exempt from rate limit (Lavalink HEAD+GET) | Serves cached TTS audio buffer (around line 145) |
-| `/api/health` | GET | none | Uptime / memory / guild count (around line 212) |
+| `/api/health` | GET | none | `{ ok: true }` — Render healthcheck target (around line 212). Use authenticated `/api/stats` for uptime, memory, and guild count. |
 | `/api/stats`, `/api/mood`, `/api/relationships`, `/api/conversations`, `/api/conversations/:id`, `/api/memories`, `/api/personality`, `/api/monologue`, `/api/humanity`, `/api/episodes`, `/api/reminders` | GET (some PUT/DELETE) | `Bearer DASHBOARD_API_KEY`; localhost bypass only when `DASHBOARD_ALLOW_LOCALHOST_BYPASS=1` | Dashboard read/write surface for the Base44 twin dashboard |
 | `/api/twin/state` | GET | `Bearer TWIN_API_SECRET` (around line 441) | Side-effect-free snapshot: `{ bot, mood_score, energy, preoccupation, at }` |
 | `/api/twin/command` | POST | **HMAC** via `verifyTwinRequest` (around line 489) | Eris → Irene moderation relay |
@@ -43,7 +43,7 @@ After verifying HMAC, Irene also re-checks that `requester_id` is owner or in `g
 
 Body is capped at 10 KB and the connection is destroyed if exceeded (around line 477).
 
-Eris exposes the inverse direction on her own dashboard server: `POST /api/twin/punish` (HMAC-signed, `packages/eris/api/dashboard.js:321`) and `GET /api/twin/state` (Bearer, around line 393). She also exposes a few unsigned `/api/twin/{remind,note,fact,mood,status}` endpoints that Irene's `ask_eris` tool calls (see §4).
+Eris exposes the inverse direction on her own dashboard server: HMAC-signed POST endpoints at `/api/twin/punish`, `/api/twin/remind`, `/api/twin/note`, and `/api/twin/fact`; Bearer-gated read endpoints at `/api/twin/mood`, `/api/twin/status`, and `/api/twin/state`. Irene's `ask_eris` tool calls those routes through `callEris()` (see §4).
 
 ## 3. Auth Model [STABLE]
 
@@ -69,9 +69,9 @@ Verification (`twinSign.js:61`):
 4. Recompute `HMAC_SHA256(secret, ts + '.' + body)` and compare via `crypto.timingSafeEqual`.
 5. Replay cache (in-memory `Map`, max 2048 entries, pruned opportunistically — line 35–51) rejects an already-seen signature inside the skew window.
 
-**Bearer (read-only endpoints, `/api/twin/state`, dashboard reads)**
+**Bearer (read-only twin endpoints, `/api/twin/state`, `/api/twin/mood`, `/api/twin/status`)**
 
-`Authorization: Bearer <TWIN_API_SECRET>`. No timestamp, no replay protection — fine because these endpoints have no side effects (`packages/irene/presence.js:441`, comment explicitly notes this).
+`Authorization: Bearer <TWIN_API_SECRET>`. No timestamp, no replay protection — fine because these endpoints have no side effects (`packages/irene/presence.js:441`, comment explicitly notes this). Non-health dashboard `/api/*` routes use `Authorization: Bearer <DASHBOARD_API_KEY>` instead.
 
 **Worked example** — Eris signing `{"foo":"bar"}` with secret `s3cret`:
 
@@ -97,7 +97,7 @@ The signer/verifier must agree byte-for-byte on the body, so callers serialize J
 1. LLM emits an `ask_irene` tool call with `{ command, ...args }`.
 2. Eris does her *own* role-based check first (admin/mod/staff command lists, around line 30–37). Sassy denial returned to user without ever hitting Irene if perms missing.
 3. Builds JSON payload `{ requester_id, guild_id, channel_id, command, args }` (around line 99).
-4. `signTwinRequest(payload, TWIN_SECRET)` → headers (line 106).
+4. `signTwinRequest(payload, TWIN_API_SECRET)` → headers (line 106).
 5. `fetch(IRENE_API + "/api/twin/command", { method: "POST", headers, body: payload })` (line 108).
 6. Returns either `told irene to {command} and she did it: {result}` or `irene refused: {error}` to the model.
 
@@ -111,11 +111,11 @@ Fire-and-forget, called from the moderation executor whenever Irene bans/kicks. 
 
 **Irene → Eris (`ask_eris` LLM tool)** — `packages/irene/ai/executors/advancedExecutor.js` (`callEris` helper + `ask_eris` block)
 
-Sub-actions `remind | note | fact | mood | status`. Routed through the shared `callEris(path, opts)` helper, which reads the base URL from `config.twinApiUrl` (env: `ERIS_API_URL`) and signs every `POST` body via `signTwinRequest` against `TWIN_API_SECRET` — same protocol as `twinPunish`. `GET` sub-actions (`/mood`, `/status`) are unsigned because Eris's twin gate is POST-only. A 5 s `AbortSignal.timeout` bounds each call.
+Sub-actions `remind | note | fact | mood | status`. Routed through the shared `callEris(path, opts)` helper, which reads the base URL from `config.twinApiUrl` (env: `ERIS_API_URL`) and signs every `POST` body via `signTwinRequest` against `TWIN_API_SECRET` — same protocol as `twinPunish`. `GET` sub-actions (`/mood`, `/status`) use `Authorization: Bearer <TWIN_API_SECRET>`. A 5 s `AbortSignal.timeout` bounds each call.
 
 ## 5. Failure Modes
 
-- **Network timeout** [STABLE] — `ask_irene` uses default `fetch` timeout (no explicit limit). `twinState` uses 4 s `AbortController` and caches the error. `twinPunish` uses 5 s `AbortSignal.timeout`.
+- **Network timeout** [STABLE] — `ask_irene` uses a 5 s `AbortSignal.timeout`; `twinState` uses 4 s and caches the error; `twinPunish` and `ask_eris` use 5 s.
 - **Signature mismatch** [STABLE] — Irene returns `403 { success: false, error: "twin auth failed: <reason>" }` (presence.js:492). Eris surfaces this verbatim to the LLM as `irene refused: ...`.
 - **Replay** [STABLE] — same signature seen twice → `403 "replay detected"` (twinSign.js:93).
 - **Clock skew** [STABLE] — > 60 s in either direction → `403 "timestamp outside acceptable skew"`.
@@ -134,11 +134,10 @@ Sub-actions `remind | note | fact | mood | status`. Routed through the shared `c
 - `DASHBOARD_ALLOW_LOCALHOST_BYPASS=1` (local development only; keep unset in hosted/proxied deployments).
 
 **Eris side**:
-- `IRENE_API_URL` — defaults to `https://irene-bot.onrender.com` (eris/config.js:75). This is what `ask_irene` and `twinState` POST/GET against.
+- `IRENE_API_URL` — no code default. Set it to Irene's HTTP API URL when running twin coordination; this is what `ask_irene` and `twinState` POST/GET against.
 
 **Cross-references**:
-- Eris hard-codes Irene's bot ID `345678901234567890` in her personality prompt (eris/config.js:377).
-- Irene hard-codes Eris's bot ID via `ERIS_BOT_ID` env (default `234567890123456789`, irene/config.js:75) and references it in her personality prompt (around line 230).
+- `TWIN_BOT_ID` on Eris and `ERIS_BOT_ID` on Irene are env-loaded sibling bot IDs used for prompt substitution and twin-message detection.
 
 ---
 
@@ -146,7 +145,7 @@ Sub-actions `remind | note | fact | mood | status`. Routed through the shared `c
 
 - **Two Render services, one shared secret.** Eris does fun/economy, Irene does moderation + presence. They talk over plain HTTP, authed by `TWIN_API_SECRET`.
 - **Irene's `presence.js` is the entire HTTP server** — public `/presence`, `/health`, `/tts/`, the Base44 dashboard `/api/*`, and the twin endpoints `/api/twin/state` (Bearer) and `/api/twin/command` (HMAC).
-- **State-changing twin requests are HMAC-SHA256 signed** over `${timestamp}.${rawBody}`, with a 60 s skew window and an in-memory replay cache. Logic lives in `packages/shared/src/twinSign.js`, used by both bots. Read-only endpoints use simple `Bearer TWIN_API_SECRET` because they have no side effects.
+- **State-changing twin requests are HMAC-SHA256 signed** over `${timestamp}.${rawBody}`, with a 60 s skew window and an in-memory replay cache. Logic lives in `packages/shared/src/twinSign.js`, used by both bots. Read-only twin endpoints use simple `Bearer TWIN_API_SECRET` because they have no side effects; dashboard routes use `DASHBOARD_API_KEY`.
 - **Eris → Irene**: `ask_irene` LLM tool builds payload, signs, POSTs `/api/twin/command`. Irene re-verifies HMAC, then re-verifies the requester is owner/trusted, maps short command name to real tool, and calls `executeTool` with a fake message context whose `member` is the *requesting human* (so hierarchy checks aren't bypassed by the bot's own permissions). **Irene → Eris**: `firePunishSignal` after a ban/kick triggers Eris to confiscate the user's economy balance if the guild opted in.
 - **If the twin is down**, callers degrade silently: `ask_irene` returns a "couldn't reach irene" string to the model, `twinState` returns empty context, `firePunishSignal` logs and lets the moderation action stand alone. Nothing blocks on the twin being reachable.
 
@@ -155,4 +154,4 @@ Sub-actions `remind | note | fact | mood | status`. Routed through the shared `c
 ## Notes
 
 - All paths above are **searched and verified**. Nothing was missing.
-- The previously-flagged hardcoded Eris URL in `ask_eris` (`packages/irene/ai/executors/advancedExecutor.js:430–492`) was a known inconsistency. See the latest commit log for the fix that moved those URLs to `config.twinApiUrl`. `ask_eris` still does **not** sign requests, while `twinPunish.js` correctly signs and reads from config. The Eris-side `/api/twin/{remind,note,fact,mood,status}` handlers were not located in the original pass — they may be unimplemented routes that fall through to a 404, or they live somewhere not yet grepped under `packages/eris/api/`.
+- The previously-flagged hardcoded Eris URL in `ask_eris` was fixed: `callEris()` now reads `config.twinApiUrl`, signs every POST with `TWIN_API_SECRET`, sends `Bearer TWIN_API_SECRET` on read-only GETs, and bounds calls with `AbortSignal.timeout`.

@@ -124,7 +124,7 @@ If both retries fail, the user sees a fallback message ("hmm something went quie
 
 ## Twin call to other bot fails
 
-- **Network timeout** — Default `fetch` timeout for `ask_irene`. `twinState` uses 4s, `twinPunish` uses 5s. Check `IRENE_API_URL`/`ERIS_API_URL` env points to the right host.
+- **Network timeout** — `ask_irene`, `twinPunish`, and `ask_eris` use 5s timeouts; `twinState` uses 4s. Check `IRENE_API_URL`/`ERIS_API_URL` env points to the right host.
 - **Signature mismatch** — Both bots must have **identical** `TWIN_API_SECRET`. Check both Render env vars.
 - **Body byte mismatch** — Stringify JSON once and reuse for both signing and POST. If a framework re-stringifies (re-orders keys, etc.) the signature breaks.
 - **Replay** — same signature seen twice in 60s window → 403. Caller probably double-fired.
@@ -140,7 +140,7 @@ If both retries fail, the user sees a fallback message ("hmm something went quie
 
 ## Voice listener doesn't hear (Irene)
 
-- **`@discordjs/opus` didn't build** — check `npm install` warnings. Without it, opus → PCM decode fails silently. Music playback (which uses Lavalink) is unaffected.
+- **`@discordjs/opus` didn't build** — check the explicit Irene workspace install logs. Without it, opus → PCM decode fails silently. Music playback (which uses Lavalink) is unaffected.
 - **Wake word not matching** — wake word detection is a substring match on the transcribed text. The model sometimes transcribes "irene" as "iron"/"ireland." Use a less ambiguous wake word.
 - **Per-user 3s cooldown** — same user rapid-firing voice utterances → only first counts.
 
@@ -162,17 +162,17 @@ If both retries fail, the user sees a fallback message ("hmm something went quie
 
 ## Database reads return null / undefined
 
-- **Cache not loaded** — `initDatabase()` failed silently. Check startup logs. If Supabase was unreachable on boot, the bot runs in-memory-only — every read returns whatever's been written this session.
+- **Cache not loaded** — `initDatabase()` fell back to in-memory mode. Check startup logs. With `REQUIRE_PERSISTENCE=1`, missing or unreachable Supabase is fatal instead; without it, every read returns only what has been written this session.
 - **Wrong key shape** — facts are keyed `${guildId}:${userId}`, not just `userId`. Check the cache shape definition at the top of `database.js`.
 - **Write didn't flush yet** — there's a 2s debounce. If you read from Supabase directly within 2s of a write, you'll see the old value. Read from the cache (the exported `get*` methods) instead.
 
 ## SIGTERM took longer than 8s on Render
 
-Render sends SIGTERM, waits 8s, then SIGKILL. If `flushAll()` doesn't finish in that window, you lose the pending writes.
+Render sends SIGTERM, waits 8s, then SIGKILL. If the shutdown drain doesn't finish in that window, pending writes can be lost.
 
 - **Big `cache.conversations`** — main flush culprit. Trim conversation history to a max age in `database.js`.
-- **Network hang on Supabase** — wrap `flushAll()` in a `Promise.race` against an 8s timeout to at least exit cleanly.
-- **Multiple sub-systems flushing serially** — `index.js` flushes `database`, `personality`, `longmemory`. Run them in parallel via `Promise.all` if not already.
+- **Network hang on Supabase** — confirm the shutdown path is still bounded before increasing any flush workload.
+- **Multiple sub-systems flushing serially** — both bot entrypoints drain database, personality, longmemory, and related subsystems in parallel; if this regresses, restore the `Promise.all` shutdown shape.
 
 ## Boot fails with `Cannot find module '@defnotean/shared/...'`
 
@@ -188,7 +188,7 @@ Also check:
 
 The 2026-04-24 incident: tests passed because they ran against the same hoisted `discord.js` version as prod, so both were "broken" in the same matching way.
 
-- **Run `npm run lint:version-sync`** — catches divergent dep ranges across workspaces.
+- **Run `npm run lint:version-sync`** — catches divergent non-local dependency ranges across workspaces.
 - **Smoke-test in dev guild before merging** — `/ping` + an embed-sending command + a moderation command.
 - **Compare `[Bot] N commands loaded` count to last known good** — if it dropped, a command file failed to load silently. (This is what missed Irene on 2026-04-24.)
 
@@ -315,7 +315,7 @@ Test passes locally, fails on CI (or vice versa), or fails intermittently on the
 2. **Frozen system time for dedupe windows** — when the code under test reads `Date.now()` multiple times and the assertion depends on them landing on the same tick, use `vi.setSystemTime(<fixed date>)`. Pattern from `packages/eris/tests/ai/bumpCelebrations.test.ts` (and the Irene mirror in `packages/irene/tests/ai/bumpCelebrations.test.ts`).
 3. **Statistical bands with real `Math.random`** — coinflip / dice / slots tests use ranges like "win rate between 48% and 52% over 10k trials". CI variance can land outside the band. Seed with a deterministic PRNG (mulberry32 is already factored in `packages/eris/tests/ai/gambling.test.ts`) and `vi.spyOn(Math, "random").mockImplementation(rand)` in `beforeEach`, restore in `afterEach`.
 4. **Test order dependence** — tests share module-level state (caches, in-memory maps) and pass only when run in a specific order. Add a `beforeEach` that resets the relevant module state, or use `vi.resetModules()` before each test.
-5. **Workspace dep skew** — see `Tests pass but production breaks` above. If a test passes locally on a hoisted module and fails on CI because CI installed differently, run `npm run lint:version-sync` and align workspaces.
+5. **Workspace dep skew** — see `Tests pass but production breaks` above. If a test passes locally on a hoisted module and fails on CI because CI installed differently, run `npm run lint:version-sync` and align shared third-party dependency ranges.
 
 ## When all else fails
 

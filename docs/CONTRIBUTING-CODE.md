@@ -16,8 +16,8 @@ The monorepo is mixed JS + TS, by design:
 | `packages/irene/**/*.js` | **JavaScript** (ESM) | Same — Irene runs straight from `.js`. |
 | `packages/shared/src/**/*.js` | **JavaScript** (ESM) | Exported to both bots. JS so consumers don't need a build. |
 | `packages/*/tests/**/*.ts` | **TypeScript** | All vitest specs are `.ts`. Catches mock-shape bugs at write time. |
-| `packages/*/prompts/loader.ts` | TypeScript | One of the two non-test TS files in a bot package. |
-| `packages/eris/utils/unicode.ts` | TypeScript | The other. Type-heavy code-point table. |
+| `packages/*/prompts/loader.ts` | TypeScript | Prompt loaders for both bot packages. |
+| `packages/eris/utils/unicode.ts` | TypeScript | Type-heavy code-point table. |
 
 **Rule of thumb:** new application code is `.js`. New tests are `.ts`. Don't convert a `.js` file to `.ts` as a side-effect of another change.
 
@@ -232,12 +232,12 @@ A reviewer will look at every PR for these. Self-check before requesting review:
 - [ ] **Surgical change.** You edited only what your task required. No drive-by reformatting, renaming, or adjacent refactors. Unrelated cleanups go in their own PR.
 - [ ] **Style matches the file.** JS modules, ESM, double-quoted strings, `//` comments. If the file already disagrees with this doc, you copied the file's style, not the doc's.
 - [ ] **No `Co-Authored-By` or other AI-tool attribution** in commits, the PR body, or commit trailers. Repo policy (see `CONTRIBUTING.md` §"Branching and commits").
-- [ ] **Tests pass.** `npm run test:eris`, `npm run test:irene`, and `npm test` (root) green. New tool / new bug fix has a new test ([CONTRIBUTING.md §Testing](../CONTRIBUTING.md#testing)).
+- [ ] **CI gates pass.** `npm run lint:version-sync`, `npm audit --audit-level=moderate`, `npm test --workspaces --if-present`, and `npm run build --workspaces --if-present` green. New tool / new bug fix has a new test ([CONTRIBUTING.md §Testing](../CONTRIBUTING.md#testing)).
 - [ ] **Twin boundary checked.** If your change touches a duplicated or shared-sensitive file (`personality.js`, `longmemory.js`, `firewall.js`, `twinSign.js`, `bumpReminder*`), you confirmed the change is intentional and noted whether the twin needs a matching update.
 - [ ] **Logs are tagged.** New `log(...)` / `console.*` calls have a `[SCOPE]` prefix and don't spam in hot paths.
 - [ ] **Error handling matches the layer.** Tool executors return strings, not throws. Validators return `{ error }` objects. Persistence helpers may throw on structural failure (no DB).
 - [ ] **Lock invariants preserved.** Any new `*Unsafe` call is inside an active `withUserLock` / `withGameLock` block. Any new read-modify-write on user state is inside one.
-- [ ] **`version-sync` clean.** Both bots still pin identical `@defnotean/shared` ranges — `npm run lint:version-sync` is the guard.
+- [ ] **`version-sync` clean.** Any non-local dependency used by multiple workspaces still has one identical version range — `npm run lint:version-sync` is the guard.
 - [ ] **No secrets, no hardcoded owner / guild / Discord IDs, no deploy URLs.** Everything env-loaded via `config.js`. See `SECURITY.md` and the open-source-release note in the repo.
 - [ ] **PR body** under 200 words: what, why, one-line smoke-test plan. Title in commit-message format.
 

@@ -5,6 +5,14 @@ files, and every `process.env.*` / `env(...)` callsite under `packages/`. Goal:
 confirm each variable is documented, mark insecure defaults, find leakage in
 logs, and verify which keys actually fail the boot.
 
+## Current status (2026-06-01)
+
+The original 2026-05-16 findings have been rechecked against the current tree.
+`REQUIRE_PERSISTENCE=1` is now enforced by both database init paths,
+`WEB_SEARCH_GEMINI_GROUNDING` and `TWIN_BOT_ID` are documented in the example
+env files, non-local Lavalink refuses an unset or stock password, and secret
+redaction is centralized in `@defnotean/shared`.
+
 ## Env var inventory
 
 ### Eris (`packages/eris/config.js`)
@@ -23,7 +31,7 @@ logs, and verify which keys actually fail the boot.
 | `NVIDIA_API_KEY` / `NVIDIA_*` tunables | conditional FATAL | various | `config.js:233-246` |
 | `OPENAI_COMPAT_*` + provider aliases | conditional FATAL | provider-derived | `config.js:248-264` |
 | `VOYAGE_API_KEY` | no | — | `config.js:225` |
-| `SUPABASE_URL` / `SUPABASE_KEY` | warn-only | — | `config.js:282-287` |
+| `SUPABASE_URL` / `SUPABASE_KEY` | warn-only; fatal when `REQUIRE_PERSISTENCE=1` | — | `config.js:282-287` |
 | `REQUIRE_PERSISTENCE` | no | `0` | `config.js:284` |
 | `LASTFM_API_KEY` | warn-only | — | `config.js:289` |
 | `KLIPY_API_KEY` / `GITHUB_TOKEN` / `RENDER_API_KEY` | no | — | `config.js:290-292` |
@@ -47,7 +55,7 @@ Same shape as Eris with these deltas:
 | `ERIS_API_URL` / `ERIS_BOT_ID` | no | — | `config.js:201-202` |
 | `LAVALINK_HOST` / `_PORT` / `_PASSWORD` / `_SECURE` | no | `localhost` / `2333` / **`youshallnotpass`** / `false` | `config.js:204-207` |
 | `GEMINI_API_KEY[_2..12]` | conditional FATAL | — | `config.js:248-261` |
-| `SUPABASE_ANON_KEY` | no (fallback for `_KEY`) | — | `config.js:268` |
+| `SUPABASE_ANON_KEY` | no (compatibility alias; does not enable persistence alone) | — | `config.js:268` |
 | `DUAL_WRITE_PERSISTENCE` | no | `false` | `config.js:297` |
 | `TWITCH_CLIENT_ID` / `_SECRET` | no | — | `config.js:289-290` |
 | `TIMEOUT_WORKER_FAST` / `_SLOW` / `TOOL_FAST` / `_SLOW` / `_VERY_SLOW` | no | 35000 / 60000 / 15000 / 30000 / 60000 | `config.js:354-360` |
@@ -61,27 +69,19 @@ their respective `.env.example` and noted in `docs/start-here.md`.
 ## Documentation completeness
 
 Walking every `env(...)`/`process.env.*` site versus the two `.env.example`
-files, the following are **used but not documented**:
-
-| Var | Used at | Status |
-|---|---|---|
-| `WEB_SEARCH_GEMINI_GROUNDING` | `packages/eris/ai/executors/webExecutor.js:42`, `packages/irene/ai/executors/advancedExecutor.js:84` | Missing in **both** `.env.example` |
-| `TWIN_BOT_ID` | `packages/eris/config.js:214,326` | Missing in `packages/eris/.env.example` (Irene's `ERIS_BOT_ID` counterpart IS documented at `irene/.env.example:237`) |
-
-Everything else has a stanza with a `Required: …` annotation and a
-"Where to get it" pointer. Quality of those stanzas is high — the recent
-open-source-prep commit (`b59e54c`) put work into making each key
-self-explanatory.
+files, no current runtime env var is intentionally undocumented. Each example
+stanza includes a `Required:` annotation and a "Where to get it" pointer where
+that makes sense.
 
 ## Insecure defaults
 
 | Var | Default | Severity | Note |
 |---|---|---|---|
-| `LAVALINK_PASSWORD` | `"youshallnotpass"` (`packages/irene/config.js:206`) | Medium | This is the published Lavalink stock password. It's only safe if the Lavalink node is on `localhost` and the bind address is `127.0.0.1`; a node exposed on `0.0.0.0` with this default is open to anyone. The `.env.example:175-176` flags it as "Default: youshallnotpass" but doesn't warn about exposure. |
+| `LAVALINK_PASSWORD` | `"youshallnotpass"` (`packages/irene/config.js:206`) | Low when localhost-only | The stock password is accepted only for localhost. Non-local Lavalink hosts with an unset or stock password are refused before music features enable. |
 | `LAVALINK_SECURE` | `"false"` | Low | Acceptable for localhost; would be a leak for a tunneled node. Documented. |
 | `REQUIRE_PERSISTENCE` | `"0"` | Low | Documented. Production deploys are told to flip it to `1`. |
 | `DUAL_WRITE_PERSISTENCE` | `"false"` | none | Default-off is correct for the migration phase it gates. |
-| `PC_AGENT_DISABLED` | `"0"` (Eris) | Medium for unattended hosts | The PC-agent surface is owner-only via Discord ID, so the default is consistent with how Eris is shipped, but a fresh self-hoster who forgets to set `BOT_OWNER_ID` gets the previous owner ID baked into the personality prompts (`prompts/eris-relationships.md`). See AUDIT-pc-agent.md. |
+| `PC_AGENT_DISABLED` | `"0"` (Eris) | Medium for unattended hosts | The PC-agent surface is owner-only via Discord ID and fails closed when `BOT_OWNER_ID` is unset. Hosted production sets `PC_AGENT_DISABLED=1` in `render.yaml`. |
 | `OPENAI_COMPAT_BASE_URL` | OpenRouter URL in the `.env.example` (`packages/{eris,irene}/.env.example:77`/`93`) | none | This is a docs default, not a code default. Code falls back to a per-provider URL based on `AI_PROVIDER`. |
 
 No hardcoded API keys, tokens, or owner IDs survive in `config.js`,
@@ -140,34 +140,16 @@ promise. `TWIN_API_SECRET` deliberately doesn't fail boot — the twin link
 is optional, and missing it just 401s twin calls (verified at
 `packages/eris/api/dashboard.js:283-331`).
 
-Edge case: `REQUIRE_PERSISTENCE=1` is read into `config.requirePersistence`
-but **no callsite checks it to abort startup** when Supabase is also
-missing. The flag exists in both `.env.example` files as "production
-deploys should use 1", but flipping it doesn't actually change behavior
-today — it's wired but not enforced. Either remove the flag or add the
-`if (config.requirePersistence && !config.supabaseEnabled) process.exit(1)`
-check next to the other FATAL blocks.
+With `REQUIRE_PERSISTENCE=1`, missing credentials or repeated Supabase init
+failures now abort startup in both bots. With it unset, local/dev boots still
+degrade to in-memory mode.
 
-## Top 5 issues
+## Current residual notes
 
-1. **`REQUIRE_PERSISTENCE=1` is documented but not enforced.** Both
-   `.env.example` files tell production deployers to set it; the
-   validation block silently ignores it. Either wire it into the
-   fail-fast loop or drop it from the docs.
-2. **`WEB_SEARCH_GEMINI_GROUNDING` is undocumented.** Used in both
-   bots' web executors but absent from both `.env.example` files —
-   self-hosters have no way to discover the toggle. Add a stanza near
-   the other `WEB_SEARCH_*` keys.
-3. **`TWIN_BOT_ID` missing from Eris `.env.example`.** Used in
-   `eris/config.js:214` and substituted into personality prompts; the
-   Irene counterpart (`ERIS_BOT_ID`) IS documented. Asymmetric.
-4. **`LAVALINK_PASSWORD` defaults to the published stock value.** Safe
-   when Lavalink binds to localhost; a footgun the moment it doesn't.
-   Either harden the `.env.example` warning ("change this if the
-   Lavalink port is reachable off-host") or fail boot when the password
-   equals `"youshallnotpass"` **and** `LAVALINK_HOST !== "localhost"`.
-5. **Logger has no secret-shaped redaction.** No current callsite leaks
-   (audited), but the on-disk log will faithfully record anything a
-   future `log(...)` adds. Adding a 5-pattern strip in
-   `utils/logger.js` (Discord token, `AIza…`, `Bearer …`, `sk-…`,
-   `xoxb-…`) is cheap insurance.
+1. **Operator-owned secrets remain high impact.** Bot tokens, Supabase keys,
+   `TWIN_API_SECRET`, and dashboard keys must still be rotated if leaked.
+2. **`PC_AGENT_DISABLED=0` is powerful by design.** Keep it off on unattended or
+   hosted systems unless you explicitly need owner host-control tools.
+3. **Lavalink is safe only when scoped correctly.** Localhost with the stock
+   password is acceptable for dev; exposed nodes need a strong password and
+   `LAVALINK_SECURE=true` where the transport leaves the host.

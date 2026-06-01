@@ -5,6 +5,13 @@ tool-call through `pcAgent.js`'s gates into either local `child_process.exec`
 or the Electron agent-UI shell. Irene has no PC executor (confirmed by
 Grep `pcAgent` → no hits under `packages/irene/`).
 
+## Current status (2026-06-01)
+
+The original agent-UI kill-switch gap has been fixed. `agent-ui/main.js` checks
+`PC_AGENT_DISABLED` before polling queued commands, before executing queued
+commands, and before direct terminal/file/app IPC handlers. The PC-agent surface
+is still intentionally powerful and should stay disabled on hosted deployments.
+
 ## Surface area
 
 Six AI tools dispatch into `systemExecutor.js:71-144`:

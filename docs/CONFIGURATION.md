@@ -71,7 +71,7 @@ at the repo root.
 | `VOYAGE_API_KEY` | Both | No (recommended) | — | Voyage AI embeddings for semantic memory recall. Without it, recall falls back to keyword search. `packages/eris/config.js:225`, `packages/irene/config.js:319`. | voyageai.com -> API Keys |
 | `SUPABASE_URL` | Both | No (strongly recommended) | — | Supabase project URL. Without it, the bot boots with a `[WARN]` and runs fully ephemeral. `packages/eris/config.js:282`, `packages/irene/config.js:266`; warning at `packages/eris/config.js:404-406`, `packages/irene/config.js:394-397`. | supabase.com -> Project Settings -> API -> Project URL |
 | `SUPABASE_KEY` | Both | No (strongly recommended) | — | Service-role or anon key. `packages/eris/config.js:283`, `packages/irene/config.js:267`. | supabase.com -> Project Settings -> API |
-| `SUPABASE_ANON_KEY` | Irene | No | — | Fallback used when `SUPABASE_KEY` is unset (see comment at `packages/irene/.env.example:138`). `packages/irene/config.js:268`. | Same as above |
+| `SUPABASE_ANON_KEY` | Irene | No | — | Parsed for compatibility, but it does not enable persistence when `SUPABASE_KEY` is unset. `SUPABASE_KEY` is required for Irene persistence. `packages/irene/config.js:268`. | Same as above |
 | `REQUIRE_PERSISTENCE` | Both | No | `0` | `1` makes a missing/invalid Supabase config fatal at startup instead of degrading silently. `packages/eris/config.js:284`, `packages/irene/config.js:269`. | n/a |
 | `DUAL_WRITE_PERSISTENCE` | Irene | No | `false` | Phase 1 of the per-entity DB refactor: when `true`, every write hits both the legacy `bot_data` blob and the new tables in `packages/irene/database/perEntity.js`. Apply migrations first. `packages/irene/config.js:297`. | n/a |
 | `TWIN_API_SECRET` | Both | No (required if you run the twin pair) | — | Shared secret for `/api/twin/*` requests: HMAC on state-changing calls, bearer on read-only twin state. It does not authorize normal dashboard routes. Read at `packages/eris/config.js:212`, `packages/irene/config.js:200`. | `openssl rand -hex 32` |
@@ -136,10 +136,10 @@ files `process.exit(1)` at startup when the token or client ID is missing
 booting without them is impossible.
 
 `BOT_OWNER_ID` / `DISCORD_USER_ID` is technically optional, but everything that
-calls the bot's owner "boss" — owner-only commands, the PC-agent kill switch
-bypass, the personality prompt's relationship block — depends on it. Owner-only
-PC tools accept the previously-hardcoded owner if you leave it blank; set it to
-your own ID for a fresh install.
+needs a recognized owner — owner-only commands, PC-agent authorization, and the
+personality prompt's relationship block — depends on it. If you leave it blank,
+owner-only surfaces fail closed or lose owner-specific context; set it to your
+own ID before enabling any owner-only tooling.
 
 `BOT_NAME` controls the row key for personality, longmemory and audit rows in
 Supabase. Changing it creates a fresh personality from scratch — treat it as
@@ -188,9 +188,9 @@ deploys should set it; dev should leave it at `0`. The check uses the
 `packages/irene/config.js:270-272`, which also rejects placeholder URLs
 containing `your-`.
 
-Irene additionally accepts `SUPABASE_ANON_KEY` as a fallback when `SUPABASE_KEY`
-is missing (handled in `messageCreate.js`, per the comment in
-`packages/irene/.env.example:138`).
+Irene also parses `SUPABASE_ANON_KEY`, but the persistence gate still requires
+`SUPABASE_KEY`. Treat `SUPABASE_ANON_KEY` as a compatibility alias only; it does
+not make `supabaseEnabled` true by itself.
 
 `DUAL_WRITE_PERSISTENCE` (Irene only) is the phase-1 flag for the in-flight DB
 refactor: when `true`, every write hits both the legacy single-row blob and the

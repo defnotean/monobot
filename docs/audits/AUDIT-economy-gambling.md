@@ -4,6 +4,14 @@ Scope: every code path that mutates a user's coin balance, deals with shared
 pots (poker / lottery / heist / auction), or relies on RNG for a money-affecting
 outcome. Source tree: `packages/eris/`. No runtime, no edits — read only.
 
+## Current status (2026-06-01)
+
+The original `/bank deposit` and `/bank withdraw` race finding has been fixed:
+the slash command now calls `bankDeposit` / `bankWithdraw`, and
+`packages/eris/tests/db/bankRace.test.ts` covers parallel deposits and
+withdrawals. Older rows in this file should be read with that remediation in
+mind.
+
 ## Architecture summary
 
 All balance writes funnel through `_updateBalanceUnsafe()` in
@@ -44,8 +52,8 @@ auction/heist helpers in `database.js`.
 | Lottery payout | `ai/lottery.js:237` | `updateBalance` |
 | Stocks buy | `ai/stockMarket.js:249` | `tryDeductBalanceUnsafe` under `withUserLock` |
 | Stocks sell | `ai/stockMarket.js:289` | `updateBalanceUnsafe` (decrement-first) |
-| `/bank deposit` slash | `commands/economy/bank.js:38-39` | `updateBalance` + `updateBankBalance` (non-atomic) |
-| `/bank withdraw` slash | `commands/economy/bank.js:46-47` | `updateBankBalance` + `updateBalance` (non-atomic) |
+| `/bank deposit` slash | `commands/economy/bank.js:32-43` | `bankDeposit` atomic helper |
+| `/bank withdraw` slash | `commands/economy/bank.js:46-54` | `bankWithdraw` atomic helper |
 | `bankDeposit/Withdraw` API | `database.js:1877,1897` | atomic, under `withEconLock` |
 | `/daily`, `/weekly`, `/monthly` | `database.js:984,2025,2051` | under `withEconLock` |
 | Bank interest | `database.js:1914` | unlocked read-modify-write on bank cache |
@@ -110,18 +118,10 @@ Verdict: not crypto-grade, but adequate for a play-money economy. Treat any
 
 ## Top 5 risks (ranked)
 
-1. **`/bank deposit` and `/bank withdraw` double-spend race** —
-   `commands/economy/bank.js:32-49` reads wallet → checks → calls
-   `updateBalance(-amount)` → calls `updateBankBalance(amount)` as **separate
-   awaits with no lock**. Two parallel `/bank deposit 1000` from the same user
-   (button macro, two clients) can both pass the `wallet.balance >= amount`
-   check and both hit `updateBalance(-1000)`; the second debit is correctly
-   refused by `_updateBalanceUnsafe`'s negative guard, but the second
-   `updateBankBalance(+1000)` still runs — net effect: bank balance
-   double-credited from a single wallet debit. Same shape on withdraw with
-   reversed direction. The atomic helpers `bankDeposit`/`bankWithdraw` in
-   `database.js:1877,1897` exist and fix this; the slash command just doesn't
-   call them. Severity: **high**.
+1. **Fixed: `/bank deposit` and `/bank withdraw` double-spend race.** The slash
+   command now calls `bankDeposit` / `bankWithdraw`, which run under the economy
+   lock. `packages/eris/tests/db/bankRace.test.ts` covers parallel deposits and
+   withdrawals so this finding should not regress silently.
 
 2. **`/coinflip`, `/dice`, `/slots`, `russian_roulette`, `rps_play`,
    `coinflip_bet`, `dice_roll_bet`, `slots_spin` all use check-then-update

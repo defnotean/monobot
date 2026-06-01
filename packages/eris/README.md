@@ -90,12 +90,12 @@ Most of Eris's 170+ tools are called conversationally, not through slash command
 
 ## Tech Stack
 
-Node.js 18+ · discord.js v14 · Gemini / NVIDIA Kimi · Supabase · Voyage AI embeddings · Render
+Node.js 22.12.0+ · discord.js 14.26.4 · Gemini / NVIDIA Kimi · Supabase · Voyage AI embeddings · Render
 
 ## Setup
 
 ```bash
-npm install
+npm ci
 ```
 
 ```env
@@ -110,12 +110,12 @@ TWIN_API_SECRET=         # shared with Irene for cross-bot features
 ```
 
 ```bash
-npm run deploy    # register slash commands
-npm start
+npm run deploy --workspace=@defnotean/eris    # register slash commands
+npm run start:eris
 ```
 
 ## Running tests
 
 ```bash
-npm test
+npm run test:eris
 ```

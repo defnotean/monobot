@@ -20,7 +20,7 @@ MonoBot/
 │   ├── presence-api.md       # Twin REST + HMAC signing surface
 │   └── dev-guild-workflow.md # How to set up a dev Discord guild + safe testing
 ├── scripts/
-│   └── verify-version-sync.js   # CI guard — both bots must pin identical shared deps
+│   └── verify-version-sync.js   # CI guard for shared third-party dep ranges
 ├── GETTING_STARTED.md
 ├── CONTRIBUTING.md  (this file)
 └── README.md
@@ -125,10 +125,10 @@ Both bots use **vitest**. From the repo root:
 | `npm run test:irene` | Irene workspace tests |
 | `npm test --workspaces --if-present` | all workspace tests |
 | `npm run dev:eris` / `npm run dev:irene` | run the bot with file-watch (faster inner loop than `start:*`) |
-| `npm run lint:version-sync` | guards that both bots pin identical shared dep versions |
+| `npm run lint:version-sync` | guards that non-local dependencies used by multiple workspaces have identical version ranges |
 
-**Critical paths with thin coverage** — good places to add tests when you touch them:
-- `ai/executor.js` (Irene's is 1663 lines, currently no direct tests)
+**Critical paths worth focused tests** — good places to add coverage when you touch them:
+- Irene AI router / sub-executors (`packages/irene/ai/executor.js` is now a compact router with direct `executeTool` coverage)
 - `ai/toolRegistry.js`
 - `events/messageCreate.js`
 
@@ -143,7 +143,7 @@ These exist in the codebase today. Don't fix them as part of your first PR; they
 - **Length budgeting is multi-layered.** A truncated reply could be caused by the system-prompt `[LENGTH BUDGET]` directive, `ai/dual.js`'s `maxOutputTokens`, or a post-hoc sentence trimmer in `messageCreate.js`. See `docs/ai-pipeline-*.md` for line numbers.
 - **Eris's tool selection bypasses `toolRegistry.selectByMessage`** at runtime — the actual selection happens in `messageCreate.js` via cached tool profiles (`twin`/`chat`/`chatOwner`/`full`/`fullOwner`). If you want to change tool selection behavior, edit `messageCreate.js`, not the registry.
 - **Voice receive/Opus behavior depends on hosted audio support.** The vulnerable native `@discordjs/opus` optional dependency was removed; avoid reintroducing native audio packages without an audit pass.
-- **Twin coordination has unsigned `ask_eris` calls** that may hit non-existent endpoints in Eris's API. Tracked separately.
+- **Twin coordination has asymmetric read/write auth.** `ask_eris` signs POST mutations and uses Bearer auth for read-only GETs; keep Eris and Irene endpoint docs/tests in sync when changing that surface.
 
 ## Twin coordination (Eris ↔ Irene)
 

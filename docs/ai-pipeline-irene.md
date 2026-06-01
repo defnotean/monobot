@@ -85,9 +85,9 @@ Final prompt hard-capped at `PROMPT_BUDGET = 12000` chars (line 1601), trimming 
 4. **`_executeToolInner()`** (line 365): builds shared `ctx` (`findMember`, `findChannel`, `findRole`, `checkHierarchy`, `checkRoleAssignment`, lines 84–205) and walks `SUB_EXECUTORS` (line 30). Each sub-executor declares a `HANDLED` Set, returns `undefined` for tools it doesn't own, result string for ones it does.
 5. **Inline fallback** (line 391): tools not yet extracted (temp VC, whitelist) still in a giant `switch` in `executor.js`.
 
-Sub-executors in `packages/irene/ai/executors/`: `channelExecutor`, `roleExecutor`, `moderationExecutor` (~658 lines, with `checkHierarchy`), `voiceExecutor`, `audioExecutor`, `levelingExecutor`, `personalizeExecutor`, `memoryExecutor`, `toggleExecutor`, `messageExecutor`, `serverExecutor`, `advancedExecutor`, `setupExecutor` (~1274 lines, composite flows: welcome, verify, reaction roles, starboard, ticket).
+Sub-executors in `packages/irene/ai/executors/`: `channelExecutor`, `roleExecutor`, `moderationExecutor` (with `checkHierarchy` and confirmation flow), `voiceExecutor`, `audioExecutor`, `levelingExecutor`, `personalizeExecutor`, `memoryExecutor`, `toggleExecutor`, `messageExecutor`, `serverExecutor`, `advancedExecutor`, `setupExecutor` (composite flows: welcome, verify, reaction roles, starboard, ticket).
 
-The sub-executor pattern is **[STABLE]**. The 1663-line `executor.js` itself is **[EVOLVING]** — the inline `switch` and alias table will keep shrinking as more domains move out.
+The sub-executor pattern is **[STABLE]**. `executor.js` is now a compact router around aliasing, rate limits, confirmation bridging, and sub-executor dispatch; add new domain logic to a sub-executor instead of growing the router.
 
 The same `executeTool` path is reused by the twin command relay in `presence.js` (line 567) — Eris HMAC-signs a request, Irene resolves the requester's real `member` (so `checkHierarchy` evaluates against the user, not the bot — comment at line 519), and dispatches.
 

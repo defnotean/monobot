@@ -3,6 +3,13 @@
 Scope: every code path where the bots fetch user- or LLM-supplied URLs, run
 upstream web searches, and pipe the result back to the model as tool output.
 
+## Current status (2026-06-01)
+
+The original search-backend body-cap and SSRF bypass findings have been fixed:
+the shared search engine routes provider calls through `safeFetch`. The
+remaining notes below focus on content cleanup and fail-closed behavior around
+untrusted text.
+
 ## Tools surveyed
 
 Eris (`packages/eris/ai/executors/webExecutor.js`) handles `web_search`,
@@ -52,8 +59,8 @@ The SSRF defense layer is `packages/shared/src/safeFetch.js`.
   user input — SSRF surface here is the upstream backends only.
 - Content cap / timeout: 25 s race on Gemini grounding
   (`webExecutor.js:71`); 10 s passed to `performWebSearch`
-  (`webExecutor.js:89`). Backend body cap is bounded only by the upstream
-  client's behavior (raw `fetch` inside `webSearchEngine.js` — see Risk 1).
+  (`webExecutor.js:89`). Backend provider calls now inherit `safeFetch` body
+  caps and timeout behavior.
 - Output: wrapped by `wrapWebOutput` → `wrapUntrustedWithFirewall`
   (`webExecutor.js:15-20, 79, 90`).
 
@@ -88,12 +95,10 @@ The SSRF defense layer is `packages/shared/src/safeFetch.js`.
 - Output: wrapped by `wrapWebOutput`.
 
 ### `performWebSearch` backends — `webSearchEngine.js:91-251`
-All seven backends use raw `fetch` (no `safeFetch`) against hard-coded
-provider URLs — acceptable because the host is not user-controlled. Each path
-sets an AbortSignal timeout via `timeoutFor`/`withTimeout`
-(`webSearchEngine.js:16-26`). None of them caps response body size, and none
-streams — `await res.json()` / `res.text()` will buffer whatever the upstream
-returns (see Risk 1).
+All seven backends now route through `safeFetch`, including Brave Answers,
+Brave Search, SearxNG, Tavily, Serper, Google CSE, and DuckDuckGo Lite. That
+means provider calls inherit protocol validation, DNS/IP checks, redirect
+re-validation, timeout handling, and the default response body cap.
 
 The DuckDuckGo Lite fallback (`webSearchEngine.js:215-247`) parses returned
 HTML with cheerio. There is no `wrapUntrusted` here; wrapping happens one
@@ -101,29 +106,21 @@ layer up in the executor.
 
 ## Top 5 risks (severity-ranked)
 
-1. **High — `performWebSearch` has no response-size cap.** Every backend in
-   `webSearchEngine.js` does `await res.json()` / `await res.text()` with no
-   byte limit (`webSearchEngine.js:111, 130, 145, 165, 188, 205, 230`). A
-   compromised or impersonated upstream (especially the SearxNG instance, which
-   the operator controls but is HTTP-fetched without `safeFetch`, lines
-   139-143) could serve a multi-GB JSON body and OOM the process.
-2. **High — SearxNG URL is templated but not SSRF-checked.** Line 141 does
-   `config.searxngQueryUrl.replace("<query>", encodeURIComponent(query))`
-   and feeds it to raw `fetch` (line 143). If `searxngQueryUrl` is ever
-   sourced from anything but trusted env (e.g. a per-guild config), it is a
-   direct SSRF — bypasses `safeFetch` entirely.
-3. **Medium — Irene `web_read` HTML stripping uses naked regex.** Lines
+1. **Fixed — `performWebSearch` response-size and SSRF bypass.** Search
+   backends now use `safeFetch`, so the prior raw-fetch body-cap and SearxNG
+   bypass findings are closed.
+2. **Medium — Irene `web_read` HTML stripping uses naked regex.** Lines
    609-620 strip tags with `/<[^>]+>/g`. Malformed HTML (e.g. attribute values
    containing `>`) can leak raw script bodies into the model's context,
    defeating the script-removal intent. Eris's path uses cheerio
    (`webExecutor.js:105-110`) and is safer — Irene should align.
-4. **Medium — Prompt-injection firewall is best-effort, not blocking.** When
+3. **Medium — Prompt-injection firewall is best-effort, not blocking.** When
    `firewallCheck` throws, `wrapUntrustedWithFirewall` swallows the error and
    returns the unredacted body (`safeFetch.js:223-231`). A malicious page
    that crashes the firewall (e.g. via a regex blow-up in the pattern set)
    bypasses redaction. The `wrapUntrusted` envelope remains, but envelope
    alone is a soft defense.
-5. **Low — Gemini grounding sources are not validated.** Source URLs are
+4. **Low — Gemini grounding sources are not validated.** Source URLs are
    appended to the tool result verbatim (`webExecutor.js:76-78`,
    `advancedExecutor.js:576-578`). A model-hallucinated or attacker-controlled
    `web.uri` could embed a `javascript:` link in the LLM's reply context that
@@ -132,13 +129,8 @@ layer up in the executor.
 
 ## Remediation suggestions
 
-- Add a `MAX_BODY_BYTES` guard in `webSearchEngine.js`. Cheapest fix: read
-  `res.body` via a streaming reader mirroring `safeFetch.js:176-189`, with a
-  ~256 KB cap (search APIs return tiny payloads).
-- Route the SearxNG and DuckDuckGo Lite calls through `safeFetch` — both are
-  HTTP fetches that ultimately resolve to operator- or third-party-controlled
-  hosts. The Brave/Tavily/Serper/Google calls hit hard-coded vendor TLDs and
-  can stay on raw `fetch`.
+- Keep all search backends behind `safeFetch`; do not reintroduce provider
+  clients that bypass the shared SSRF and body-cap layer.
 - Switch Irene's `web_read` to cheerio (it is already a runtime dependency
   per the Eris path) and reuse the same `script,style,nav,footer,header,
   aside,iframe` strip set.

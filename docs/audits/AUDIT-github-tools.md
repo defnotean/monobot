@@ -3,6 +3,13 @@
 Scope: GitHub-related tools exposed by Eris's AI executor pipeline. Irene has no
 GitHub executor (confirmed by `Glob **/executors/*.js` — only Eris has one).
 
+## Current status (2026-06-01)
+
+The original Render `serviceId` interpolation finding has been fixed:
+`check_deploy` validates the service id shape and applies `encodeURIComponent`
+before building the Render API URL. GitHub write operations are also disabled
+unless `GITHUB_REPO_ALLOWLIST` explicitly permits the target repository.
+
 ## Tools surveyed
 
 Defined in `packages/eris/ai/executors/githubExecutor.js:11-15` and registered as
@@ -96,16 +103,11 @@ in the same file (`read_emails`, `search_emails`, `draft_email`,
 
 ## Top 5 risks (severity-ranked)
 
-1. **`check_deploy` URL injection** — `serviceId` interpolated unescaped
-   into `https://api.render.com/v1/services/${serviceId}`
-   (`githubExecutor.js:243`). Owner-only mitigates, but an LLM-shaped
-   value can traverse the Render REST surface under the bot's bearer
-   token. **High**.
-2. **No repo allowlist on `github_create_issue`** — mutating tool can
-   target any repo the PAT scopes (`githubExecutor.js:197-214`). Combined
-   with the broad-scope single PAT (`config.js:291`) and no confirmation
-   prompt, an indirect-injection payload via chat content can file issues
-   anywhere. **High**.
+1. **Fixed: `check_deploy` URL injection.** `serviceId` is now shape-validated
+   and `encodeURIComponent`'d before the Render REST URL is built.
+2. **Fixed: no repo allowlist on `github_create_issue`.** Mutating GitHub writes
+   now fail closed unless `GITHUB_REPO_ALLOWLIST` includes the target
+   `owner/repo`.
 3. **One PAT, no scope partitioning** — `getOctokit()`
    (`githubExecutor.js:33-40`) uses a single token for every tool. There
    is no read-only client for the list/read tools vs a separate

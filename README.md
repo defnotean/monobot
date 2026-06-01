@@ -12,7 +12,7 @@
 </p>
 
 [![Tests](https://github.com/defnotean/monobot/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/defnotean/monobot/actions/workflows/test.yml)
-![Node.js](https://img.shields.io/badge/node-%3E%3D22.12-339933?logo=node.js&logoColor=white)
+![Node.js](https://img.shields.io/badge/node-%3E%3D22.12.0-339933?logo=node.js&logoColor=white)
 ![Discord.js](https://img.shields.io/badge/discord.js-v14-5865F2?logo=discord&logoColor=white)
 ![Supabase](https://img.shields.io/badge/supabase-persistence-3ECF8E?logo=supabase&logoColor=white)
 ![AI](https://img.shields.io/badge/AI-tool--calling-111827)
@@ -133,7 +133,7 @@ For full setup, environment variables, Discord application setup, Supabase, Lava
 npm run dev:eris                 # Eris with node --watch
 npm run dev:irene                # Irene with node --watch
 npm test                         # all workspace tests
-npm run lint:version-sync        # shared dependency/version guard
+npm run lint:version-sync        # shared third-party dependency guard
 npm run new:tool                 # scaffold a new AI tool
 npm run new:command              # scaffold a slash command
 ```

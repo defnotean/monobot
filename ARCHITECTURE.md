@@ -77,7 +77,7 @@ flowchart TD
 **Lifecycle hooks.**
 - `SIGTERM` / `SIGINT` → graceful shutdown: flush `database.js`, `ai/personality.js`, `ai/longmemory.js` buffers, then `client.destroy()`. Irene additionally saves music queues first and caps the flush at 8 s ([packages/irene/index.js:320-354](packages/irene/index.js#L320-L354)) because Render `SIGKILL`s ~10 s after `SIGTERM`.
 - `beforeExit` (Eris only, [packages/eris/database.js:166-176](packages/eris/database.js#L166-L176)) — fallback drain for clean exits that skip SIGTERM (e.g. test runners).
-- `unhandledRejection` / `uncaughtException` are logged but never crash the process. The bot keeps running.
+- `unhandledRejection` is logged and the process stays alive; `uncaughtException` is logged/redacted/alerted, then the bot best-effort flushes and exits so the process manager restarts it.
 - Irene also wires `shardResume` to re-warm guild caches and prune stale temp-VC state ([packages/irene/index.js:183-225](packages/irene/index.js#L183-L225)).
 
 ## 3. Discord ingress
@@ -152,7 +152,7 @@ write:  handler → mutate cache (sync) → mark bucket dirty → debounced time
 
 **Irene** flushes at ~2 s debounce as a whole-object snapshot ([packages/irene/database.js:185-189](packages/irene/database.js#L185-L189)). `flushNow()` is the SIGTERM-drain entry point. An optional per-entity dual-write fanout splits the snapshot into per-guild rows when `config.dualWritePersistence` is on; see [packages/irene/database/perEntity.js](packages/irene/database/perEntity.js).
 
-**In-memory fallback.** If `SUPABASE_URL` / `SUPABASE_KEY` are missing or invalid the bot still boots and runs entirely from memory — all state resets on restart. `REQUIRE_PERSISTENCE=1` flips that to fail-fast at boot. Eris loud-warns at startup ([packages/eris/config.js:404-406](packages/eris/config.js#L404-L406)); Irene multi-line loud-warns ([packages/irene/database.js:105-110](packages/irene/database.js#L105-L110)).
+**In-memory fallback.** If `SUPABASE_URL` / `SUPABASE_KEY` are missing or invalid the bot still boots and runs entirely from memory — all state resets on restart. `REQUIRE_PERSISTENCE=1` flips that to fail-fast during database initialization for both bots; production `render.yaml` sets it on both services.
 
 **Atomic ops.** Per-user mutations that read-then-write the same row (economy balance, gambling, crafting, loot boxes) go through `withUserLock(userId, fn)` ([packages/eris/database.js:642](packages/eris/database.js#L642)) which serializes via an in-memory promise chain keyed by `userId`. Per-channel message handling is serialized via a similar `withLock` mutex inside `messageCreate.js` so two concurrent messages in the same channel don't race the AI state.
 
@@ -198,7 +198,7 @@ Validation is in [packages/eris/config.js:373-402](packages/eris/config.js#L373-
 
 **Persistence** — `SUPABASE_URL` + `SUPABASE_KEY` (warn-and-continue if missing; `REQUIRE_PERSISTENCE=1` to fail-fast instead).
 
-**Twin coordination** — `TWIN_API_SECRET` (must match across both bots), `IRENE_API_URL` on Eris, `ERIS_API_URL` on Irene, plus owner / twin Discord IDs (`BOT_OWNER_ID`, `TWIN_BOT_ID`, `DISCORD_USER_ID`, `ERIS_BOT_ID`). Per [user memory](.) and the open-source release commit (b59e54c), no Discord IDs or URLs are hardcoded — all env.
+**Twin coordination** — `TWIN_API_SECRET` (must match across both bots), `IRENE_API_URL` on Eris, `ERIS_API_URL` on Irene, plus owner / twin Discord IDs (`BOT_OWNER_ID`, `TWIN_BOT_ID`, `DISCORD_USER_ID`, `ERIS_BOT_ID`). Discord IDs and service URLs are environment-loaded; do not hardcode personal deployment values.
 
 **Optional integrations** (warn-and-skip if missing):
 - `LASTFM_API_KEY` — Eris `/fm` commands
@@ -208,7 +208,7 @@ Validation is in [packages/eris/config.js:373-402](packages/eris/config.js#L373-
 - `GITHUB_TOKEN`, `GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN`, `RENDER_API_KEY` — agentic-tool integrations
 - Irene Lavalink: `LAVALINK_HOST`, `LAVALINK_PORT`, `LAVALINK_PASSWORD`, `LAVALINK_SECURE`
 - `PC_AGENT_DISABLED=1` — kill switch for owner-only machine-level tools
-- `DASHBOARD_API_KEY` — alternate bearer for the Base44 dashboard reads
+- `DASHBOARD_API_KEY` — bearer token for non-health dashboard `/api/*` routes
 
 Tunables (cooldowns, history budgets, embed colors, request timeouts) live in the same `config.js` files and are overridable via `TIMEOUT_*` env vars.
 
@@ -218,8 +218,8 @@ Tunables (cooldowns, history budgets, embed colors, request timeouts) live in th
 
 The root `render.yaml` describes two web services in one repo, each pinned to the monorepo root so the workspace dependency on `@defnotean/shared` resolves.
 
-- `eris-bot` — `plan: free`, `npm install && npm run start:eris`, healthcheck `/`.
-- `irene-bot` — `plan: standard`, `npm install && npm run start:irene`, healthcheck `/api/health`.
+- `eris-bot` — `plan: free`, `buildCommand: npm ci`, `startCommand: npm run start:eris`, healthcheck `/`.
+- `irene-bot` — `plan: standard`, `buildCommand: npm ci`, `startCommand: npm run start:irene`, healthcheck `/api/health`.
 - Both services share the same `TWIN_API_SECRET`; Eris's `IRENE_API_URL` points at Irene's Render URL. Self-hosters and forks pick their own service names.
 
 ### B. Self-host single-host

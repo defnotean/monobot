@@ -5,7 +5,9 @@
 If you believe you've found a security vulnerability in MonoBot, please report it
 privately rather than opening a public GitHub issue.
 
-**Contact:** `security@<your-domain>`
+**Contact:** use GitHub private vulnerability reporting for this repository if
+it is available. If it is not, contact the repository owner privately and avoid
+posting exploit details in a public issue.
 
 Include in your report:
 
@@ -62,7 +64,7 @@ Discord developer portal, redeploy, audit guild audit logs, and review the
 ### 3. Compromised twin secret
 
 Eris and Irene authenticate cross-process calls with an HMAC-SHA256 shared
-secret (`TWIN_SECRET`). An attacker with this secret can forge requests
+secret (`TWIN_API_SECRET`). An attacker with this secret can forge requests
 between the two bots within the ±60s skew window. Defenses are local: replay
 cache, constant-time comparison, body-bound signature. There is no
 out-of-band revocation — rotation requires updating both `.env` files and
@@ -225,7 +227,7 @@ list, in no particular order:
 ### HMAC twin secret rotation procedure
 
 1. Generate a new high-entropy secret: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-2. Update `TWIN_SECRET` in **both** `packages/eris/.env` and
+2. Update `TWIN_API_SECRET` in **both** `packages/eris/.env` and
    `packages/irene/.env`.
 3. Restart both processes within the same ±60s skew window so neither
    accepts requests signed by the other's old secret.

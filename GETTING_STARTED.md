@@ -4,7 +4,7 @@ This guide takes you from a fresh `git clone` to a running bot in roughly 15 min
 
 ## Prerequisites
 
-- **Node.js 18+** (`node -v` to check; 20+ recommended)
+- **Node.js 22.12.0+** (`node -v` to check; Node 24.x is the production target)
 - **npm 9+** (ships with Node)
 - A **Discord bot** for whichever bot you want to run — create one at [discord.com/developers/applications](https://discord.com/developers/applications). You need the bot's **token** and **application ID**.
 - An **AI provider key**. Gemini (`AI_PROVIDER=gemini` + `GEMINI_API_KEY`) is the simplest start. See [docs/llm-provider-guide.md](./docs/llm-provider-guide.md) for OpenRouter, Groq, Cerebras, or fully-local Ollama / LM Studio setup (no API key needed for the local options).
@@ -15,10 +15,10 @@ This guide takes you from a fresh `git clone` to a running bot in roughly 15 min
 ```bash
 git clone https://github.com/defnotean/monobot
 cd monobot
-npm install
+npm ci
 ```
 
-`npm install` hoists dependencies to the root via npm workspaces. It should complete cleanly on macOS, Linux, and Windows.
+`npm ci` installs the locked workspace dependency graph from `package-lock.json`. It should complete cleanly on macOS, Linux, and Windows.
 
 ## 2. Pick a bot
 
@@ -82,14 +82,14 @@ You should see logs like:
 [Discord] Online in 1 guild(s)
 ```
 
-For an auto-restart dev loop, use `npm run dev --workspace=@defnotean/eris` (uses `tsx --watch`).
+For an auto-restart dev loop, use `npm run dev:eris` from the repo root, or `npm run dev --workspace=@defnotean/eris`; both call `node --watch index.js`.
 
 ## 7. Run the tests
 
 ```bash
 npm run test:eris
 npm run test:irene
-npm test          # both
+npm test          # all workspaces with tests
 ```
 
 Tests use `vitest` and don't touch Discord or Supabase — safe to run anywhere.
@@ -105,7 +105,7 @@ Tests use `vitest` and don't touch Discord or Supabase — safe to run anywhere.
 
 | Symptom | Fix |
 |---|---|
-| `Cannot find module '@discordjs/opus'` warning | Harmless — voice features disabled. To enable, install Windows Build Tools / Xcode CLT and run `npm install --include=optional` |
+| `Cannot find module '@discordjs/opus'` warning | Harmless - voice listener features are disabled. To enable native Opus, install build tools and add an Opus package explicitly in the Irene workspace, e.g. `npm install @discordjs/opus --workspace=@defnotean/irene` |
 | `[WARN] SUPABASE_URL / SUPABASE_KEY missing` | Eris: runs without persistence (fine for testing). Irene: boots but loses state on every restart — set up a free Supabase project, run one locally (see [self-hosting.md](./docs/self-hosting.md)), or set `REQUIRE_PERSISTENCE=1` to fail-fast |
 | Bot connects but doesn't respond to mentions | Check **Message Content Intent** is enabled in Developer Portal, and `BOT_OWNER_ID` matches your Discord user ID |
 | `[FATAL] DISCORD_TOKEN is required` | `.env` not found or token line malformed — check `packages/<bot>/.env` is in the right folder |

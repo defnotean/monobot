@@ -451,7 +451,7 @@ Run `npx vitest -u` to update snapshots after intentional changes.
 
 These are flagged in [CONTRIBUTING.md](../CONTRIBUTING.md) — good places to add tests when you touch them:
 
-- `ai/executor.js` (Irene's is 1,663 lines, no direct tests)
+- Irene AI router / sub-executors (`packages/irene/ai/executor.js` is now a compact router with direct `executeTool` coverage; add focused tests for touched routes or executors)
 - `ai/toolRegistry.js` (selection logic)
 - `events/messageCreate.js` (the gauntlet — easy to add gate-by-gate tests)
 
@@ -472,7 +472,7 @@ When a test fails intermittently, walk this list before assuming it's a real bug
 - **Test depends on file system** — `vi.mock("node:fs")`.
 - **Network calls** — find the leak (look for un-mocked `fetch`, embeddings, or Discord REST calls) and mock the module that owns it.
 
-The known existing flake: `bumpApplause.test.ts` (1 of 338 in Eris). Pre-existing; not your fault if it fails once.
+Known flakes: none currently documented here. If a test flakes, capture the exact command, retry behavior, and failing output before treating it as pre-existing.
 
 ## Setup file
 
@@ -496,4 +496,4 @@ GitHub Actions is wired at `.github/workflows/test.yml`. It runs the same gates 
 - run: npm run build --workspaces --if-present
 ```
 
-`lint:version-sync` is the guard against the 2026-04-24 hoisting bug class — catches divergent dep ranges across workspaces.
+`lint:version-sync` is the guard against the 2026-04-24 hoisting bug class — it catches divergent non-local dependency ranges across workspaces and intentionally skips local `@defnotean/*` workspace links.

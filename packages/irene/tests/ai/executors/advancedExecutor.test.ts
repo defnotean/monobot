@@ -48,12 +48,13 @@ describe("callEris (ask_eris twin client)", () => {
     expect(v.ok).toBe(true);
   });
 
-  it("does NOT sign GET requests (Eris's /api/twin gate is POST-only)", async () => {
+  it("uses Bearer auth, not HMAC, for read-only GET requests", async () => {
     await callEris("/mood");
     expect(captured!.init.method).toBe("GET");
     const headers = captured!.init.headers as Record<string, string>;
     expect(headers["x-twin-signature"]).toBeUndefined();
     expect(headers["x-twin-timestamp"]).toBeUndefined();
+    expect(headers.Authorization).toBe(`Bearer ${config.twinApiSecret}`);
     expect(captured!.init.body).toBeUndefined();
   });
 

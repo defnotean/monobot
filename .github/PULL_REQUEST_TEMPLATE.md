@@ -17,7 +17,7 @@
 
 ## Checklist
 
-- [ ] Tests pass: `npm test`
+- [ ] Tests pass: `npm test --workspaces --if-present`
 - [ ] If editing shared code, drift inventory checked ([docs/drift-inventory.md](../docs/drift-inventory.md))
 - [ ] If adding env vars, `.env.example` updated for affected packages
 - [ ] If adding a new tool, registered + added to `TOOLCALLING.md` or its category doc

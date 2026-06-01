@@ -19,7 +19,7 @@ npm run test:watch --workspace=@defnotean/eris
 ## Prereqs
 
 You should already be set up per [GETTING_STARTED.md](../GETTING_STARTED.md). The summary:
-- Node 18+ (20+ recommended)
+- Node 22.12.0+ (Node 24.x matches production)
 - `.env` populated for whichever bot(s) you're working on
 - A [dev guild + dev Discord app + dev Supabase project](./dev-guild-workflow.md) — never against prod
 
@@ -241,7 +241,7 @@ LAVALINK_SECURE=false
 The voice listener needs `@discordjs/opus` to decode received Opus audio. On Windows, this requires Visual Studio Build Tools. On Mac/Linux it usually builds without trouble.
 
 ```bash
-npm install --include=optional @discordjs/opus
+npm install @discordjs/opus --workspace=@defnotean/irene
 ```
 
 If install fails, voice receive doesn't work locally. Music playback (Lavalink-side) is unaffected.
@@ -344,8 +344,10 @@ If you've been debugging the same thing for >30 min:
 
 Before opening a PR — see [CONTRIBUTING.md](../CONTRIBUTING.md) for the full list. Quick version:
 
-- [ ] `npm test` passes
+- [ ] `npm test --workspaces --if-present` passes
 - [ ] `npm run lint:version-sync` passes
+- [ ] `npm audit --audit-level=moderate` passes
+- [ ] `npm run build --workspaces --if-present` passes
 - [ ] Bot starts cleanly (`npm run dev:<bot>`)
 - [ ] Affected slash commands work in dev guild
 - [ ] If you touched moderation: tested against an alt account

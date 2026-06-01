@@ -50,6 +50,10 @@ services:
         value: "1"
       - key: TWIN_API_SECRET
         sync: false
+      - key: IRENE_API_URL
+        value: https://irene-bot.onrender.com
+      - key: TWIN_BOT_ID
+        sync: false
       - key: DASHBOARD_API_KEY
         sync: false
       - key: PC_AGENT_DISABLED
@@ -72,6 +76,8 @@ services:
       - key: DISCORD_BOT_TOKEN
         sync: false
       - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_USER_ID
         sync: false
       - key: AI_PROVIDER
         value: openrouter
@@ -104,6 +110,10 @@ services:
       - key: REQUIRE_PERSISTENCE
         value: "1"
       - key: TWIN_API_SECRET
+        sync: false
+      - key: ERIS_API_URL
+        value: https://eris-bot.onrender.com
+      - key: ERIS_BOT_ID
         sync: false
       - key: DASHBOARD_API_KEY
         sync: false

@@ -7,6 +7,13 @@ LLM tool dispatcher's mod tools in
 `packages/irene/ai/executors/moderationExecutor.js` (chat-driven, AI
 chooses to act on a mod's behalf).
 
+## Current status (2026-06-01)
+
+The original "no confirmation step" finding has been fixed for AI-initiated
+destructive moderation. `executeTool` threads `aiInitiated`, the moderation
+executor returns pending confirmation prompts for ban/kick/tempban and large
+purges, and regression coverage lives under `packages/irene/tests/ai`.
+
 ## Tools inventory
 
 | Surface | Entry point | Destructive ops |
@@ -92,21 +99,12 @@ Residual FP exposure:
 
 ## Top 5 risks
 
-1. **No confirmation step on destructive AI tool calls.** Every call in
-   `HANDLED` executes immediately on dispatch — no two-step confirm,
-   no ephemeral preview. A mis-parsed user message ("ban whoever's been
-   spamming") combined with a fuzzy `findMember` match can ban the wrong
-   person. The `findMember` resolver runs against displayName, username,
-   and ID with substring matching.
-2. **`purge_messages` allows AI-driven 500-message deletion with weak
-   intent verification.** Caller perm check is the ADMIN_TOOLS gate only
-   (no `_memberHasPerm(ManageMessages)` re-check inside the
-   `purge_messages` branch). The `from_user` / `exclude_user` filters now
-   fail loud on unresolvable names (`moderationExecutor.js:513-522`) —
-   prior regressions silently purged everyone. **Still no upper bound on
-   total messages purged across a single user message** (model can issue
-   multiple parallel purge_messages calls per turn — see `dual.js:534`
-   parallel `Promise.all`).
+1. **Fixed: destructive AI tool calls need human confirmation.** AI-initiated
+   ban/kick/tempban paths return a pending confirm prompt, and the confirmed
+   action records the confirming human plus the original instruction.
+2. **Partially fixed: AI purge confirmation.** AI purges above the confirmation
+   threshold require a human click, and unresolved filters fail loud. Keep an
+   eye on aggregate per-turn purge volume if tool parallelism changes.
 3. **`trusted_users` cache stale-revocation window.** Up to 5 min after a
    trusted user is revoked, slash commands and the upstream `isAdmin`
    flag still treat them as admin-equivalent
