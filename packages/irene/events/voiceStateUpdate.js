@@ -7,7 +7,7 @@ import { getGuildSettings, isDmOptout, getVcTemplate, getVcDefaultLimit, saveTem
 import { log, sendModLog } from "../utils/logger.js";
 import { logEmbed, LC, logEvent } from "../utils/embeds.js";
 import { EmbedBuilder, ChannelType, PermissionFlagsBits } from "discord.js";
-import { tempChannels, tempTextChannels, tempVcSeq, renameTimers, tempControlPanels, tempVcCreatedAt, tempVcMembers, ownerGraceTimers, guildVcSeqCounters, manualRenames } from "../utils/tempvc.js";
+import { tempChannels, pendingCreateVcUsers, tempTextChannels, tempVcSeq, renameTimers, tempControlPanels, tempVcCreatedAt, tempVcMembers, ownerGraceTimers, guildVcSeqCounters, manualRenames } from "../utils/tempvc.js";
 import { applyVcTemplate, queueRename, initRenameTimer } from "../utils/vcrenamer.js";
 import { createControlPanel, updateControlPanel } from "../utils/vcpanel.js";
 import { getQueue, handleVoiceMembershipChange } from "../music/player.js";
@@ -642,6 +642,12 @@ export async function execute(oldState, newState) {
   if (newState.channel.id !== settings.create_vc_channel_id) return;
 
   // User joined the trigger channel
+  const createVcLockKey = `${guild.id}:${member.id}`;
+  if (pendingCreateVcUsers.has(createVcLockKey)) {
+    log(`[CreateVC] Ignoring duplicate create request for ${member.user.tag} — creation already in progress`);
+    return;
+  }
+
   // Check if they already own a temp VC in this server
   for (const [existingId, ownerId] of tempChannels.entries()) {
     if (ownerId === member.id) {
@@ -660,6 +666,7 @@ export async function execute(oldState, newState) {
   const defaultLimit = getVcDefaultLimit(guild.id);
   const channelName = applyVcTemplate(template, member);
 
+  pendingCreateVcUsers.add(createVcLockKey);
   try {
     const newVc = await guild.channels.create({
       name: channelName,
@@ -755,6 +762,8 @@ export async function execute(oldState, newState) {
     });
   } catch (err) {
     log(`[CreateVC] Failed to create VC for ${member.user.tag}: ${err.message}`);
+  } finally {
+    pendingCreateVcUsers.delete(createVcLockKey);
   }
 
   // ── AFK tracking ─────────────────────────────────────────────────────────

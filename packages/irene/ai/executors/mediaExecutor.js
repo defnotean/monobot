@@ -53,8 +53,8 @@ export async function execute(toolName, input, message, ctx) {
 
   switch (toolName) {
     case "send_gif": {
-      const klipyKey = process.env.KLIPY_API_KEY;
-      if (!klipyKey) return "GIF feature not set up — add KLIPY_API_KEY to environment variables";
+      const klipyKey = config.klipyApiKey;
+      if (!klipyKey) return "couldn't send a GIF right now. Continue naturally without mentioning internal setup.";
       const gifScope = `${guild?.id || "dm"}:${message.channel?.id || "dm"}`;
       const explicitGif = isExplicitGifRequest(`${message.content || ""} ${input.caption || ""}`);
       if (!explicitGif) {
@@ -62,16 +62,27 @@ export async function execute(toolName, input, message, ctx) {
         if (!cadence.allowed) return "natural GIF skipped: cooldown active. Reply with text instead and do not mention the cooldown.";
       }
       const q = encodeURIComponent(input.query || "meme");
-      const res = await fetch(`https://api.klipy.com/api/v1/${klipyKey}/gifs/search?q=${q}&per_page=20&content_filter=medium&customer_id=${message.author.id}`);
-      if (!res.ok) return `Klipy API error: ${res.status}`;
-      const json = await res.json();
+      let json;
+      try {
+        const res = await safeFetch(
+          `https://api.klipy.com/api/v1/${klipyKey}/gifs/search?q=${q}&per_page=20&content_filter=medium&customer_id=${message.author.id}`,
+          { maxBytes: 2_000_000, timeoutMs: 8_000 }
+        );
+        if (res.status < 200 || res.status >= 300) {
+          return "couldn't find a usable GIF right now. Continue naturally without mentioning the GIF service.";
+        }
+        json = JSON.parse(res.text || "{}");
+      } catch (err) {
+        log(`[GIF] Search failed for "${input.query || "meme"}": ${err?.message || err}`);
+        return "couldn't find a usable GIF right now. Continue naturally without mentioning the GIF service.";
+      }
       const results = json?.data?.data;
-      if (!results?.length) return `couldn't find a GIF for "${input.query}"`;
+      if (!results?.length) return `couldn't find a GIF for "${input.query}". Continue naturally without mentioning the GIF service.`;
       const pick = results[Math.floor(Math.random() * Math.min(results.length, 10))];
       const gifUrl = pick.file?.hd?.gif?.url ?? pick.file?.md?.gif?.url ?? pick.file?.sm?.gif?.url ?? null;
-      if (!gifUrl) return `found a result but couldn't extract the GIF URL`;
+      if (!gifUrl) return "couldn't find a usable GIF right now. Continue naturally without mentioning the GIF service.";
 
-      const gifSettings = getGuildSettings(guild.id);
+      const gifSettings = guild ? getGuildSettings(guild.id) : {};
       const useEmbed = gifSettings?.gif_embed !== false;
 
       {
@@ -86,7 +97,8 @@ export async function execute(toolName, input, message, ctx) {
         } catch (err) {
           log(`[GIF] Embed send failed: ${err.message} — falling back to URL`);
           const fallback = resolvedCaption ? `${resolvedCaption}\n${gifUrl}` : gifUrl;
-          await message.channel.send({ content: fallback, allowedMentions }).catch(() => {});
+          const sent = await message.channel.send({ content: fallback, allowedMentions }).then(() => true).catch(() => false);
+          if (!sent) return "couldn't send a GIF right now. Continue naturally without mentioning the send failure.";
         }
       }
       if (!explicitGif) recordNaturalGif(gifScope);

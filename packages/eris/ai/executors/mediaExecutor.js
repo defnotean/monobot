@@ -74,7 +74,7 @@ export async function execute(toolName, input, message, _context) {
         const cadence = shouldAllowNaturalGif(gifScope);
         if (!cadence.allowed) return "natural GIF skipped: cooldown active. Reply with text instead and do not mention the cooldown.";
       }
-      if (!config.klipyApiKey) return "gif api not configured";
+      if (!config.klipyApiKey) return "couldn't send a gif right now. continue naturally without mentioning internal setup.";
       try {
         const q = encodeURIComponent(query);
         // Fixed-host API call but still routed through safeFetch — gives us
@@ -84,57 +84,38 @@ export async function execute(toolName, input, message, _context) {
           `https://api.klipy.com/api/v1/${config.klipyApiKey}/gifs/search?q=${q}&per_page=20&content_filter=medium&customer_id=${message.author.id}`,
           { maxBytes: HTML_MAX_BYTES, timeoutMs: 8_000 }
         );
-        if (res.status < 200 || res.status >= 300) return `gif api error: ${res.status}`;
+        if (res.status < 200 || res.status >= 300) return "couldn't find a usable gif right now. continue naturally without mentioning the gif service.";
         let json;
         try { json = JSON.parse(res.text || ""); }
-        catch { return "gif api error: invalid response"; }
+        catch { return "couldn't find a usable gif right now. continue naturally without mentioning the gif service."; }
         const results = json?.data?.data;
-        if (!results?.length) return `no gif found for "${query}"`;
+        if (!results?.length) return `no gif found for "${query}". continue naturally without mentioning the gif service.`;
         const pick = results[Math.floor(Math.random() * Math.min(results.length, 10))];
         const gifUrl = pick?.file?.hd?.gif?.url ?? pick?.file?.md?.gif?.url ?? pick?.file?.sm?.gif?.url ?? null;
-        if (!gifUrl) return `found a result but couldn't extract the gif url`;
+        if (!gifUrl) return "couldn't find a usable gif right now. continue naturally without mentioning the gif service.";
         const { EmbedBuilder } = await import("discord.js");
         const embed = new EmbedBuilder()
           .setImage(gifUrl)
           .setColor(config.colors.gif || 0x2b2d31);
-        // Resolve @username mentions in caption to proper Discord <@id> pings.
-        // Refuse ambiguous names (two members both named "alex") and skip
-        // @everyone/@here so we don't accidentally mass-ping. Without these
-        // guards we'd ping whichever member the cache iterator yielded first.
-        let resolvedCaption = input.caption || "";
-        const resolvedMentionIds = new Set();
-        if (resolvedCaption && message.guild) {
-          resolvedCaption = resolvedCaption.replace(/@(\w+)/g, (match, name) => {
-            const lower = name.toLowerCase();
-            if (lower === "everyone" || lower === "here") return name; // strip the @
-            const matches = message.guild.members.cache.filter(m =>
-              m.user.username.toLowerCase() === lower
-              || m.displayName.toLowerCase() === lower
-              || m.user.globalName?.toLowerCase() === lower
-            );
-            if (matches.size === 1) {
-              const member = matches.first();
-              resolvedMentionIds.add(member.id);
-              return `<@${member.id}>`;
-            }
-            return match; // 0 or 2+ matches — keep literal text, don't ping
-          });
-        }
+        const { content: resolvedCaption, allowedMentions } = resolveCaptionMentions(input.caption, message.guild);
         const sendOpts = resolvedCaption
           ? {
               content: resolvedCaption,
               embeds: [embed],
-              allowedMentions: {
-                parse: [],
-                ...(resolvedMentionIds.size ? { users: [...resolvedMentionIds] } : {}),
-              },
+              allowedMentions,
             }
-          : { embeds: [embed] };
-        await message.channel.send(sendOpts);
+          : { embeds: [embed], allowedMentions };
+        try {
+          await message.channel.send(sendOpts);
+        } catch {
+          const fallback = resolvedCaption ? `${resolvedCaption}\n${gifUrl}` : gifUrl;
+          const sent = await message.channel.send({ content: fallback, allowedMentions }).then(() => true).catch(() => false);
+          if (!sent) return "couldn't send a gif right now. continue naturally without mentioning the send failure.";
+        }
         if (!explicitGif) recordNaturalGif(gifScope);
         return `sent gif for ${query}`;
       } catch (e) {
-        return `gif search failed: ${e.message}`;
+        return "couldn't find a usable gif right now. continue naturally without mentioning the gif service.";
       }
     }
 

@@ -149,6 +149,7 @@ beforeEach(() => {
   updateControlPanel.mockClear();
   // Wipe shared temp VC maps so cross-test state doesn't bleed.
   tempvc.tempChannels.clear();
+  tempvc.pendingCreateVcUsers.clear();
   tempvc.tempTextChannels.clear();
   tempvc.tempVcSeq.clear();
   tempvc.tempControlPanels.clear();
@@ -345,6 +346,49 @@ describe("voiceStateUpdate", () => {
     // Should NOT create a new channel — should move the user back into their existing one.
     expect(guild.channels.create).not.toHaveBeenCalled();
     expect(member.voice.setChannel).toHaveBeenCalledWith(existing, "Prevent duplicate VC");
+  });
+
+  it("create-VC: ignores duplicate trigger events while channel creation is in flight", async () => {
+    const guild = makeGuild({
+      settings: { create_vc_channel_id: "trigger-9" },
+    });
+    const user = makeUser({ id: "444444444444444444", username: "dana" });
+    const member: any = {
+      id: user.id,
+      user,
+      guild,
+      voice: { setChannel: vi.fn(async () => {}) },
+    };
+    const trigger = makeChannel("trigger-9", "+ New VC");
+    guild.channels.cache.set(trigger.id, trigger);
+
+    let releaseCreate!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      guild.channels.create = vi.fn(async () => {
+        resolve();
+        await new Promise<void>((release) => { releaseCreate = release; });
+        return {
+          id: "newvc-2",
+          name: "dana's VC",
+          type: ChannelType.GuildVoice,
+          delete: vi.fn(async () => {}),
+        };
+      });
+    });
+
+    const oldState = makeState({ channel: null, member, guild });
+    const newState = makeState({ channel: trigger, member, guild });
+
+    const first = execute(oldState, newState);
+    await createStarted;
+    await execute(oldState, newState);
+    releaseCreate();
+    await first;
+
+    expect(guild.channels.create).toHaveBeenCalledTimes(1);
+    expect(member.voice.setChannel).toHaveBeenCalledTimes(1);
+    expect(createControlPanel).toHaveBeenCalledTimes(1);
+    expect(tempvc.pendingCreateVcUsers.size).toBe(0);
   });
 
   it("queues a rename + refreshes the control panel when a member joins a temp VC", async () => {

@@ -8,13 +8,17 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+const h = vi.hoisted(() => ({
+  config: { colors: { gif: 0x2b2d31 }, geminiKeys: [], klipyApiKey: "" },
+}));
+
 vi.mock("../../../database.js", () => ({
   getGuildSettings: vi.fn(() => ({})),
   setGifEmbed: vi.fn(),
 }));
 
 vi.mock("../../../config.js", () => ({
-  default: { colors: { gif: 0x2b2d31 }, geminiKeys: [] },
+  default: h.config,
 }));
 
 vi.mock("../../../utils/logger.js", () => ({ log: vi.fn() }));
@@ -52,6 +56,7 @@ const ctx = { guild } as any;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.config.klipyApiKey = "";
 });
 
 afterEach(() => {
@@ -68,21 +73,22 @@ describe("mediaExecutor — routing", () => {
 });
 
 describe("send_gif", () => {
-  it("explains the feature is unconfigured when KLIPY_API_KEY is missing", async () => {
+  it("degrades without exposing tool configuration when KLIPY_API_KEY is missing", async () => {
     delete process.env.KLIPY_API_KEY;
     const { msg } = buildMessage();
     const r = await execute("send_gif", { query: "cat" }, msg, ctx);
-    expect(String(r)).toMatch(/GIF feature not set up/i);
+    expect(String(r)).toMatch(/couldn't send a GIF right now/i);
+    expect(String(r)).not.toMatch(/KLIPY_API_KEY|not set up|configuration/i);
   });
 
   it("allows only resolved user mentions in GIF captions", async () => {
-    process.env.KLIPY_API_KEY = "test-key";
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    h.config.klipyApiKey = "test-key";
+    safeFetch.mockResolvedValue({
+      status: 200,
+      text: JSON.stringify({
         data: { data: [{ file: { sm: { gif: { url: "https://cdn.test/cat.gif" } } } }] },
       }),
-    })));
+    });
     const member = { id: "alice-id", user: { username: "alice" }, displayName: "Alice" };
     const localGuild = {
       id: "guild-1",
@@ -112,13 +118,13 @@ describe("send_gif", () => {
   });
 
   it("keeps the same mention restrictions on GIF URL fallback", async () => {
-    process.env.KLIPY_API_KEY = "test-key";
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    h.config.klipyApiKey = "test-key";
+    safeFetch.mockResolvedValue({
+      status: 200,
+      text: JSON.stringify({
         data: { data: [{ file: { sm: { gif: { url: "https://cdn.test/cat.gif" } } } }] },
       }),
-    })));
+    });
     const member = { id: "alice-id", user: { username: "alice" }, displayName: "Alice" };
     const localGuild = {
       id: "guild-1",

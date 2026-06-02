@@ -83,6 +83,26 @@ export { triggerSleep, isSleeping, wakeSleep };
 // 1h TTL so idle channels drop quickly and only actively-used conversations
 // stay warm. compressHistory still enforces per-entry char budget.
 const conversations = new LRUCache(2000, 60 * 60_000);
+const TYPING_REFRESH_MS = 8_000;
+const MAX_TYPING_REFRESH_MS = 45_000;
+
+function startTypingRefresh(channel) {
+  let interval = null;
+  let timeout = null;
+  const stop = () => {
+    if (interval) clearInterval(interval);
+    if (timeout) clearTimeout(timeout);
+    interval = null;
+    timeout = null;
+  };
+
+  channel.sendTyping().catch(() => {});
+  interval = setInterval(() => {
+    channel.sendTyping().catch(() => {});
+  }, TYPING_REFRESH_MS);
+  timeout = setTimeout(stop, MAX_TYPING_REFRESH_MS);
+  return stop;
+}
 
 // ─── 1. ENTRY + 2. GATING ───────────────────────────────────────────────
 export default async function messageCreate(message) {
@@ -124,14 +144,9 @@ export default async function messageCreate(message) {
   if (!isDM) message.channel.sendTyping().catch(() => {});
 
   await withLock(channelKey, async () => {
-    let _typingInterval = null;
-    const clearTypingInterval = () => { if (_typingInterval) { clearInterval(_typingInterval); _typingInterval = null; } };
+    let clearTypingInterval = () => {};
     try {
-      await message.channel.sendTyping().catch(() => {}); // Refresh after lock acquired
-      // Keep typing indicator alive while AI processes (refreshes every 8s)
-      _typingInterval = setInterval(() => {
-        message.channel.sendTyping().catch(() => {});
-      }, 8_000);
+      if (!isDM) clearTypingInterval = startTypingRefresh(message.channel);
 
       // ─── 3. CONTEXT BUILDING ────────────────────────────────────────────
       const ctx = await buildContext({ message, isTwin, isDM, isAwaitedReply, channelKey, client, conversations });
@@ -182,6 +197,8 @@ export default async function messageCreate(message) {
       }
       // Gate: if firewall flagged the input, send block reason instead of error reply.
       await firewallGate(() => message.reply(friendlyMsg).catch(() => {})).catch(() => {});
+    } finally {
+      clearTypingInterval();
     }
   });
 }

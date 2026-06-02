@@ -594,7 +594,6 @@ export async function runGeminiChat({
           _completedCount++;
           return;
         }
-        calledSignatures.add(signature);
 
         // Run args through the shared redactor BEFORE stringifying so
         // secret-shaped values + secret-named keys (apiKey, token, etc.) get
@@ -644,6 +643,9 @@ export async function runGeminiChat({
         }
 
         log(`[Gemini] ${routed.toolName} → ${result}`);
+        if (!(typeof result === "string" && result.startsWith("Error:"))) {
+          calledSignatures.add(signature);
+        }
         // Track usage for two-tier tool selection
         const channelKey = message.guild ? `${message.guild.id}-${message.author?.id || "unknown"}` : `dm-${message.author?.id || "unknown"}`;
         registry.trackUsage(channelKey, routed.toolName);

@@ -350,6 +350,7 @@ const config = {
   supabaseUrl: env("SUPABASE_URL"),
   supabaseKey: env("SUPABASE_KEY"),
   supabaseAnonKey: env("SUPABASE_ANON_KEY"),
+  klipyApiKey: env("KLIPY_API_KEY"),
   requirePersistence: env("REQUIRE_PERSISTENCE", "0") === "1",
   get supabaseEnabled() {
     return !!(this.supabaseUrl && this.supabaseKey && !this.supabaseUrl.includes("your-"));

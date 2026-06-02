@@ -73,6 +73,26 @@ const lazyAfk       = async () => (_modAfk       ??= await import("../commands/u
 const lazyHighlight = async () => (_modHighlight ??= await import("../commands/utility/highlight.js"));
 const lazyLeveling  = async () => (_modLeveling  ??= await import("../utils/leveling.js"));
 const lazyContextCompressor = async () => (await import("../ai/contextCompressor.js"));
+const TYPING_REFRESH_MS = 8_000;
+const MAX_TYPING_REFRESH_MS = 45_000;
+
+function startTypingRefresh(channel) {
+  let interval = null;
+  let timeout = null;
+  const stop = () => {
+    if (interval) clearInterval(interval);
+    if (timeout) clearTimeout(timeout);
+    interval = null;
+    timeout = null;
+  };
+
+  channel.sendTyping().catch(() => {});
+  interval = setInterval(() => {
+    channel.sendTyping().catch(() => {});
+  }, TYPING_REFRESH_MS);
+  timeout = setTimeout(stop, MAX_TYPING_REFRESH_MS);
+  return stop;
+}
 
 // Conversations: pre-populated from DB on first use via getConversations()
 // loadConversations() returns a Map; we lazy-initialize from DB.
@@ -543,9 +563,7 @@ export async function execute(message) {
       await message.channel.sendTyping().catch(() => {});
     }
 
-    const typingInterval = isDM ? null : setInterval(() => {
-      message.channel.sendTyping().catch(() => {});
-    }, 8_000);
+    const clearTypingRefresh = isDM ? null : startTypingRefresh(message.channel);
 
     // ── Worker AI — handles conversation + tool calls ────────────────────
     // (humanity context already injected above before ack timer)
@@ -588,7 +606,7 @@ export async function execute(message) {
             // Only show progress for actual admin/complex tasks — skip for simple tools (gifs, memory, search, etc.)
             if (!isTask) return;
 
-            if (typingInterval) clearInterval(typingInterval);
+            clearTypingRefresh?.();
 
             // Use fast AI to generate a natural progress update from the raw tool status
             let displayStatus = rawStatus;
@@ -617,7 +635,7 @@ export async function execute(message) {
         new Promise((_, reject) => setTimeout(() => reject(new Error("AI generation timed out after 600 seconds")), 600_000))
       ]);
     } finally {
-      if (typingInterval) clearInterval(typingInterval);
+      clearTypingRefresh?.();
       // Cancel ack timer if worker finished before 2s
       if (typeof _ackTimer !== "undefined") { clearTimeout(_ackTimer); ackMsg = null; }
     }

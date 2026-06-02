@@ -1,21 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { replySpy, buildContextSpy, invokeAISpy } = vi.hoisted(() => ({
+const { replySpy, buildContextSpy, invokeAISpy, gateState } = vi.hoisted(() => ({
   replySpy: vi.fn(async () => {}),
   buildContextSpy: vi.fn(),
   invokeAISpy: vi.fn(),
-}));
-
-vi.mock("../../database.js", () => ({
-  getSupabase: () => null,
-}));
-
-vi.mock("../../utils/logger.js", () => ({ log: vi.fn() }));
-vi.mock("../../ai/firewall.js", () => ({ logBlockedAttempt: vi.fn() }));
-vi.mock("../../events/ready.js", () => ({ markActivity: vi.fn() }));
-
-vi.mock("../../events/messageCreate/gates.js", () => ({
-  runGates: vi.fn(async () => ({
+  gateState: {
     stop: false,
     isTwin: false,
     isDM: true,
@@ -27,7 +16,19 @@ vi.mock("../../events/messageCreate/gates.js", () => ({
       similarity: null,
     }),
     channelKey: "dm:222",
-  })),
+  } as any,
+}));
+
+vi.mock("../../database.js", () => ({
+  getSupabase: () => null,
+}));
+
+vi.mock("../../utils/logger.js", () => ({ log: vi.fn() }));
+vi.mock("../../ai/firewall.js", () => ({ logBlockedAttempt: vi.fn() }));
+vi.mock("../../events/ready.js", () => ({ markActivity: vi.fn() }));
+
+vi.mock("../../events/messageCreate/gates.js", () => ({
+  runGates: vi.fn(async () => gateState),
 }));
 
 vi.mock("../../events/messageCreate/channelLock.js", () => ({
@@ -79,11 +80,59 @@ function makeMessage() {
 }
 
 describe("messageCreate firewall placement", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    replySpy.mockClear();
+    buildContextSpy.mockReset();
+    invokeAISpy.mockReset();
+    gateState.stop = false;
+    gateState.isTwin = false;
+    gateState.isDM = true;
+    gateState.isAwaitedReply = false;
+    gateState.firewallPromise = Promise.resolve({
+      safe: false,
+      reason: "blocked by firewall",
+      matchedPattern: "ignore previous",
+      similarity: null,
+    });
+    gateState.channelKey = "dm:222";
+  });
+
   it("blocks before context build, AI generation, or tool dispatch", async () => {
     await messageCreate(makeMessage());
 
     expect(replySpy).toHaveBeenCalledWith("blocked by firewall");
     expect(buildContextSpy).not.toHaveBeenCalled();
     expect(invokeAISpy).not.toHaveBeenCalled();
+  });
+
+  it("clears the server typing refresh when AI invocation is skipped", async () => {
+    vi.useFakeTimers();
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    gateState.isDM = false;
+    gateState.firewallPromise = Promise.resolve({ safe: true });
+    gateState.channelKey = "ch:server";
+    buildContextSpy.mockResolvedValue({
+      cleanMessage: "hello",
+      displayName: "alice",
+      botName: "eris",
+      isTwinMsg: false,
+      systemInstruction: "system",
+      history: [],
+      userMsg: "hello",
+      formattedTools: [],
+      routerToolNames: [],
+      charBudget: 200,
+    });
+    invokeAISpy.mockResolvedValue({ result: null, aiMs: 0, skipped: true });
+    const message = makeMessage();
+    message.guildId = "guild-1";
+    message.guild = { id: "guild-1" };
+
+    await messageCreate(message);
+
+    expect(message.channel.sendTyping).toHaveBeenCalled();
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });

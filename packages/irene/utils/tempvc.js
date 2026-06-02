@@ -3,6 +3,11 @@
 // channelId → ownerId (userId string)
 export const tempChannels = new Map();
 
+// "guildId:userId" entries currently creating a join-to-create VC.
+// This closes the small race where duplicate voiceStateUpdate events can both
+// pass the "already owns a VC" check before the first channel is committed.
+export const pendingCreateVcUsers = new Set();
+
 // guildId → highest seq number assigned so far (avoids O(n) scan on every VC creation)
 export const guildVcSeqCounters = new Map();
 
