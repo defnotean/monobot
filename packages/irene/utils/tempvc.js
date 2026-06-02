@@ -7,6 +7,7 @@
 // privileges. The bot panel/slash commands perform owner actions by ID, which
 // lets owners disconnect members without granting server mute/deafen or channel
 // permission-edit powers.
+/** @type {import("discord.js").PermissionResolvable} */
 export const TEMP_VC_OWNER_ALLOW = [
   "ViewChannel",
   "Connect",
