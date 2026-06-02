@@ -254,11 +254,14 @@ const openaiCompatApiKeys = unique([
 ]);
 const KIMI_K26_MODEL = "moonshotai/kimi-k2.6";
 const selectedKimiOnNvidia = selectedAiProvider === "kimi";
+const DEFAULT_OWNER_ID = "1365814245739987078";
+const DEFAULT_OWNER_NAME = "defnotean";
 
 const config = {
   token: env("DISCORD_BOT_TOKEN"),
   clientId: env("DISCORD_CLIENT_ID"),
-  ownerId: env("DISCORD_USER_ID"),
+  ownerId: env("DISCORD_USER_ID", DEFAULT_OWNER_ID),
+  ownerName: env("DISCORD_OWNER_NAME", DEFAULT_OWNER_NAME),
   port: parseInt(env("PORT", "3001")),
 
   // Identifier used for personality / longmemory / audit rows in Supabase.
@@ -388,9 +391,13 @@ const config = {
   // To edit personality, modify files in prompts/ directory.
   botPersonality: (() => {
     const promptDir = join(__dirname, "prompts");
-    const ownerId = env("DISCORD_USER_ID");
+    const ownerId = env("DISCORD_USER_ID", DEFAULT_OWNER_ID);
+    const ownerName = env("DISCORD_OWNER_NAME", DEFAULT_OWNER_NAME);
     const twinBotId = env("ERIS_BOT_ID");
-    return readFileSync(join(promptDir, "irene-personality.md"), "utf8").replace(/\{\{OWNER_ID\}\}/g, ownerId ?? "").replace(/\{\{TWIN_BOT_ID\}\}/g, twinBotId ?? "");
+    return readFileSync(join(promptDir, "irene-personality.md"), "utf8")
+      .replace(/\{\{OWNER_ID\}\}/g, ownerId ?? "")
+      .replace(/\{\{OWNER_NAME\}\}/g, ownerName ?? "")
+      .replace(/\{\{TWIN_BOT_ID\}\}/g, twinBotId ?? "");
   })(),
 
   // ═══════════════════════════════════════════════════════════════════════

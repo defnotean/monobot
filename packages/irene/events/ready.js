@@ -187,7 +187,7 @@ export async function execute(client) {
   // Hoist all dynamic imports outside the loop — ES modules are cached after the first
   // import so there's no performance cost, but doing it inside a loop on every iteration
   // is unnecessarily noisy and causes await overhead on each channel.
-  const { tempChannels, tempTextChannels, tempVcSeq, guildVcSeqCounters, tempControlPanels, tempVcCreatedAt, tempVcMembers } = await import("../utils/tempvc.js");
+  const { tempChannels, tempTextChannels, tempVcSeq, guildVcSeqCounters, tempControlPanels, tempVcCreatedAt, tempVcMembers, TEMP_VC_OWNER_OVERWRITE } = await import("../utils/tempvc.js");
   const { createControlPanel, updateControlPanel } = await import("../utils/vcpanel.js");
   const { transferOwnership } = await import("./voiceStateUpdate.js");
   const { PermissionFlagsBits } = await import("discord.js");
@@ -211,24 +211,23 @@ export async function execute(client) {
         // could silently hijack ownership on every redeploy. Don't do
         // that. Trust the DB.
         //
-        // If the stored owner has lost ManageChannels somehow (permissions
-        // drift, overwrite wiped, etc.) re-grant it so they can actually
-        // use the panel. Being owner without perms is useless UX.
+        // Ensure the stored owner has only the safe access overwrite. Ownership
+        // is tracked by Discord user ID in tempChannels/DB, not by Discord
+        // permission names or ManageChannels overwrites.
         const resolvedOwnerId = vcData.ownerId;
         if (resolvedOwnerId) {
           const storedOverwrite = channel.permissionOverwrites.cache.get(resolvedOwnerId);
-          const storedHasManage = storedOverwrite?.allow.has(PermissionFlagsBits.ManageChannels) ?? false;
-          if (!storedHasManage) {
+          const hasUnsafeNativePerms = (storedOverwrite?.allow.has(PermissionFlagsBits.ManageChannels) ?? false)
+            || (storedOverwrite?.allow.has(PermissionFlagsBits.MoveMembers) ?? false)
+            || (storedOverwrite?.allow.has(PermissionFlagsBits.MuteMembers) ?? false)
+            || (storedOverwrite?.allow.has(PermissionFlagsBits.DeafenMembers) ?? false);
+          const hasConnect = storedOverwrite?.allow.has(PermissionFlagsBits.Connect) ?? false;
+          if (hasUnsafeNativePerms || !hasConnect) {
             try {
-              await channel.permissionOverwrites.edit(resolvedOwnerId, {
-                ManageChannels: true,
-                MuteMembers: true,
-                DeafenMembers: true,
-                MoveMembers: true,
-              }, { reason: "Restoring temp VC owner perms after restart" });
-              log(`[Ready] Re-granted owner perms for ${resolvedOwnerId} on "${channel.name}"`);
+              await channel.permissionOverwrites.edit(resolvedOwnerId, TEMP_VC_OWNER_OVERWRITE, { reason: "Restoring safe temp VC owner access after restart" });
+              log(`[Ready] Restored safe owner access for ${resolvedOwnerId} on "${channel.name}"`);
             } catch (err) {
-              log(`[Ready] Failed to re-grant owner perms on "${channel.name}": ${err.message}`);
+              log(`[Ready] Failed to restore safe owner access on "${channel.name}": ${err.message}`);
             }
           }
         }

@@ -19,7 +19,7 @@ import {
   setVcDefaultLimit,
   saveTempVc,
 } from "../../database.js";
-import { tempChannels, tempTextChannels, tempVcSeq, manualRenames } from "../../utils/tempvc.js";
+import { tempChannels, tempTextChannels, tempVcSeq, manualRenames, TEMP_VC_OWNER_OVERWRITE, TEMP_VC_OWNER_REVOKE } from "../../utils/tempvc.js";
 
 const HANDLED = new Set([
   "vc_private", "vc_public", "vc_lock", "vc_unlock", "vc_rename",
@@ -91,8 +91,7 @@ export async function execute(toolName, input, message, ctx) {
         if (ownerId && voiceCh.members.has(ownerId)) return "the owner is still in the channel — can't claim";
         // Update Discord first — if this throws, state is untouched
         await voiceCh.permissionOverwrites.edit(caller, {
-          ManageChannels: true, MoveMembers: true, MuteMembers: true, DeafenMembers: true,
-          ViewChannel: true, Connect: true, Speak: true, Stream: true, UseVAD: true,
+          ...TEMP_VC_OWNER_OVERWRITE,
         });
         tempChannels.set(voiceCh.id, caller.id);
         manualRenames.delete(voiceCh.id); // new owner — let auto-renamer pick up their game
@@ -162,11 +161,10 @@ export async function execute(toolName, input, message, ctx) {
         if (target.id === caller.id) return "that's already you";
         // Update Discord first — if this throws, state is untouched
         await voiceCh.permissionOverwrites.edit(target, {
-          ManageChannels: true, MoveMembers: true, MuteMembers: true, DeafenMembers: true,
-          ViewChannel: true, Connect: true, Speak: true, Stream: true, UseVAD: true,
+          ...TEMP_VC_OWNER_OVERWRITE,
         });
         await voiceCh.permissionOverwrites.edit(caller, {
-          ManageChannels: null, MoveMembers: null, MuteMembers: null, DeafenMembers: null,
+          ...TEMP_VC_OWNER_REVOKE,
         }).catch(() => {});
         tempChannels.set(voiceCh.id, target.id);
         manualRenames.delete(voiceCh.id); // new owner — let auto-renamer pick up their game

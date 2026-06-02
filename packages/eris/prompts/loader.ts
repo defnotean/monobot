@@ -29,11 +29,13 @@ export function clearCache(): void {
  * - Per-server renaming happens at runtime, not here
  * - Custom personality text from set_server_persona fully overrides this prompt
  */
-export function buildPersonality(ownerId: string): string {
+export function buildPersonality(ownerId: string, ownerName = "defnotean"): string {
   const parts = [
     loadPrompt("eris-personality"),
     loadPrompt("eris-tool-guide"),
-    loadPrompt("eris-relationships").replace("{{OWNER_ID}}", ownerId),
+    loadPrompt("eris-relationships")
+      .replace(/\{\{OWNER_ID\}\}/g, ownerId)
+      .replace(/\{\{OWNER_NAME\}\}/g, ownerName),
     loadPrompt("eris-rules"),
   ];
   return parts.join("\n\n");

@@ -68,6 +68,20 @@ function buildGuild(ownerId = "owner") {
   return { id: "guild-1", ownerId, roles: { everyone: { id: "everyone" } } };
 }
 
+function expectSafeOwnerOverwrite(overwrite: any) {
+  expect(overwrite).toEqual(expect.objectContaining({
+    ManageChannels: null,
+    MoveMembers: null,
+    MuteMembers: null,
+    DeafenMembers: null,
+    ViewChannel: true,
+    Connect: true,
+    Speak: true,
+    Stream: true,
+    UseVAD: true,
+  }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   tempChannels.clear();
@@ -165,6 +179,7 @@ describe("temp-VC ownership gates", () => {
     const caller = buildCaller({ id: "claimer", voiceCh });
     const r = await execute("vc_claim", {}, { member: caller, guild: buildGuild() }, { guild: buildGuild() });
     expect(voiceCh.permissionOverwrites.edit).toHaveBeenCalled();
+    expectSafeOwnerOverwrite(voiceCh.permissionOverwrites.edit.mock.calls[0][1]);
     expect(tempChannels.get("vc-owned")).toBe("claimer");
     expect(dbMock.saveTempVc).toHaveBeenCalled();
     expect(String(r)).toMatch(/you now own/i);
@@ -190,6 +205,29 @@ describe("temp-VC ownership gates", () => {
     const findMember = vi.fn(() => ({ id: "target", user: { tag: "target#0001" } }));
     const r = await execute("vc_transfer", { username: "target" }, { member: caller }, { guild: buildGuild(), findMember });
     expect(String(r)).toMatch(/isn't in your channel/i);
+  });
+
+  it("vc_transfer grants only safe owner access by Discord ID", async () => {
+    const target = { id: "target-id", user: { tag: "target#0001" } };
+    const voiceCh = buildVoiceChannel("vc-owned");
+    voiceCh.members = memberCollection([["target-id", target]]);
+    tempChannels.set("vc-owned", "caller");
+    const caller = buildCaller({ id: "caller", voiceCh });
+    const findMember = vi.fn((guild: any, lookup: string) => lookup === "target-id" ? target : null);
+
+    const r = await execute("vc_transfer", { username: "target-id" }, { member: caller }, { guild: buildGuild(), findMember });
+
+    expect(findMember).toHaveBeenCalledWith(expect.anything(), "target-id");
+    expect(voiceCh.permissionOverwrites.edit).toHaveBeenCalledWith(target, expect.any(Object));
+    expectSafeOwnerOverwrite(voiceCh.permissionOverwrites.edit.mock.calls[0][1]);
+    expect(voiceCh.permissionOverwrites.edit).toHaveBeenCalledWith(caller, expect.objectContaining({
+      ManageChannels: null,
+      MoveMembers: null,
+      MuteMembers: null,
+      DeafenMembers: null,
+    }));
+    expect(tempChannels.get("vc-owned")).toBe("target-id");
+    expect(String(r)).toMatch(/transferred ownership/i);
   });
 });
 

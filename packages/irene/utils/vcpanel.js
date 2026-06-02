@@ -17,7 +17,7 @@ import {
 import {
   tempChannels, tempControlPanels, tempTextChannels,
   tempVcSeq, manualRenames, renameTimers, ownerGraceTimers,
-  tempVcCreatedAt, tempVcMembers,
+  tempVcCreatedAt, tempVcMembers, TEMP_VC_OWNER_OVERWRITE, TEMP_VC_OWNER_REVOKE,
 } from "./tempvc.js";
 import { getChannelGames } from "./vcrenamer.js";
 import { log } from "./logger.js";
@@ -40,17 +40,6 @@ function getVcPrivacyState(vc, guild) {
 function resolvePanelOwner(vcId, vc, guild) {
   let ownerId = tempChannels.get(vcId);
   if (ownerId) return ownerId;
-
-  for (const [, ow] of vc.permissionOverwrites.cache) {
-    if (ow.type === 1 && ow.allow.has(PermissionFlagsBits.ManageChannels)) {
-      ownerId = ow.id;
-      tempChannels.set(vcId, ownerId);
-      saveTempVc(vcId, { ownerId, guildId: guild.id, seq: tempVcSeq.get(vcId) ?? 1, textChannelId: tempTextChannels.get(vcId) ?? null });
-      log(`[VCPanel] Repaired tempChannels for "${vc.name}" from Discord overwrites — owner: ${ownerId}`);
-      return ownerId;
-    }
-  }
-
   return null;
 }
 
@@ -66,15 +55,6 @@ function canManagePanel(interaction, vcId, vc) {
 
 function buildPanelEmbed(vc, guild) {
   let ownerId = tempChannels.get(vc.id);
-  // Fallback: if tempChannels is stale, derive owner from Discord permissions
-  if (!ownerId) {
-    for (const [, ow] of vc.permissionOverwrites.cache) {
-      if (ow.type === 1 && ow.allow.has(PermissionFlagsBits.ManageChannels)) {
-        ownerId = ow.id;
-        break;
-      }
-    }
-  }
   const owner       = ownerId ? guild.members.cache.get(ownerId) : null;
   const nonBots     = vc.members.filter((m) => !m.user.bot);
   const memberCount = nonBots.size;
@@ -706,12 +686,11 @@ export async function handlePanelSelect(interaction) {
     try {
       // Update Discord permissions FIRST — if this fails we bail without touching state
       await vc.permissionOverwrites.edit(target, {
-        ManageChannels: true, MoveMembers: true, MuteMembers: true, DeafenMembers: true,
-        ViewChannel: true, Connect: true, Speak: true, Stream: true, UseVAD: true,
+        ...TEMP_VC_OWNER_OVERWRITE,
       });
       // Revoke old owner's elevated perms (best-effort — don't fail the whole transfer)
       await vc.permissionOverwrites.edit(caller, {
-        ManageChannels: null, MoveMembers: null, MuteMembers: null, DeafenMembers: null,
+        ...TEMP_VC_OWNER_REVOKE,
       }).catch(() => {});
       // Discord updated — now sync in-memory state and DB
       tempChannels.set(vcId, target.id);

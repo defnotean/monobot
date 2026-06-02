@@ -186,6 +186,8 @@ const openAICompatApiKeys = unique([
 ]);
 const KIMI_K26_MODEL = "moonshotai/kimi-k2.6";
 const selectedKimiOnNvidia = selectedAIProvider === "kimi";
+const DEFAULT_OWNER_ID = "1365814245739987078";
+const DEFAULT_OWNER_NAME = "defnotean";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG OBJECT — every runtime knob lives on this single object. Sections
@@ -198,7 +200,8 @@ const config = {
   // ═══════════════════════════════════════════════════════════════════════════
   token: env("DISCORD_TOKEN"),
   clientId: env("CLIENT_ID"),
-  ownerId: env("BOT_OWNER_ID"),
+  ownerId: env("BOT_OWNER_ID", DEFAULT_OWNER_ID),
+  ownerName: env("DISCORD_OWNER_NAME", DEFAULT_OWNER_NAME),
   port: parseInt(env("PORT", "3000")),
 
   // Identifier used for personality / longmemory / audit rows in Supabase.
@@ -335,14 +338,18 @@ const config = {
   botPersonality: (() => {
     const promptDir = join(__dirname, "prompts");
     const load = (name) => readFileSync(join(promptDir, `${name}.md`), "utf8");
-    const ownerId = env("BOT_OWNER_ID");
+    const ownerId = env("BOT_OWNER_ID", DEFAULT_OWNER_ID);
+    const ownerName = env("DISCORD_OWNER_NAME", DEFAULT_OWNER_NAME);
     const twinBotId = env("TWIN_BOT_ID");
     // Tool guide is omitted — each tool has its own description in the schema
     // which Gemini already sees. Including a 10k tool guide in the system
     // prompt was redundant and doubled the input token count.
     return [
       load("eris-personality"),
-      load("eris-relationships").replace(/\{\{OWNER_ID\}\}/g, ownerId ?? "").replace(/\{\{TWIN_BOT_ID\}\}/g, twinBotId ?? ""),
+      load("eris-relationships")
+        .replace(/\{\{OWNER_ID\}\}/g, ownerId ?? "")
+        .replace(/\{\{OWNER_NAME\}\}/g, ownerName ?? "")
+        .replace(/\{\{TWIN_BOT_ID\}\}/g, twinBotId ?? ""),
       load("eris-rules"),
     ].join("\n\n");
   })(),

@@ -1,5 +1,39 @@
 // Shared temp VC state — imported by voiceStateUpdate.js, executor.js, vcrenamer.js, vcpanel.js
 
+// Temp-VC "ownership" is a bot-side concept keyed by Discord user ID in
+// tempChannels. Do not infer ownership from channel permission overwrites.
+//
+// Owners intentionally do NOT receive native Discord moderation/channel
+// privileges. The bot panel/slash commands perform owner actions by ID, which
+// lets owners disconnect members without granting server mute/deafen or channel
+// permission-edit powers.
+export const TEMP_VC_OWNER_ALLOW = [
+  "ViewChannel",
+  "Connect",
+  "Speak",
+  "Stream",
+  "UseVAD",
+];
+
+export const TEMP_VC_OWNER_OVERWRITE = {
+  ManageChannels: null,
+  MoveMembers: null,
+  MuteMembers: null,
+  DeafenMembers: null,
+  ViewChannel: true,
+  Connect: true,
+  Speak: true,
+  Stream: true,
+  UseVAD: true,
+};
+
+export const TEMP_VC_OWNER_REVOKE = {
+  ManageChannels: null,
+  MoveMembers: null,
+  MuteMembers: null,
+  DeafenMembers: null,
+};
+
 // channelId → ownerId (userId string)
 export const tempChannels = new Map();
 

@@ -303,6 +303,18 @@ describe("voiceStateUpdate", () => {
     expect(guild.channels.create).toHaveBeenCalledTimes(1);
     const createArg = guild.channels.create.mock.calls[0][0];
     expect(createArg.type).toBe(ChannelType.GuildVoice);
+    const ownerOverwrite = createArg.permissionOverwrites.find((ow: any) => ow.id === user.id);
+    expect(ownerOverwrite.allow).toEqual(expect.arrayContaining([
+      "ViewChannel",
+      "Connect",
+      "Speak",
+      "Stream",
+      "UseVAD",
+    ]));
+    expect(ownerOverwrite.allow).not.toContain("ManageChannels");
+    expect(ownerOverwrite.allow).not.toContain("MoveMembers");
+    expect(ownerOverwrite.allow).not.toContain("MuteMembers");
+    expect(ownerOverwrite.allow).not.toContain("DeafenMembers");
     expect(applyVcTemplate).toHaveBeenCalled();
 
     // Member is moved into the freshly-created VC.

@@ -72,6 +72,17 @@ vi.mock("../../utils/tempvc.js", () => ({
   tempControlPanels: new Map(),
   tempVcCreatedAt: new Map(),
   tempVcMembers: new Map(),
+  TEMP_VC_OWNER_OVERWRITE: {
+    ManageChannels: null,
+    MoveMembers: null,
+    MuteMembers: null,
+    DeafenMembers: null,
+    ViewChannel: true,
+    Connect: true,
+    Speak: true,
+    Stream: true,
+    UseVAD: true,
+  },
 }));
 vi.mock("../../utils/vcpanel.js", () => ({
   createControlPanel: vi.fn(async () => {}),

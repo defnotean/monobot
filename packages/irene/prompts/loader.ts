@@ -26,8 +26,10 @@ export function clearCache(): void {
  * renaming via set_server_persona happens at runtime in messageCreate.js.
  * Custom personality text from set_server_persona fully overrides this prompt.
  */
-export function buildPersonality(ownerId: string): string {
-  return loadPrompt("irene-personality").replace("{{OWNER_ID}}", ownerId);
+export function buildPersonality(ownerId: string, ownerName = "defnotean"): string {
+  return loadPrompt("irene-personality")
+    .replace(/\{\{OWNER_ID\}\}/g, ownerId)
+    .replace(/\{\{OWNER_NAME\}\}/g, ownerName);
 }
 
 /**

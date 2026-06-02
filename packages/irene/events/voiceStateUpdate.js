@@ -7,7 +7,7 @@ import { getGuildSettings, isDmOptout, getVcTemplate, getVcDefaultLimit, saveTem
 import { log, sendModLog } from "../utils/logger.js";
 import { logEmbed, LC, logEvent } from "../utils/embeds.js";
 import { EmbedBuilder, ChannelType, PermissionFlagsBits } from "discord.js";
-import { tempChannels, pendingCreateVcUsers, tempTextChannels, tempVcSeq, renameTimers, tempControlPanels, tempVcCreatedAt, tempVcMembers, ownerGraceTimers, guildVcSeqCounters, manualRenames } from "../utils/tempvc.js";
+import { tempChannels, pendingCreateVcUsers, tempTextChannels, tempVcSeq, renameTimers, tempControlPanels, tempVcCreatedAt, tempVcMembers, ownerGraceTimers, guildVcSeqCounters, manualRenames, TEMP_VC_OWNER_ALLOW, TEMP_VC_OWNER_OVERWRITE } from "../utils/tempvc.js";
 import { applyVcTemplate, queueRename, initRenameTimer } from "../utils/vcrenamer.js";
 import { createControlPanel, updateControlPanel } from "../utils/vcpanel.js";
 import { getQueue, handleVoiceMembershipChange } from "../music/player.js";
@@ -32,8 +32,7 @@ export async function transferOwnership(channel, guild) {
   const newOwner = nonBots.first();
   try {
     await channel.permissionOverwrites.edit(newOwner, {
-      ManageChannels: true, MoveMembers: true, MuteMembers: true, DeafenMembers: true,
-      ViewChannel: true, Connect: true, Speak: true, Stream: true, UseVAD: true,
+      ...TEMP_VC_OWNER_OVERWRITE,
     });
     tempChannels.set(channel.id, newOwner.id);
     manualRenames.delete(channel.id); // new owner — auto-renamer should pick up their game
@@ -678,20 +677,10 @@ export async function execute(oldState, newState) {
         const verRoleId = getVerificationRole(guild.id);
         /** @type {import("discord.js").OverwriteResolvable[]} */
         const overwrites = [
-          // Owner — full control
+          // Owner — bot-side owner, no native mute/deafen/manage perms
           {
             id: member.id,
-            allow: [
-              PermissionFlagsBits.ManageChannels,
-              PermissionFlagsBits.MoveMembers,
-              PermissionFlagsBits.MuteMembers,
-              PermissionFlagsBits.DeafenMembers,
-              PermissionFlagsBits.ViewChannel,
-              PermissionFlagsBits.Connect,
-              PermissionFlagsBits.Speak,
-              PermissionFlagsBits.Stream,
-              PermissionFlagsBits.UseVAD,
-            ],
+            allow: TEMP_VC_OWNER_ALLOW,
           },
           // Bot — needs to manage the channel
           {
