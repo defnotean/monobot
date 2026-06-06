@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 // @ts-expect-error - importing JS module without types
-import { shouldBuildTwinStateContext } from "../../../events/messageCreate/contextBuild.js";
+import { buildImageTurnSuffix, shouldBuildTwinStateContext } from "../../../events/messageCreate/contextBuild.js";
 
 describe("messageCreate contextBuild runtime gates", () => {
   it("builds twin state context only for Irene-specific intent", () => {
@@ -15,5 +15,26 @@ describe("messageCreate contextBuild runtime gates", () => {
     expect(shouldBuildTwinStateContext("hey whats up")).toBe(false);
     expect(shouldBuildTwinStateContext("a serene morning")).toBe(false);
     expect(shouldBuildTwinStateContext("my twin got accepted")).toBe(false);
+  });
+});
+
+describe("messageCreate contextBuild image turn suffix", () => {
+  it("includes multiple local image descriptions and attachment URLs", () => {
+    const suffix = buildImageTurnSuffix({
+      allImageAttachments: [
+        { url: "https://cdn.test/one.png" },
+        { url: "https://cdn.test/two.jpg" },
+      ],
+      imageDescriptionBlock: "[LOCAL IMAGE EVIDENCE\n1 (one.png): a cat\n2 (two.jpg): an owl\n-- end local image evidence --]",
+    });
+
+    expect(suffix).toContain("https://cdn.test/one.png, https://cdn.test/two.jpg");
+    expect(suffix).toContain("for tools only");
+    expect(suffix).toContain("1 (one.png): a cat");
+    expect(suffix).toContain("2 (two.jpg): an owl");
+  });
+
+  it("is empty when there are no image attachments", () => {
+    expect(buildImageTurnSuffix({ allImageAttachments: [] })).toBe("");
   });
 });

@@ -32,7 +32,7 @@ export const MEDIA_WEB_TOOLS = [
   {
     name: "analyze_image",
     description:
-      "Analyze an image that was attached to the current message. Use when a user sends a picture and asks about it, wants it described, or you need to understand image content to respond properly.",
+      "Analyze one or more images attached to the current message using conservative local vision evidence. Use when a user sends pictures and asks about them, wants them described, or you need to understand image content to respond properly.",
     input_schema: {
       type: "object",
       properties: {

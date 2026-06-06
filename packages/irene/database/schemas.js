@@ -82,6 +82,7 @@ export const GUILD_SETTINGS_DEFAULTS = Object.freeze({
   dm_results: false,
   dm_welcome_enabled: false,
   dm_welcome_message: "Welcome to {server}! Feel free to introduce yourself.",
+  ai_silenced_channels: [],
 
   // Ticket arrays (split + legacy combined)
   ticket_view_role_ids: [],

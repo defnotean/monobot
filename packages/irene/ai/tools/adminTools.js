@@ -800,7 +800,7 @@ export const ADMIN_TOOLS = [
   },
   {
     name: "toggle_tts",
-    description: "Enable or disable text-to-speech in a voice channel. When enabled, the bot joins the VC and reads messages typed in the VC chat aloud using Gemini AI voices. Use when someone says 'enable TTS', 'join and read messages', 'speak in VC', 'read chat out loud', etc.",
+    description: "Enable or disable TEXT-TO-SPEECH/TTS in a voice channel. When enabled, the bot joins the VC and reads messages typed in the VC chat aloud using the configured TTS voice. Use for 'enable TTS', 'turn on text to speech', 'read VC chat aloud', 'speak messages in VC'. Do NOT use toggle_voice_listen for TTS.",
     input_schema: {
       type: "object",
       properties: {

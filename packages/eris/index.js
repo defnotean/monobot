@@ -101,6 +101,10 @@ async function loadEvents() {
 // ─── HTTP Server (keepalive + dashboard API + admin panel) ───
 const ADMIN_HTML_PATH = join(__dirname, "api", "admin.html");
 
+function isDiscordGatewayReady() {
+  return client.isReady() || ((client.ws?.status ?? null) === 0 && !!client.user?.tag);
+}
+
 const server = http.createServer(async (req, res) => {
   const requestUrl = parseRequestUrl(req.url, `http://localhost:${config.port}`);
   const pathname = normalizeRequestPathname(requestUrl.pathname);
@@ -134,7 +138,7 @@ const server = http.createServer(async (req, res) => {
   // during Discord's normal reconnect churn. /readyz is the stricter
   // Discord-gateway readiness probe for dashboards/automation.
   if (pathname === "/healthz" || pathname === "/readyz") {
-    const ready = client.isReady();
+    const ready = isDiscordGatewayReady();
     const liveness = pathname === "/healthz";
     res.setHeader("Content-Type", "application/json");
     res.writeHead(liveness || ready ? 200 : 503);

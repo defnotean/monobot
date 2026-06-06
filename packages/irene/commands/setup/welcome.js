@@ -8,7 +8,7 @@ export const data = new SlashCommandBuilder()
   .setDescription("Configure the welcome message channel")
   .addChannelOption((o) => o.setName("channel").setDescription("Welcome channel").setRequired(true))
   .addStringOption((o) =>
-    o.setName("message").setDescription("Welcome message ({user}, {username}, {server}, {membercount})")
+    o.setName("message").setDescription("Welcome message ({user}, {mention}, {username}, {server}, {membercount})")
   )
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
@@ -24,8 +24,10 @@ export async function execute(interaction) {
 
   setWelcomeChannel(interaction.guild.id, channel.id, message);
 
+  const previewName = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
   const preview = (message || "Everyone say hello to {user}! You're member **#{membercount}** — glad you're here.")
-    .replace(/{user}/g, interaction.user.toString())
+    .replace(/{mention}/g, interaction.user.toString())
+    .replace(/{user}/g, previewName)
     .replace(/{username}/g, interaction.user.username)
     .replace(/{server}/g, interaction.guild.name)
     .replace(/{membercount}/g, interaction.guild.memberCount);

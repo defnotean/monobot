@@ -36,6 +36,12 @@ Each heading is tagged **`[STABLE]`** (settled; changes rarely — safe to build
 
 After the typing indicator starts (`:573, 580-582`), two parallel batches fetch memory + custom personality + cross-channel snippets (`:610-614`), then personality, opinions, self-canon, twin state, long-term memory, preoccupations (`:681-697`).
 
+Image attachments are summarized through `@defnotean/shared/localVision` before
+the external chat model sees the turn. The user message gets attachment URLs for
+tool use plus `LOCAL IMAGE EVIDENCE`; raw image bytes stay on the configured
+local Ollama endpoint. The system prompt tells Eris not to infer visual content
+from filenames or URLs and to treat uncertain evidence as uncertain.
+
 `systemInstruction` is assembled from base personality (`serverPersona` / DB / `config.botPersonality`, loaded at boot from `prompts/eris-personality.md` via `prompts/loader.ts`), speaker/server/channel tags, affinity tier, mood + energy labels (`:634-647`); temporal context (`:652-662`); mood modifiers (`:665-673`); keyword nudges for code, distress, gambling, bump config, event channels, game tracking, karaoke, awaited replies (`:700-729`); group-chat awareness from last 20 entries (`:743-763`); active directives (`:766-775`); channel context from last 12 messages plus a variety check listing recent openers/endings (`:850-887`); `[ADDRESSING — STRICT]` framing (`:786-788`); `[LENGTH BUDGET]` block at 150 / 250 / 400 chars by message type (`:1018-1034`).
 
 History is per-channel (guilds) / per-user (DMs) in a 2000-entry / 1h LRU (`:170`). `compressHistory` (`ai/contextCompressor.js`) bins it three tiers — last 3 turns full, turns 4-8 moderate, older one-liners — with hard-slice fallback (`:900-904`).

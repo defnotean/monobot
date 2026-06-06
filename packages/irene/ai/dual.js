@@ -14,7 +14,6 @@ import { ADMIN_TOOLS } from "./tools.js";
 import { registry } from "./toolRegistry.js";
 import { log, redact } from "../utils/logger.js";
 import config from "../config.js";
-import { safeFetch } from "@defnotean/shared/safeFetch";
 
 const GEMINI_MODEL = config.geminiModel;               // worker AI — most capable, deep reasoning + tools
 const GEMINI_FALLBACK_MODEL = config.geminiFallbackModel; // fallback on rate limit — still thinking-capable
@@ -272,32 +271,7 @@ async function toGeminiHistory(history) {
           for (const block of msg.content) {
             if (block.type === "text") parts.push({ text: block.text });
             else if (block.type === "image") {
-              // Use pre-cached base64 if available (cached at input time in messageCreate.js)
-              if (block._cachedBase64) {
-                parts.push({ inlineData: { mimeType: block._cachedMime || "image/png", data: block._cachedBase64 } });
-              } else {
-                // Fallback: fetch now (for old history entries without cache)
-                const url = block.source?.url;
-                if (url) {
-                  try {
-                    const parsedUrl = new URL(url);
-                    const h = parsedUrl.hostname.toLowerCase();
-                    if (["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"].includes(h) || h.endsWith(".local") || h.endsWith(".internal") || h.startsWith("10.") || h.startsWith("172.16.") || h.startsWith("192.168.")) {
-                      parts.push({ text: "[image fetch blocked: internal address]" });
-                      continue;
-                    }
-
-                    const res = await safeFetch(url, { binary: true, maxBytes: 1_000_000, timeoutMs: 5000 });
-                    if (res.ok && res.bytes) {
-                      parts.push({ inlineData: { mimeType: res.headers.get("content-type") || "image/png", data: Buffer.from(res.bytes).toString("base64") } });
-                    } else {
-                      parts.push({ text: "[image failed to load]" });
-                    }
-                  } catch {
-                    parts.push({ text: "[image failed to load]" });
-                  }
-                }
-              }
+              parts.push({ text: "[image omitted from external AI call; local vision descriptions are used for new image messages]" });
             }
           }
           if (parts.length) contents.push({ role: "user", parts });
@@ -563,10 +537,11 @@ export async function runGeminiChat({
     }
 
     // Execute all tool calls in parallel.
-    // Three tiers: FAST (in-memory) = 15s, SLOW (network) = 30s, VERY_SLOW
-    // (multi-track resolution like Spotify playlists) = 60s.
+    // Most network tools get 30s, but image generation can legitimately run
+    // longer before the provider returns an image or a transient upstream error.
+    const IMAGE_TOOLS = new Set(["generate_image"]);
     const VERY_SLOW_TOOLS = new Set(["play_music", "summarize_channel", "setup_reaction_roles", "setup_autorole", "setup_starboard", "set_leveling", "mass_role", "purge_messages"]);
-    const SLOW_TOOLS = new Set(["web_search", "web_read", "search_images", "show_image", "edit_image", "send_gif", "generate_image", "configure_patch_news", "test_patch_news", "configure_twitch", "configure_youtube", "configure_github", "stop_music", "skip_track", "queue_info", "set_volume", "music_filter", "create_channel", "delete_channel", "nuke_channel"]);
+    const SLOW_TOOLS = new Set(["web_search", "web_read", "search_images", "show_image", "edit_image", "send_gif", "configure_patch_news", "test_patch_news", "configure_twitch", "configure_youtube", "configure_github", "stop_music", "skip_track", "queue_info", "set_volume", "music_filter", "create_channel", "delete_channel", "nuke_channel"]);
     const funcResponses = [];
     const toolResults = [];
     let _completedCount = 0;
@@ -602,7 +577,8 @@ export async function runGeminiChat({
         log(`[Gemini] ${routed.toolName}(${JSON.stringify(redact(routed.args))})`);
 
         const isAdminTool = ADMIN_TOOLS.some((t) => t.name === routed.toolName);
-        const timeoutMs = VERY_SLOW_TOOLS.has(routed.toolName) ? config.timeouts.toolVerySlow
+        const timeoutMs = IMAGE_TOOLS.has(routed.toolName)     ? (config.timeouts.toolImage ?? config.timeouts.toolVerySlow)
+                        : VERY_SLOW_TOOLS.has(routed.toolName) ? config.timeouts.toolVerySlow
                         : SLOW_TOOLS.has(routed.toolName)      ? config.timeouts.toolSlow
                         :                             config.timeouts.toolFast;
         let result;

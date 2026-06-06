@@ -2,7 +2,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../../../config.js", () => ({
-  default: { ownerId: "OWNER_ID", twinBotId: "ERIS_ID" },
+  default: {
+    ownerId: "OWNER_ID",
+    twinBotId: "ERIS_ID",
+    local: {
+      ollamaVisionUrl: "http://127.0.0.1:11434",
+      ollamaVisionModel: "qwen2.5vl:3b",
+      visionMaxImages: 4,
+      visionImageMaxBytes: 1234,
+    },
+  },
 }));
 vi.mock("../../../utils/logger.js", () => ({ log: vi.fn() }));
 // channelTypeLabel is used by resolveDiscordReferences for the [type, id] suffix.
@@ -13,8 +22,8 @@ vi.mock("../../../utils/channelTypes.js", () => ({
 vi.mock("../../../ai/firewall.js", () => ({
   spotlight: vi.fn((text) => text),
 }));
-const safeFetch = vi.hoisted(() => vi.fn());
-vi.mock("@defnotean/shared/safeFetch", () => ({ safeFetch }));
+const describeImageAttachments = vi.hoisted(() => vi.fn());
+vi.mock("@defnotean/shared/localVision", () => ({ describeImageAttachments }));
 
 import {
   collectImages,
@@ -25,6 +34,8 @@ import {
   scrubTwinHistoryForRecall,
   shouldBuildOpinionContextForMessage,
   shouldBuildTwinStateContextForMessage,
+  shouldBuildServerRelationshipRankingContextForMessage,
+  buildServerRelationshipRankingContext,
 } from "../../../events/messageCreate/contextBuild.js";
 // @ts-expect-error JS helper, no types
 import { makeMessage, makeUser, makeMember, makeGuild, makeChannel, makeClient, makeRole, Collection } from "../../_helpers/mockDiscord.js";
@@ -48,6 +59,58 @@ describe("contextBuild / tail context gates", () => {
     expect(shouldBuildTwinStateContextForMessage("what is your twin doing")).toBe(true);
     expect(shouldBuildTwinStateContextForMessage("ask your sister about that")).toBe(true);
     expect(shouldBuildTwinStateContextForMessage("can <@ERIS_ID> see this")).toBe(true);
+  });
+
+  it("detects server-scoped favorite people ranking requests", () => {
+    expect(shouldBuildServerRelationshipRankingContextForMessage("Irene top 3 favourite ppl in the server go")).toBe(true);
+    expect(shouldBuildServerRelationshipRankingContextForMessage("who are your favorite members here?")).toBe(true);
+    expect(shouldBuildServerRelationshipRankingContextForMessage("what's your favorite pizza")).toBe(false);
+  });
+});
+
+describe("contextBuild / server relationship ranking context", () => {
+  it("filters relationship rankings to current non-bot guild members by default", () => {
+    const boss = makeMember({ user: makeUser({ id: "OWNER_ID", username: "boss" }), nickname: "Boss" });
+    const ruben = makeMember({ user: makeUser({ id: "u-ruben", username: "rubenx6" }), nickname: "rubenx6 [NURO]" });
+    const chill = makeMember({ user: makeUser({ id: "u-chill", username: "chill" }), nickname: "Chill" });
+    const eris = makeMember({ user: makeUser({ id: "ERIS_ID", username: "Eris", bot: true }), nickname: "Eris" });
+    const guild = makeGuild({ id: "g1", name: "GipTB's NEW Groove!", members: [boss, ruben, chill, eris] });
+
+    const ctx = buildServerRelationshipRankingContext({
+      guild,
+      text: "Irene top 3 favourite ppl in the server go",
+      relationships: [
+        { user_id: "u-outsider", affinity_score: 99, interactions_count: 50, trust_score: 80 },
+        { user_id: "ERIS_ID", affinity_score: 95, interactions_count: 50, trust_score: 80 },
+        { user_id: "OWNER_ID", affinity_score: 100, interactions_count: 10, trust_score: 100, familiarity_score: 20, respect_score: 20 },
+        { user_id: "u-ruben", affinity_score: 80, interactions_count: 40, trust_score: 60, familiarity_score: 70, respect_score: 50 },
+        { user_id: "u-chill", affinity_score: 30, interactions_count: 8, trust_score: 20 },
+      ],
+      ownerId: "OWNER_ID",
+    });
+
+    expect(ctx).toContain("Server checked: GipTB's NEW Groove!");
+    expect(ctx).toContain("Requested visible count: 3");
+    expect(ctx).toContain("1. Boss (ID: OWNER_ID)");
+    expect(ctx).toContain("2. rubenx6 NURO (ID: u-ruben)");
+    expect(ctx).toContain("3. Chill (ID: u-chill)");
+    expect(ctx).not.toContain("u-outsider");
+    expect(ctx).not.toContain("ERIS_ID");
+    expect(ctx).toContain("Use display names, not @mentions");
+  });
+
+  it("can include bots when the user explicitly asks about bots or Eris", () => {
+    const eris = makeMember({ user: makeUser({ id: "ERIS_ID", username: "Eris", bot: true }), nickname: "Eris" });
+    const guild = makeGuild({ id: "g1", members: [eris] });
+
+    const ctx = buildServerRelationshipRankingContext({
+      guild,
+      text: "top favorite bots including Eris",
+      relationships: [{ user_id: "ERIS_ID", affinity_score: 95, interactions_count: 50 }],
+      ownerId: "OWNER_ID",
+    });
+
+    expect(ctx).toContain("Eris (ID: ERIS_ID, bot)");
   });
 });
 
@@ -153,7 +216,7 @@ describe("contextBuild / buildUserTurn", () => {
       safeSpeakerName: "Alice",
       allImageAttachments: [{ url: "https://cdn/x.png" }],
     });
-    expect(userText).toContain("[Attached image URL(s): https://cdn/x.png]");
+    expect(userText).toContain("[Attached image URL(s) for tools only; do not infer visual content from filenames or URLs: https://cdn/x.png]");
   });
 
   it("uses a placeholder when content is empty but an image is present", () => {
@@ -177,38 +240,66 @@ describe("contextBuild / buildUserTurn", () => {
     expect(userContent[0].type).toBe("text");
     expect(userContent[1]).toBe(imgPart);
   });
+
+  it("appends local image descriptions to the text turn without provider image blocks", () => {
+    const message = makeMessage({});
+    const { userContent, userText } = buildUserTurn({
+      message,
+      content: "look",
+      images: [],
+      allImageAttachments: [{ url: "https://cdn/x.png" }],
+      imageDescriptionBlock: "[LOCAL IMAGE EVIDENCE\n1 (x.png): a cat owl hybrid\n-- end local image evidence --]",
+      isTwinMsg: false,
+      guild: null,
+      safeSpeakerName: "Alice",
+    });
+    expect(userContent).toBe(userText);
+    expect(userText).toContain("a cat owl hybrid");
+    expect(userText).toContain("[Attached image URL(s) for tools only; do not infer visual content from filenames or URLs: https://cdn/x.png]");
+  });
 });
 
 describe("contextBuild / collectImages", () => {
-  it("prefetches image attachments through capped safeFetch before caching bytes", async () => {
-    safeFetch.mockResolvedValueOnce({
-      status: 200,
-      bytes: Buffer.from("image-bytes"),
-      headers: { get: () => "image/png" },
-    });
+  it("summarizes image attachments through the shared local-vision helper", async () => {
     const attachment = { contentType: "image/png", name: "pic.png", url: "https://cdn.test/pic.png" };
     const message = { attachments: new Collection([["a1", attachment]]) };
+    describeImageAttachments.mockResolvedValueOnce({
+      allImageAttachments: [attachment],
+      describedImageAttachments: [attachment],
+      imageDescriptions: [{ ok: true, name: "pic.png", description: "a small image" }],
+      imageDescriptionBlock: "[LOCAL IMAGE EVIDENCE\n1 (pic.png): a small image\n-- end local image evidence --]",
+      omittedCount: 0,
+    });
 
     const result = await collectImages(message);
 
-    expect(safeFetch).toHaveBeenCalledWith("https://cdn.test/pic.png", {
-      binary: true,
-      maxBytes: 1_000_000,
-      timeoutMs: 5_000,
+    expect(describeImageAttachments).toHaveBeenCalledWith(message, {
+      visionUrl: "http://127.0.0.1:11434",
+      model: "qwen2.5vl:3b",
+      maxImages: 4,
+      maxBytes: 1234,
     });
     expect(result.allImageAttachments).toEqual([attachment]);
-    expect(result.images[0]._cachedBase64).toBe(Buffer.from("image-bytes").toString("base64"));
-    expect(result.images[0]._cachedMime).toBe("image/png");
+    expect(result.imageDescriptions[0].description).toBe("a small image");
+    expect(result.imageDescriptionBlock).toContain("a small image");
+    expect(result.images).toEqual([]);
   });
 
-  it("leaves the URL image block uncached when safeFetch rejects an oversized body", async () => {
-    safeFetch.mockRejectedValueOnce(new Error("response too large"));
+  it("keeps local description failures as text and still avoids provider image blocks", async () => {
     const attachment = { contentType: "image/png", name: "pic.png", url: "https://cdn.test/huge.png" };
     const message = { attachments: new Collection([["a1", attachment]]) };
+    describeImageAttachments.mockResolvedValueOnce({
+      allImageAttachments: [attachment],
+      describedImageAttachments: [attachment],
+      imageDescriptions: [{ ok: false, name: "pic.png", description: "[image failed local description: response too large]" }],
+      imageDescriptionBlock: "[LOCAL IMAGE EVIDENCE\n1 (pic.png): [image failed local description: response too large]\n-- end local image evidence --]",
+      omittedCount: 0,
+    });
 
     const result = await collectImages(message);
 
-    expect(result.images[0]).toEqual({ type: "image", source: { type: "url", url: "https://cdn.test/huge.png" } });
+    expect(result.images).toEqual([]);
+    expect(result.imageDescriptionBlock).toContain("response too large");
   });
 });
 

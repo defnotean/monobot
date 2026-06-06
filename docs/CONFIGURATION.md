@@ -69,6 +69,12 @@ at the repo root.
 | `GITHUB_MODELS_API_KEY` | Both | Conditional alias | — | GitHub Models inference fallback. Falls through to `GITHUB_TOKEN` if unset. `packages/eris/config.js:163`, `packages/irene/config.js:159`. | github.com/settings/tokens |
 | `CLOUDFLARE_API_TOKEN` | Both | Conditional alias | — | Cloudflare Workers AI fallback alias. `packages/eris/config.js:165`, `packages/irene/config.js:161`. | dash.cloudflare.com -> Profile -> API Tokens |
 | `VOYAGE_API_KEY` | Both | No (recommended) | — | Voyage AI embeddings for semantic memory recall. Without it, recall falls back to keyword search. `packages/eris/config.js:225`, `packages/irene/config.js:319`. | voyageai.com -> API Keys |
+| `OLLAMA_EMBED_URL` | Both | No | — | Local Ollama base URL for semantic embeddings. When set, Voyage embeddings are bypassed. `packages/eris/config.js`, `packages/irene/config.js`. | Your Ollama host, e.g. `http://127.0.0.1:11434` |
+| `OLLAMA_EMBED_MODEL` | Both | No | `nomic-embed-text` | Ollama embedding model. `packages/eris/config.js`, `packages/irene/config.js`. | `ollama pull nomic-embed-text` |
+| `OLLAMA_VISION_URL` | Both | No | — | Local Ollama base URL for Discord image descriptions. Raw image bytes are sent only to this local service; external chat providers receive text evidence. `packages/eris/config.js`, `packages/irene/config.js`. | Your Ollama host, e.g. `http://127.0.0.1:11434` |
+| `OLLAMA_VISION_MODEL` | Both | No | `qwen2.5vl:7b` | Local vision model used for conservative image evidence. `qwen2.5vl:3b` is faster; `7b` is more accurate. | `ollama pull qwen2.5vl:7b` |
+| `LOCAL_VISION_MAX_IMAGES` | Both | No | `4` | Max image attachments described per Discord message. Extra images are noted as omitted. | n/a |
+| `LOCAL_VISION_IMAGE_MAX_BYTES` | Both | No | `5242880` | Per-image fetch cap before local vision analysis. | n/a |
 | `SUPABASE_URL` | Both | No (strongly recommended) | — | Supabase project URL. Without it, the bot boots with a `[WARN]` and runs fully ephemeral. `packages/eris/config.js:282`, `packages/irene/config.js:266`; warning at `packages/eris/config.js:404-406`, `packages/irene/config.js:394-397`. | supabase.com -> Project Settings -> API -> Project URL |
 | `SUPABASE_KEY` | Both | No (strongly recommended) | — | Service-role or anon key. `packages/eris/config.js:283`, `packages/irene/config.js:267`. | supabase.com -> Project Settings -> API |
 | `SUPABASE_ANON_KEY` | Irene | No | — | Parsed for compatibility, but it does not enable persistence when `SUPABASE_KEY` is unset. `SUPABASE_KEY` is required for Irene persistence. `packages/irene/config.js:268`. | Same as above |
@@ -122,6 +128,7 @@ at the repo root.
 | `TIMEOUT_TOOL_FAST` | Irene | No | `15000` | Tool tier 1 timeout (ms). `packages/irene/config.js:357`. | n/a |
 | `TIMEOUT_TOOL_SLOW` | Irene | No | `30000` | Tool tier 2 timeout (ms). `packages/irene/config.js:358`. | n/a |
 | `TIMEOUT_TOOL_VERY_SLOW` | Irene | No | `60000` | Tool tier 3 timeout (ms) — long scrapes. `packages/irene/config.js:359`. | n/a |
+| `TIMEOUT_TOOL_IMAGE` | Irene | No | `90000` | Image-generation tool timeout (ms). Kept separate because image providers can take longer than normal network tools. | n/a |
 | `TIMEOUT_FETCH` | Both | No | `5000` | Outbound HTTP fetch timeout (ms). `packages/eris/config.js:365`, `packages/irene/config.js:360`. | n/a |
 
 ---
@@ -229,6 +236,10 @@ Every integration in this section degrades gracefully when missing — the relat
 tool just refuses to fire (or, for Last.fm, emits a `[WARN]` at startup).
 
 - **Voyage AI** (`VOYAGE_API_KEY`) — semantic-memory embeddings.
+- **Ollama local AI** (`OLLAMA_EMBED_URL`, `OLLAMA_VISION_URL`) — optional
+  local embeddings and local image evidence. For image analysis, the bots fetch
+  Discord attachments with `safeFetch`, send bytes to Ollama only, and pass the
+  external chat model a conservative text block instead of raw image bytes.
 - **Last.fm** (`LASTFM_API_KEY`, Eris) — `/fm` commands.
 - **Klipy** (`KLIPY_API_KEY`, both) — `send_gif` tool.
 - **Brave Search / Answers** (`BRAVE_SEARCH_API_KEY`, `BRAVE_ANSWERS_API_KEY`,
@@ -302,7 +313,8 @@ tuned for the live deployment.
   `TIMEOUT_QUICK_REPLY` (5000), `TIMEOUT_WORKER_FAST` (35000),
   `TIMEOUT_WORKER_SLOW` (60000), `TIMEOUT_TOOL_FAST` (15000),
   `TIMEOUT_TOOL_SLOW` (30000), `TIMEOUT_TOOL_VERY_SLOW` (60000),
-  `TIMEOUT_FETCH` (5000) — see `packages/irene/config.js:353-361`.
+  `TIMEOUT_TOOL_IMAGE` (90000), `TIMEOUT_FETCH` (5000) — see
+  `packages/irene/config.js`.
 - **Brave / web search** timeouts live alongside the keys:
   `BRAVE_ANSWERS_TIMEOUT_MS` (5000), `BRAVE_SEARCH_TIMEOUT_MS` (3500),
   `WEB_SEARCH_BACKEND_TIMEOUT_MS` (5000), `WEB_SEARCH_DDG_TIMEOUT_MS` (5000).

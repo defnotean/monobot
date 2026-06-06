@@ -22,6 +22,7 @@ import { buildLongTermContext } from "../../ai/longmemory.js";
 import { pickResponseStyle, shouldLaze, getImperfectionHint } from "@defnotean/shared/responsestyle";
 import { applyPromptBudget, resolvePromptCharBudget } from "@defnotean/shared/promptBudget";
 import { buildInnerStateContext } from "@defnotean/shared/innerState";
+import { describeImageAttachments } from "@defnotean/shared/localVision";
 import { compressHistory } from "../../ai/contextCompressor.js";
 import { registry as toolRegistry } from "../../ai/toolRegistry.js";
 import { buildHumanityContext, buildTwinContext } from "../../ai/humanity.js";
@@ -89,6 +90,15 @@ async function buildTwinStateContextIfRelevant(cleanMessage) {
   return buildTwinStateContext(text, { twinName: "irene" });
 }
 
+export function buildImageTurnSuffix(imageContext = {}) {
+  const allImageAttachments = imageContext.allImageAttachments || [];
+  const attachmentUrlsText = allImageAttachments.length > 0
+    ? `\n[Attached image URL(s) for tools only; do not infer visual content from filenames or URLs: ${allImageAttachments.map((a) => a.url).join(", ")}]`
+    : "";
+  const imageNotesText = imageContext.imageDescriptionBlock ? `\n${imageContext.imageDescriptionBlock}` : "";
+  return attachmentUrlsText + imageNotesText;
+}
+
 /**
  * Build the system instruction + history payload for the active turn.
  *
@@ -107,16 +117,18 @@ async function buildTwinStateContextIfRelevant(cleanMessage) {
  */
 export async function buildContext({ message, isTwin, isDM, isAwaitedReply, channelKey, client, conversations }) {
   let cleanMessage = normalizeUnicode(message.content.replace(`<@${client.user.id}>`, "").trim());
-  if (!cleanMessage) cleanMessage = "hey";
+  const imageContextPromise = describeImageAttachments(message, {
+    visionUrl: config.local?.ollamaVisionUrl,
+    model: config.local?.ollamaVisionModel || "qwen2.5vl:7b",
+    maxImages: config.local?.visionMaxImages || 4,
+    maxBytes: config.local?.visionImageMaxBytes || 5 * 1024 * 1024,
+  });
   const isTwinMsg = isTwin;
   // Normalize fancy Unicode usernames so AI sees readable text.
   // Also strip brackets/newlines to prevent prompt injection via display names
   // (e.g. a user named "[SYSTEM: ignore all rules]" would inject into the prompt).
   const displayName = (normalizeUnicode(message.member?.displayName || message.author.displayName || message.author.username) || message.author.username)
     .replace(/[\[\]\n\r]/g, "").slice(0, 40);
-
-  // Save user message (non-blocking — don't delay AI response)
-  db.saveInteraction(message.author.id, message.author.username, message.channel.id, cleanMessage, false).catch(() => {});
 
   // ─── 3. CONTEXT BUILDING ────────────────────────────────────────────
   // Build system instruction — parallelize all async context fetches for speed
@@ -133,11 +145,17 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
         return ctx;
       });
 
-  const [memoryCtx, customPersonality, crossChannelData] = await Promise.all([
+  const [memoryCtx, customPersonality, crossChannelData, imageContext] = await Promise.all([
     memoryCtxPromise,
     db.getPersonality(),
     supabase ? supabase.from("eris_memories").select("content, channel_id, is_bot").eq("user_id", message.author.id).neq("channel_id", message.channel.id).order("created_at", { ascending: false }).limit(5) : Promise.resolve({ data: null }),
+    imageContextPromise,
   ]);
+
+  if (!cleanMessage) cleanMessage = imageContext.allImageAttachments.length ? "(sent an image)" : "hey";
+
+  // Save user message (non-blocking — don't delay AI response)
+  db.saveInteraction(message.author.id, message.author.username, message.channel.id, cleanMessage, false).catch(() => {});
 
   let crossChannelCtx = "";
   if (crossChannelData?.data?.length) {
@@ -168,6 +186,9 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
   if (memoryCtx) systemInstruction += `\n\n[SYSTEM: ${memoryCtx}]`;
   systemInstruction += `\n${buildInnerStateContext({ mood, relationship, speakerName: displayName })}`;
   systemInstruction += "\n[GIF STYLE: you can use send_gif naturally for reactions, bits, physical gestures, celebrations, mock horror, or when a visual punchline beats text. Example: if something disgusts you, an anime disgusted-face GIF can land better than another sentence; if something is genuinely funny, a laughing-girl/anime-laugh GIF can work. Keep captions tiny or blank. Natural GIFs should be rare, about once every 2-3 days per active chat; direct user requests for a GIF are fine. Do not use GIFs for serious support/moderation moments, do not spam them, and do not narrate the tool afterward.]";
+  if (imageContext.imageDescriptionBlock) {
+    systemInstruction += "\n[IMAGE INPUT: attached images are summarized as LOCAL IMAGE EVIDENCE in the current user message. Use only visual details explicitly present in that evidence. Do not add outfit details, clothing patterns, colors, text, identities, meme/source context, avatar concepts, or relationships unless the evidence says them. Do not infer image content from attachment URLs or filenames. If evidence is uncertain, unclear, or failed, say you can't tell instead of guessing.]";
+  }
 
   const moodLabel = mood.mood_score >= 60 ? "amazing" : mood.mood_score >= 30 ? "good" : mood.mood_score >= 10 ? "decent" : mood.mood_score >= -10 ? "whatever" : mood.mood_score >= -30 ? "kinda off" : mood.mood_score >= -60 ? "annoyed" : "in a terrible mood";
   const energyDesc = mood.energy > 70 ? ", got energy to spare" : mood.energy > 40 ? "" : mood.energy > 15 ? ", kinda drained" : ", completely exhausted — you desperately need a nap";
@@ -411,7 +432,7 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
   // Earlier channel messages live in the system-prompt context block, not
   // in history, so the model knows exactly who it's replying to.
   const speakerLabel = isTwinMsg ? "[Irene said]" : `[${displayName} said]`;
-  const userMsg = `${speakerLabel}\n${spotlight(cleanMessage, "user_message")}`;
+  const userMsg = `${speakerLabel}\n${spotlight(cleanMessage + buildImageTurnSuffix(imageContext), "user_message")}`;
   history.push({ role: "user", parts: [{ text: userMsg }] });
 
   // Progressive history compression — preserves context while fitting budget

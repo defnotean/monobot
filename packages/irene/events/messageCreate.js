@@ -20,7 +20,7 @@ import config from "../config.js";
 import { log } from "../utils/logger.js";
 import {
   getTrustedUsers, getGuildSettings, loadConversations, saveConversation,
-  getTtsChannels,
+  getTtsChannels, getServerPersona, isAiSilencedChannel, setAiSilencedChannel,
 } from "../database.js";
 import { LRUCache } from "@defnotean/shared/LRUCache";
 import { enforceMessage } from "../ai/rulesEnforcer.js";
@@ -31,7 +31,7 @@ import {
   processing, _repliedMessages, _twinExchanges,
   isSleeping, wakeSleep,
   withLock, _messageQueue, _processingUsers,
-  shouldSkipTwinMessage, detectAddressing,
+  shouldSkipTwinMessage, detectAddressing, detectChannelAiSilenceCommand,
 } from "./messageCreate/gates.js";
 import {
   detectExploitOrLoop, detectRepeatSpam, shouldDropBotAuthor,
@@ -73,25 +73,46 @@ const lazyAfk       = async () => (_modAfk       ??= await import("../commands/u
 const lazyHighlight = async () => (_modHighlight ??= await import("../commands/utility/highlight.js"));
 const lazyLeveling  = async () => (_modLeveling  ??= await import("../utils/leveling.js"));
 const lazyContextCompressor = async () => (await import("../ai/contextCompressor.js"));
-const TYPING_REFRESH_MS = 8_000;
-const MAX_TYPING_REFRESH_MS = 45_000;
+const TYPING_REFRESH_MS = 4_000;
+const MAX_TYPING_REFRESH_MS = 11 * 60_000;
 
-function startTypingRefresh(channel) {
+function startTypingRefresh(channel, { intervalMs = TYPING_REFRESH_MS, maxMs = MAX_TYPING_REFRESH_MS } = {}) {
+  if (!channel || typeof channel.sendTyping !== "function") return () => {};
   let interval = null;
   let timeout = null;
+  let stopped = false;
   const stop = () => {
+    stopped = true;
     if (interval) clearInterval(interval);
     if (timeout) clearTimeout(timeout);
     interval = null;
     timeout = null;
   };
+  const tick = () => {
+    if (!stopped) channel.sendTyping().catch(() => {});
+  };
 
-  channel.sendTyping().catch(() => {});
-  interval = setInterval(() => {
-    channel.sendTyping().catch(() => {});
-  }, TYPING_REFRESH_MS);
-  timeout = setTimeout(stop, MAX_TYPING_REFRESH_MS);
+  tick();
+  interval = setInterval(tick, intervalMs);
+  if (typeof interval.unref === "function") interval.unref();
+  timeout = setTimeout(stop, maxMs);
+  if (typeof timeout.unref === "function") timeout.unref();
   return stop;
+}
+
+function detectTtsToggleShortcut(content = "") {
+  const t = String(content).toLowerCase();
+  if (!/\btts\b|text\s*(?:-|to)?\s*speech|text-to-speech/.test(t)) return null;
+  if (/\bvoice\s+listen\b|\bwake\s*word\b|\blisten(?:ing)?\s+in\s+(?:vc|voice)\b/.test(t)) return null;
+  if (/\b(?:turn|switch)\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\s+off\b/.test(t)) return false;
+  if (/\b(?:turn|switch)\s+off\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\b/.test(t)) return false;
+  if (/\b(?:disable|stop)\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\b/.test(t)) return false;
+  if (/\b(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\s+off\b/.test(t)) return false;
+  if (/\b(?:turn|switch)\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\s+on\b/.test(t)) return true;
+  if (/\b(?:turn|switch)\s+on\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\b/.test(t)) return true;
+  if (/\b(?:enable|start)\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\b/.test(t)) return true;
+  if (/\b(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\s+on\b/.test(t)) return true;
+  return null;
 }
 
 // Conversations: pre-populated from DB on first use via getConversations()
@@ -239,6 +260,19 @@ export async function execute(message) {
   // Dedup already handled at top of execute()
 
   const isDM = !message.guild;
+  if (!isDM) {
+    const silenceAction = detectChannelAiSilenceCommand(message, getServerPersona);
+    const canControlChannelAi = message.author.id === config.ownerId || memberIsAdmin(message.member);
+    if (silenceAction) {
+      if (canControlChannelAi) {
+        setAiSilencedChannel(message.guild.id, message.channel.id, silenceAction === "silence");
+        await message.react("✅").catch(() => {});
+      }
+      return;
+    }
+    if (isAiSilencedChannel(message.guild.id, message.channel.id)) return;
+  }
+
   _humanityCounter++;
   if (_humanityCounter % 100 === 0) lazyHumanity().then(m => m.periodicUpdate()).catch(() => {});
 
@@ -342,7 +376,6 @@ export async function execute(message) {
     // nickname like "Gremlin.exe" also triggers on "Gremlin". Matching
     // happens on alphabetic runs of >=4 chars to avoid false positives
     // on short fragments like "exe" or "bot".
-    const { getServerPersona } = await import("../database.js");
     const { mentioned, saidMyName, mentionsEris } = detectAddressing(message, getServerPersona);
 
     // If message mentions ONLY Eris and NOT us, stay silent (don't steal
@@ -402,19 +435,33 @@ export async function execute(message) {
   }
   _processingUsers.add(userKey);
 
+  let clearTypingRefresh = null;
+
   try { // try/finally ensures _processingUsers cleanup even on crash
 
-  // Show typing indicator IMMEDIATELY — before any heavy processing
-  // (system prompt, memory, personality, sentiment, etc. can take 2-5 seconds)
-  const isDMEarly = !message.guild;
-  if (!isDMEarly) message.channel.sendTyping().catch(() => {});
+  // Keep Discord's typing indicator alive across slow local vision, memory,
+  // prompt assembly, AI generation, and tool calls. Discord expires typing
+  // indicators quickly, so a single sendTyping() creates visible gaps.
+  clearTypingRefresh = startTypingRefresh(message.channel);
 
   const content = stripMention(message);
 
-  // Collect image attachments + pre-fetch base64 cache
-  const { allImageAttachments, images } = await collectImages(message);
+  const ttsShortcut = detectTtsToggleShortcut(content);
+  if (ttsShortcut !== null && !isDM && message.guild) {
+    if (!isAdmin && message.author.id !== config.ownerId) {
+      await message.reply("you need admin perms to toggle TTS").catch((e) => log(`[Error] ${e.message}`));
+      return;
+    }
+    const { execute: executeAudioTool } = await import("../ai/executors/audioExecutor.js");
+    const result = await executeAudioTool("toggle_tts", { enabled: ttsShortcut }, message, { guild: message.guild });
+    await message.reply(String(result)).catch((e) => log(`[Error] ${e.message}`));
+    return;
+  }
 
-  if (!content && !images.length) {
+  // Collect image attachments + local descriptions. Raw image bytes stay local.
+  const { allImageAttachments, images, imageDescriptions, imageDescriptionBlock } = await collectImages(message);
+
+  if (!content && !allImageAttachments.length) {
     await message.reply("yo, what's up? need something?").catch((e) => log(`[Error] ${e.message}`));
     return;
   }
@@ -438,7 +485,7 @@ export async function execute(message) {
   // ─── 3. CONTEXT BUILDING ──────────────────────────────────────────────
   const ctxResult = await buildSystemPrompt(message, {
     isDM, dmGuild, msgCtx, isAdmin, content, images, allImageAttachments,
-    isTwinMsg, conversations,
+    imageDescriptions, imageDescriptionBlock, isTwinMsg, conversations,
   });
   let systemPromptWithMemory = ctxResult.systemPromptWithMemory;
   const { tools, isBotOwner, isCreator, sentimentScore, mood, safeSpeakerName } = ctxResult;
@@ -461,9 +508,9 @@ export async function execute(message) {
   // sees the full group conversation flow and never talks over itself.
   const channelKey = isDM ? `dm-${message.author.id}` : `ch-${message.channel.id}`;
 
-  // Build the user-turn content (text + images, resolved mentions)
+  // Build the user-turn content (text + local image descriptions, resolved mentions)
   const { userText, userContent } = buildUserTurn({
-    message, content, images, allImageAttachments, isTwinMsg, guild, safeSpeakerName,
+    message, content, images, allImageAttachments, imageDescriptionBlock, isTwinMsg, guild, safeSpeakerName,
   });
 
   // Lock per channel so parallel requests across different channels are fully independent,
@@ -546,7 +593,6 @@ export async function execute(message) {
     if (isTask && !isDM) {
       // Only send a quick ack if the worker takes more than 2 seconds.
       // This avoids wasting an API call on fast responses.
-      message.channel.sendTyping().catch(() => {});
       const ackTimer = setTimeout(async () => {
         if (ackMsg !== null) return; // already handled
         const ack = await quickReply(getConvClient(), systemPromptWithMemory, userText, { guild, channel: message.channel }).catch(() => null);
@@ -559,11 +605,7 @@ export async function execute(message) {
       // Store timer so we can cancel if worker finishes fast
       ackMsg = undefined; // sentinel: undefined = no ack yet, null = cancelled
       _ackTimer = ackTimer; // accessible in finally
-    } else if (!isDM) {
-      await message.channel.sendTyping().catch(() => {});
     }
-
-    const clearTypingRefresh = isDM ? null : startTypingRefresh(message.channel);
 
     // ── Worker AI — handles conversation + tool calls ────────────────────
     // (humanity context already injected above before ack timer)
@@ -606,8 +648,6 @@ export async function execute(message) {
             // Only show progress for actual admin/complex tasks — skip for simple tools (gifs, memory, search, etc.)
             if (!isTask) return;
 
-            clearTypingRefresh?.();
-
             // Use fast AI to generate a natural progress update from the raw tool status
             let displayStatus = rawStatus;
             const naturalProgress = await quickReply(
@@ -635,7 +675,6 @@ export async function execute(message) {
         new Promise((_, reject) => setTimeout(() => reject(new Error("AI generation timed out after 600 seconds")), 600_000))
       ]);
     } finally {
-      clearTypingRefresh?.();
       // Cancel ack timer if worker finished before 2s
       if (typeof _ackTimer !== "undefined") { clearTimeout(_ackTimer); ackMsg = null; }
     }
@@ -700,6 +739,8 @@ export async function execute(message) {
     // Human-timed delivery — realistic typing duration plus occasional
     // mid-reply splits at natural breakpoints.
     const replyDelivered = await firewallGate(async () => {
+      clearTypingRefresh?.();
+      clearTypingRefresh = null;
       await sendReplyChunks(message, chunks);
     });
     if (!replyDelivered) {
@@ -748,6 +789,7 @@ export async function execute(message) {
   }); // end withLock
 
   } finally {
+    clearTypingRefresh?.();
     // ALWAYS clean up — even if handler crashes
     _processingUsers.delete(userKey);
     const queued = _messageQueue.get(userKey);

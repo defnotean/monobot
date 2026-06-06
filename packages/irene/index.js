@@ -20,6 +20,8 @@ import { log, redact } from "./utils/logger.js";
 import { initDatabase } from "./database.js";
 import { initMusic } from "./music/player.js";
 import { sendAlert } from "@defnotean/shared/alert";
+import { createGatewayWatchdog } from "./utils/gatewayWatchdog.js";
+import { loginDiscordWithRetry } from "./utils/loginRetry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -182,24 +184,32 @@ async function loadEvents() {
 
 // ─── Client health events ───────────────────────────────────────────────────
 
+const gatewayWatchdog = createGatewayWatchdog({ log, sendAlert });
+
 client.on("warn", (info) => log(`[WARN] ${info}`));
 client.on("error", (err) => log(`[ERROR] ${err.message}`));
 client.on("invalidated", () => {
   log("[CRITICAL] Client session invalidated — bot will need to restart");
   process.exit(1);
 });
-client.on("shardReady", (id) => log(`[SHARD ${id}] Ready`));
+client.on("shardReady", (id) => {
+  gatewayWatchdog.reset();
+  log(`[SHARD ${id}] Ready`);
+});
 client.on("shardDisconnect", (event, id) => log(`[SHARD ${id}] Disconnected (code ${event.code})`));
-client.on("shardError", (err, id) => log(`[SHARD ${id}] Error: ${err.message}`));
+client.on("shardError", (err, id) => {
+  log(`[SHARD ${id}] Error: ${err.message}`);
+  gatewayWatchdog.recordShardError(err, id);
+});
 client.on("shardReconnecting", (id) => log(`[SHARD ${id}] Reconnecting...`));
 client.on("shardResume", async (id, replayed) => {
+  gatewayWatchdog.reset();
   log(`[SHARD ${id}] Resumed — ${replayed} events replayed — re-warming guild caches`);
   // Re-fetch channels/roles for all guilds after a resume so cache-dependent features
   // (welcome messages, mod logs, create-vc) don't silently fail
   for (const guild of client.guilds.cache.values()) {
     await guild.channels.fetch().catch((e) => log(`[ShardResume] Cache warm failed for guild: ${e.message}`));
     await guild.roles.fetch().catch((e) => log(`[ShardResume] Cache warm failed for guild: ${e.message}`));
-    await guild.members.fetch({ withPresences: true }).catch(() => null);
   }
 
   // Prune stale tempChannels entries — channels that were deleted while the shard was
@@ -273,7 +283,7 @@ async function main() {
   await loadCommands();
   await loadEvents();
   await registerCommands();
-  await client.login(config.token);
+  await loginDiscordWithRetry(client, config.token, { log });
   setupLavalink();
 
   // Dual-write saga reconciler — only relevant when DUAL_WRITE_PERSISTENCE=1.

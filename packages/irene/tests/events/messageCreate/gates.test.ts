@@ -23,6 +23,7 @@ import {
   isSleeping,
   wakeSleep,
   detectAddressing,
+  detectChannelAiSilenceCommand,
   shouldSkipTwinMessage,
   SLEEP_TRIGGERS,
   NAP_TRIGGERS,
@@ -162,6 +163,47 @@ describe("gates / detectAddressing", () => {
   it("flags mentionsEris when the twin bot id appears in content", () => {
     const r = detectAddressing(msg("ping ERIS_ID now"), getServerPersona);
     expect(r.mentionsEris).toBe(true);
+  });
+});
+
+describe("gates / detectChannelAiSilenceCommand", () => {
+  const getServerPersona = () => ({ name: "" });
+
+  function msg(content, { addressed = true } = {}) {
+    const botUser = makeUser({ id: "BOT", username: "irene" });
+    const client = makeClient({ user: botUser });
+    const guild = makeGuild({ id: "g1" });
+    return makeMessage({
+      content,
+      client,
+      guild,
+      mentionsUsers: addressed && content.includes("<@BOT>") ? [botUser] : [],
+    });
+  }
+
+  it("detects an addressed request to stop messaging in this chat", () => {
+    expect(detectChannelAiSilenceCommand(msg("Irene stop messaging in this chat okay?"), getServerPersona))
+      .toBe("silence");
+  });
+
+  it("detects an addressed request not to type here", () => {
+    expect(detectChannelAiSilenceCommand(msg("<@BOT> don't type here"), getServerPersona))
+      .toBe("silence");
+  });
+
+  it("ignores unaddressed chatter that says not to type here", () => {
+    expect(detectChannelAiSilenceCommand(msg("GIRL DON'T TYPE HERE", { addressed: false }), getServerPersona))
+      .toBeNull();
+  });
+
+  it("detects an addressed request to resume talking here", () => {
+    expect(detectChannelAiSilenceCommand(msg("Irene you can talk here again"), getServerPersona))
+      .toBe("unsilence");
+  });
+
+  it("does not persist ambiguous one-off stop wording without a channel scope", () => {
+    expect(detectChannelAiSilenceCommand(msg("Irene stop talking"), getServerPersona))
+      .toBeNull();
   });
 });
 

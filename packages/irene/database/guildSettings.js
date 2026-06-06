@@ -274,6 +274,24 @@ export function getDmResults(guildId) {
   return data.guild_settings[guildId]?.dm_results ?? false; // default: OFF
 }
 
+export function getAiSilencedChannels(guildId) {
+  return data.guild_settings[guildId]?.ai_silenced_channels ?? [];
+}
+
+export function isAiSilencedChannel(guildId, channelId) {
+  if (!guildId || !channelId) return false;
+  return getAiSilencedChannels(guildId).includes(channelId);
+}
+
+export function setAiSilencedChannel(guildId, channelId, silenced) {
+  const s = ensureGuild(guildId);
+  const current = new Set(Array.isArray(s.ai_silenced_channels) ? s.ai_silenced_channels : []);
+  if (silenced) current.add(channelId);
+  else current.delete(channelId);
+  s.ai_silenced_channels = [...current];
+  save("guild_settings");
+}
+
 export function setWelcomeChannel(guildId, channelId, message) {
   const s = ensureGuild(guildId);
   s.welcome_channel = channelId;

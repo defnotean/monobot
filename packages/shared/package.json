@@ -23,6 +23,8 @@
     "./slangGuard.js": "./src/ai/slangGuard.js",
     "./webSearchEngine": "./src/ai/webSearchEngine.js",
     "./webSearchEngine.js": "./src/ai/webSearchEngine.js",
+    "./localVision": "./src/ai/localVision.js",
+    "./localVision.js": "./src/ai/localVision.js",
     "./memoryQuirks": "./src/ai/memoryQuirks.js",
     "./innerState": "./src/ai/innerState.js",
     "./gifCadence": "./src/ai/gifCadence.js",

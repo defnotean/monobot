@@ -24,6 +24,10 @@ const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000, maxKe
 const _presenceLimiter = createRateLimiter({ limit: 1, windowMs: 1_000, maxKeys: 1000, globalLimit: 300 });
 const _dashboardLimiter = createRateLimiter({ limit: 30, windowMs: 60_000, maxKeys: 500, globalLimit: 600 });
 
+function isDiscordGatewayReady(client) {
+  return client?.isReady?.() === true || ((client?.ws?.status ?? null) === 0 && !!client?.user?.tag);
+}
+
 function normalizeOrigin(value) {
   if (!value || typeof value !== "string") return null;
   try {
@@ -97,8 +101,11 @@ let cachedPresence = {
   last_updated: null,
 };
 
+let _lastPresenceFingerprint = "";
+
 export function updatePresence(presence) {
-  const activities = presence.activities.map((a) => ({
+  const sourceActivities = Array.isArray(presence?.activities) ? presence.activities : [];
+  const activities = sourceActivities.map((a) => ({
     name: a.name,
     type: a.type,
     state: a.state,
@@ -119,7 +126,7 @@ export function updatePresence(presence) {
     emoji: a.emoji ? { name: a.emoji.name, id: a.emoji.id, animated: a.emoji.animated } : null,
   }));
 
-  const spotifyActivity = presence.activities.find((a) => a.name === "Spotify");
+  const spotifyActivity = sourceActivities.find((a) => a.name === "Spotify");
   const spotify = spotifyActivity
     ? {
         song: spotifyActivity.details,
@@ -134,18 +141,26 @@ export function updatePresence(presence) {
       }
     : null;
 
-  cachedPresence = {
-    status: presence.status,
+  const nextPresence = {
+    status: presence?.status ?? "offline",
     activities,
     spotify,
-    active_on_desktop: !!presence.clientStatus?.desktop,
-    active_on_mobile: !!presence.clientStatus?.mobile,
-    active_on_web: !!presence.clientStatus?.web,
+    active_on_desktop: !!presence?.clientStatus?.desktop,
+    active_on_mobile: !!presence?.clientStatus?.mobile,
+    active_on_web: !!presence?.clientStatus?.web,
+  };
+  const nextFingerprint = JSON.stringify(nextPresence);
+  if (nextFingerprint === _lastPresenceFingerprint) return false;
+
+  cachedPresence = {
+    ...nextPresence,
     last_updated: new Date().toISOString(),
   };
 
+  _lastPresenceFingerprint = nextFingerprint;
   _cachedPresenceJson = JSON.stringify(cachedPresence);
-  log(`[Presence] ${presence.status} | ${activities.length} activities`);
+  log(`[Presence] ${cachedPresence.status} | ${activities.length} activities`);
+  return true;
 }
 
 // ─── Twin command vocabulary (Eris → Irene relay) ──────────────────────────
@@ -255,7 +270,7 @@ export function startPresenceAPI(client) {
       // /healthz is process liveness for uptime monitors and should stay 200
       // during Discord's normal reconnect churn. /readyz is the stricter
       // Discord-gateway readiness probe for dashboards/automation.
-      const ready = client?.isReady?.() === true;
+      const ready = isDiscordGatewayReady(client);
       const liveness = pathname === "/healthz";
       res.writeHead(liveness || ready ? 200 : 503);
       res.end(JSON.stringify({

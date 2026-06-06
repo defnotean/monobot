@@ -42,6 +42,8 @@ const mockFs = vi.hoisted(() => ({
 
 const mockDiscordState = vi.hoisted(() => ({
   ready: true,
+  wsStatus: 0,
+  userTag: null as string | null,
 }));
 
 vi.mock("http", () => ({
@@ -64,7 +66,8 @@ vi.mock("discord.js", () => ({
     login: vi.fn(async () => "logged-in"),
     destroy: vi.fn(),
     isReady: vi.fn(() => mockDiscordState.ready),
-    ws: { status: 0 },
+    ws: { get status() { return mockDiscordState.wsStatus; } },
+    user: { get tag() { return mockDiscordState.userTag; } },
     };
   }),
   Collection: class Collection<K, V> extends Map<K, V> {},
@@ -196,6 +199,9 @@ async function call(url: string, headers: Record<string, string> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockDiscordState.ready = true;
+  mockDiscordState.wsStatus = 0;
+  mockDiscordState.userTag = null;
 });
 
 describe("Eris early dashboard HTTP routes", () => {
@@ -217,6 +223,18 @@ describe("Eris early dashboard HTTP routes", () => {
     expect(status).toBe(503);
     expect(body.ok).toBe(false);
     expect(body.discord).toBe("disconnected");
+  });
+
+  it("treats ws status 0 plus a bot user as ready even if isReady lags", async () => {
+    mockDiscordState.ready = false;
+    mockDiscordState.wsStatus = 0;
+    mockDiscordState.userTag = "Eris#3609";
+
+    const { status, body } = await call("/readyz");
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.discord).toBe("ready");
   });
 
   it("rejects unauthenticated remote /api/irene requests before proxying to Irene", async () => {

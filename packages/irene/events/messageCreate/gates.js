@@ -291,3 +291,26 @@ export function detectAddressing(message, getServerPersona) {
 
   return { mentioned, saidMyName, mentionsEris };
 }
+
+const CHANNEL_SILENCE_SCOPE = /\b(?:here|this\s+(?:chat|channel)|in\s+this\s+(?:chat|channel)|this\s+thread|in\s+this\s+thread)\b/i;
+const CHANNEL_SILENCE_VERBS = /\b(?:message|messaging|talk|talking|reply|replying|respond|responding|type|typing|chat|chatting)\b/i;
+const CHANNEL_SILENCE_STOP = /\b(?:stop|quit|pause)\s+(?:messag(?:e|ing)|talk(?:ing)?|reply(?:ing)?|respond(?:ing)?|typ(?:e|ing)|chat(?:ting)?)\b/i;
+const CHANNEL_SILENCE_DONT = /\b(?:don'?t|do\s+not)\s+(?:messag(?:e|ing)|talk|reply|respond|typ(?:e|ing)|chat)\b/i;
+const CHANNEL_SILENCE_QUIET = /\b(?:be\s+quiet|stay\s+quiet|shut\s+up)\b/i;
+const CHANNEL_UNSILENCE_EXPLICIT = /\b(?:unmute|unsilence)\b/i;
+const CHANNEL_UNSILENCE = /\b(?:start|resume)\s+(?:messag(?:e|ing)|talk(?:ing)?|reply(?:ing)?|respond(?:ing)?|typ(?:e|ing)|chat(?:ting)?)\b|\b(?:can|may|allowed\s+to|okay\s+to|ok\s+to)\s+(?:messag(?:e|ing)|talk|reply|respond|typ(?:e|ing)|chat)\b|\b(?:messag(?:e|ing)|talk(?:ing)?|reply(?:ing)?|respond(?:ing)?|typ(?:e|ing)|chat(?:ting)?)\b.{0,40}\bagain\b/i;
+
+export function detectChannelAiSilenceCommand(message, getServerPersona) {
+  if (!message?.guild || !message?.content) return null;
+  const { mentioned, saidMyName } = detectAddressing(message, getServerPersona);
+  if (!mentioned && !saidMyName) return null;
+
+  const text = message.content.replace(getMentionRegex(message.client.user.id), " ").trim();
+  if (!CHANNEL_SILENCE_SCOPE.test(text)) return null;
+  if (CHANNEL_UNSILENCE_EXPLICIT.test(text) || (CHANNEL_UNSILENCE.test(text) && CHANNEL_SILENCE_VERBS.test(text))) return "unsilence";
+  if (/\b(?:don'?t|do\s+not)\s+stop\s+(?:messag(?:e|ing)|talk(?:ing)?|reply(?:ing)?|respond(?:ing)?|typ(?:e|ing)|chat(?:ting)?)\b/i.test(text)) {
+    return null;
+  }
+  if (CHANNEL_SILENCE_STOP.test(text) || CHANNEL_SILENCE_DONT.test(text) || CHANNEL_SILENCE_QUIET.test(text)) return "silence";
+  return null;
+}

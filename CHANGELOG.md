@@ -18,6 +18,18 @@ P0 + P1 hardening pass across the monorepo. High-level summary:
   `npm audit --audit-level=moderate`, the full test suite, and the
   `tsc --noEmit` typecheck across a Node 22/24 matrix on push and pull
   request — the target the README CI badge points at.
+- Shared local vision helper (`@defnotean/shared/localVision`) for conservative
+  Ollama-backed image evidence. Eris and Irene now support multiple image
+  attachments while keeping raw image bytes local and out of the external chat
+  provider request.
+- `npm run provision:gemini-keys` helper for Google Cloud CLI users. It creates
+  restricted Gemini API keys and writes them to the local bot `.env` files
+  without printing key values.
+- Irene channel-level AI silence controls, so admins can tell Irene to stop or
+  resume responding in a specific channel.
+- Irene gateway watchdog and login retry helpers to recover from repeated
+  Discord gateway opening-handshake timeouts without losing the HTTP liveness
+  server.
 
 ### Changed
 - Dev loop now uses `node --watch index.js` (Node 22.12.0+ in this repo) for both
@@ -25,12 +37,36 @@ P0 + P1 hardening pass across the monorepo. High-level summary:
   so `npm run dev:eris` / `dev:irene` work on a clean checkout.
 - Render `buildCommand` switched from `npm install` to `npm ci` for both
   services so deploys honour the committed lockfile.
+- Image analysis is now evidence-first: the local vision prompt asks for
+  `Visible`, `Text`, and `Unclear` facts, the chat model is told not to invent
+  visual details from filenames/URLs, and the default local vision model is
+  `qwen2.5vl:7b`.
+- Irene keeps the Discord typing indicator alive during slow local vision,
+  prompt building, model generation, and tool calls, then hands off to the
+  human-paced reply sender.
+- Irene welcome templates now treat `{user}` as display text and `{mention}` as
+  the explicit ping placeholder, avoiding duplicate mentions in public welcome
+  copy.
+- Health/readiness probes now tolerate discord.js `isReady()` lag when the
+  websocket is already open and the bot user is populated.
 
 ### Fixed
 - Documentation honesty: corrected the `ARCHITECTURE.md` tool-surface claim
   that Eris uses the two-tier tool path — neither bot does today; the full
   (profile-filtered) schema is sent every turn and the registry tiering is
   planned/being wired.
+- Irene TTS toggle requests now route directly to the TTS tool instead of the
+  wake-word/STT listener. Enabling TTS verifies the Lavalink join before saving
+  the channel setting and surfaces join/playback failures.
+- Irene image generation rotates across configured Gemini keys, retries
+  transient upstream failures, uses a longer image-tool timeout, and avoids
+  repeatedly re-calling generation after provider failures.
+- Eris `analyze_image` no longer falls back to sending raw image bytes to
+  Gemini; it uses the same local multi-image evidence path as normal chat.
+- `safeFetch`'s DNS-pinned Undici dispatcher now supports lookup callers that
+  request `all: true`, fixing newer Node/Undici callback shape compatibility.
+- The foreground launcher now exits when either bot exits instead of waiting
+  for both processes, letting the cleanup trap re-arm systemd promptly.
 
 ## [3.2.0] - 2026-05-16
 

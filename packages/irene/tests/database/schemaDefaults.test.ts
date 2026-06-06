@@ -120,6 +120,7 @@ describe("schemas — default constant shapes", () => {
       escalation: { mute_at: null, kick_at: null, ban_at: null },
       welcome_channel: null,
       log_channel: null,
+      ai_silenced_channels: [],
       vc_naming_mode: "smart",
       vc_default_limit: 0,
       vc_rich_presence: true,

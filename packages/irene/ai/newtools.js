@@ -217,7 +217,7 @@ export const NEW_ADMIN_TOOLS = [
 
   {
     name: "toggle_voice_listen",
-    description: "Start or stop listening in a voice channel. When enabled, the bot listens for the wake word (default: 'irene') and responds with voice. The user must be in a voice channel.",
+    description: "Start or stop wake-word voice listening in a voice channel. This is STT/listening for people speaking out loud, not TTS/text-to-speech. Do NOT use for 'turn on TTS' or 'text to speech'. The user must be in a voice channel.",
     input_schema: {
       type: "object",
       properties: {

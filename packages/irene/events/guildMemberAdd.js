@@ -61,9 +61,14 @@ export function buildWelcomeEmbed(member, settings, embedCfg) {
   // Human-only member count (excludes bots)
   const humanCount = member.guild.members.cache.filter(m => !m.user.bot).size || member.guild.memberCount;
 
-  // Helper: run all placeholder substitutions on a string
+  const userLabel = member.displayName || member.user.globalName || member.user.username;
+
+  // Helper: run all placeholder substitutions on a string.
+  // Public welcome embeds already send a real ping via `pingContent`, so
+  // `{user}` renders as display text. Use `{mention}` for an explicit mention.
   const sub = (str) => String(str)
-    .replace(/{user}/g,        member.toString())
+    .replace(/{mention}/g,     member.toString())
+    .replace(/{user}/g,        userLabel)
     .replace(/{username}/g,    member.displayName)
     .replace(/{server}/g,      member.guild.name)
     .replace(/{membercount}/g, humanCount)

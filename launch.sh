@@ -123,5 +123,8 @@ TAIL_PIDS+=($!)
 ( tail -F "$IRENE_LOG" 2>/dev/null | sed -u "s/^/$(printf '%b' "${MAG}[IRENE]${RST}") /" ) &
 TAIL_PIDS+=($!)
 
-# Wait for either bot to die naturally (then trigger cleanup via EXIT trap)
-wait "$ERIS_PID" "$IRENE_PID"
+# Wait for either bot to die naturally, then trigger cleanup via EXIT trap.
+wait -n "$ERIS_PID" "$IRENE_PID"
+status=$?
+echo -e "${YEL}A foreground bot exited (status=$status); returning control to systemd...${RST}"
+exit "$status"

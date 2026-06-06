@@ -223,6 +223,11 @@ function dispatcherForIp(ip) {
         /** @param {string} _host @param {any} opts @param {any} cb */
         lookup: (_host, opts, cb) => {
           const callback = typeof opts === "function" ? opts : cb;
+          const options = typeof opts === "object" && opts ? opts : {};
+          if (options.all) {
+            callback(null, [{ address: ip, family }]);
+            return;
+          }
           callback(null, ip, family);
         },
       },

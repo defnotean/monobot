@@ -453,6 +453,7 @@ const config = {
     toolFast:      parseInt(env("TIMEOUT_TOOL_FAST", "15000")),
     toolSlow:      parseInt(env("TIMEOUT_TOOL_SLOW", "30000")),
     toolVerySlow:  parseInt(env("TIMEOUT_TOOL_VERY_SLOW", "60000")),
+    toolImage:     parseInt(env("TIMEOUT_TOOL_IMAGE", "90000")),
     fetch:         parseInt(env("TIMEOUT_FETCH", "5000")),
   },
 };
@@ -503,7 +504,9 @@ config.local = {
   ollamaEmbedUrl: env("OLLAMA_EMBED_URL"),
   ollamaEmbedModel: env("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
   ollamaVisionUrl: env("OLLAMA_VISION_URL"),
-  ollamaVisionModel: env("OLLAMA_VISION_MODEL", "llava:7b"),
+  ollamaVisionModel: env("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"),
+  visionMaxImages: Number(env("LOCAL_VISION_MAX_IMAGES", "4")) || 4,
+  visionImageMaxBytes: Number(env("LOCAL_VISION_IMAGE_MAX_BYTES", String(5 * 1024 * 1024))) || 5 * 1024 * 1024,
 };
 
 export default config;

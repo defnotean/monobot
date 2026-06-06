@@ -38,7 +38,7 @@ Irene is the "good twin": a moderation and community-management bot that feels l
 - **Server setup:** tickets, welcome cards, logging, autoroles, reaction roles, role pickers, starboard, suggestions, custom embeds, custom commands, scheduled messages, reminders, birthdays, AFK, tags, highlights, stats channels, and setup wizards.
 - **Music and voice:** Lavalink playback, queue controls, DJ controls, filters, lyrics mode, TTS, soundboard, and wake-word listening.
 - **Community systems:** leveling, XP rewards, giveaways, polls, trivia, scrims, weekly digests, smart temporary voice channels, feeds for YouTube/GitHub/Twitch/patch notes.
-- **AI workflows:** channel summaries, memory, image understanding, web search, web reads, DM-based server management, and contextual tool use with Discord permission gates.
+- **AI workflows:** channel summaries, memory, local multi-image vision evidence through Ollama, web search, web reads, DM-based server management, and contextual tool use with Discord permission gates.
 
 ### Eris: The Social Economy Twin
 
@@ -47,7 +47,7 @@ Eris is the chaotic twin: an AI personality bot with economy, gambling, games, m
 - **Economy:** wallet/bank, daily/weekly/monthly rewards, shop, inventory, achievements, loans, marriage, bounties, robbery, heists, lottery, pets, crafting, and leaderboards.
 - **Games and gambling:** coinflip, dice, slots, roulette, blackjack-style games, poker, Connect 4, tic-tac-toe, hangman, trivia, duels, boss raids, and mood-influenced game flavor.
 - **AI personality:** long-term memory, semantic recall, moods with inertia, relationship dimensions, per-channel context, preoccupations, self-canon, natural short replies, and occasional GIF reactions.
-- **Media and web:** GIFs, memes, image search, image analysis, generated images, web search/read, notes, reminders, files, and PC-agent owner workflows.
+- **Media and web:** GIFs, memes, image search, local multi-image analysis, generated images, web search/read, notes, reminders, files, and PC-agent owner workflows.
 
 ### Twin Mode
 
@@ -85,7 +85,7 @@ Run one bot or both. When both Eris and Irene are deployed, they can share state
 | AI agent tooling | Tool registry, permission gates, web search/read, image tools, memory, notes, reminders, file output |
 | Economy and games | Wallet, bank, shop, inventory, lottery, heists, pets, gambling, poker, duels, leaderboards |
 | Memory/personality | Mood inertia, relationships, long-term memory, semantic recall, self-canon, dreams, response variation |
-| Media | GIF reactions, memes, real image search, image analysis, generated/edited images |
+| Media | GIF reactions, memes, real image search, local image evidence, generated/edited images |
 | Observability | Health endpoints, presence API, dashboard surfaces, logs, audit docs, test coverage |
 | Security | SSRF protection, prompt-injection defenses, HMAC twin protocol, role hierarchy checks, replay protection |
 
@@ -136,6 +136,7 @@ npm test                         # all workspace tests
 npm run lint:version-sync        # shared third-party dependency guard
 npm run new:tool                 # scaffold a new AI tool
 npm run new:command              # scaffold a slash command
+npm run provision:gemini-keys    # create restricted Gemini keys with gcloud
 ```
 
 Current verification baseline:

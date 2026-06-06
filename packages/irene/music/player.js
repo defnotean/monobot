@@ -989,9 +989,11 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
     if (localTts) {
       // Local TTS via piper. Reads text on stdin, writes WAV to the temp path.
       const { spawn } = await import("node:child_process");
-      const { readFileSync, unlinkSync } = await import("node:fs");
+      const { accessSync, constants, readFileSync, unlinkSync } = await import("node:fs");
       const piperBin = config.local?.piperBin || `${process.env.HOME}/.local/piper/piper/piper`;
       const voicePath = config.local?.piperVoice || `${process.env.HOME}/.local/piper/voice.onnx`;
+      accessSync(piperBin, constants.X_OK);
+      accessSync(voicePath, constants.R_OK);
       const tmpPath = `/tmp/irene-tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`;
       await new Promise(/** @param {(value?: any) => void} resolve @param {(reason?: any) => void} reject */ (resolve, reject) => {
         const proc = spawn(piperBin, ["--model", voicePath, "--output_file", tmpPath]);
@@ -1128,6 +1130,7 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
     log("[TTS] ✓ Queued/Playing");
   } catch (err) {
     log(`[TTS] Error: ${err.message}`);
+    throw err;
   }
 }
 

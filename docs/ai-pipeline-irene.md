@@ -45,6 +45,13 @@ Each heading is tagged **`[STABLE]`** (settled; changes rarely — safe to build
 
 System prompt assembled in layers (~line 939+). Recent commit `feat(irene): rules + commands awareness in AI context` added the `[SERVER RULES]` and `[YOUR SLASH COMMANDS]` blocks.
 
+Image attachments are summarized before the external AI call by
+`@defnotean/shared/localVision`. The external provider receives `LOCAL IMAGE
+EVIDENCE` text only; raw Discord image bytes go to the configured local Ollama
+vision endpoint. The prompt explicitly tells Irene to use only visible facts
+from that evidence and to say when details are uncertain instead of inventing
+outfit, meme, source, or avatar-context details.
+
 1. **Personality** (line 899): server persona override → Supabase custom → `config.botPersonality`. Cached per-guild 5 min.
 2. **Permission context** (line 885): ADMIN/MODERATOR/STAFF/MEMBER from Discord API perms + anti-impersonation block.
 3. **Core instructional block** (lines 939–1082): tools-by-emoji guide, anti-hallucination rules, parallel-search rule, "don't double down" rule.
@@ -100,7 +107,12 @@ After `runGeminiChat` returns (line 1667):
 - **Reply scrub** (line 1685): strip leaked tool syntax (`tool_name(args)`, `<tool_code>`, `[Irene said]`, `[result: …]`).
 - **Mention resolution** (line 1710); **length-budget enforcement** (line 1723) trims to last sentence boundary at/under `message._charBudget`; **chunk split** (line 1747) `splitMessage(text, 2000)` for rare >2000-char Discord cap.
 - **Human delivery** (line 1755): `sendHumanReply()` from `utils/humanDelay.js` (line 106). Typing delay median 3.3 chars/sec ±30%, capped 350–4500 ms; shows typing indicator; optionally splits into 1–3 segments at natural breakpoints (`splitHumanReply` line 55) using markers like "wait", "actually", "ngl". First segment uses `message.reply()`, follow-ups use plain `channel.send()` to avoid double-pinging.
-- **Typing indicator** kept alive during the AI call by an 8 s `setInterval` (line 1580); status-message cleanup (line 1674); DM mirror (line 1824) if tools used + guild DM-results enabled + user not opted out; afterthought (line 1797) 4% chance with strict word-overlap dedup.
+- **Typing indicator** is refreshed from the start of the response pipeline
+  through local vision, prompt building, AI generation, and tool calls. It stops
+  only when `sendHumanReply()` takes over for final human-paced delivery.
+  Status-message cleanup (line 1674); DM mirror (line 1824) if tools used +
+  guild DM-results enabled + user not opted out; afterthought (line 1797) 4%
+  chance with strict word-overlap dedup.
 
 ## 7. State persistence  [STABLE]
 

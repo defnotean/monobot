@@ -14,6 +14,7 @@
 import config from "../../config.js";
 import { safeFetch } from "@defnotean/shared/safeFetch";
 import { isExplicitGifRequest, recordNaturalGif, shouldAllowNaturalGif } from "@defnotean/shared/gifCadence";
+import { describeImageAttachment, describeImageAttachments, formatImageDescriptions } from "@defnotean/shared/localVision";
 
 // Caps for image fetches. Discord's attachment limit is 25 MB but most memes
 // and avatar URLs are < 2 MB; we pick 8 MB as the upper bound an attacker
@@ -269,58 +270,25 @@ export async function execute(toolName, input, message, _context) {
     }
 
     case "analyze_image": {
-      const attachment = message.attachments?.first();
-      const url = input.url || input.image_url || attachment?.url;
-      if (!url) return "no image provided — attach an image or provide a url";
+      const prompt = input.prompt || input.question || "Describe this image in detail.";
+      const url = input.url || input.image_url;
       try {
-        // safeFetch (binary: true) enforces SSRF blocklist + DNS-resolved IP
-        // check + 8 MB size cap before we ever materialize the buffer for
-        // Gemini. Without it an LLM tool call could point us at
-        // 169.254.169.254 or stream a GB image into our heap.
-        const imgRes = await safeFetch(url, {
-          binary: true,
-          maxBytes: IMAGE_MAX_BYTES,
-          timeoutMs: 10_000,
-        });
-        if (imgRes.status < 200 || imgRes.status >= 300) {
-          return `image fetch failed: ${imgRes.status}`;
-        }
-        const buffer = imgRes.bytes;
-        if (!buffer) return "image fetch failed: empty response";
-        const base64 = buffer.toString("base64");
-        const mimeType = imgRes.headers.get("content-type") || "image/png";
+        const visionOptions = {
+          prompt,
+          visionUrl: config.local?.ollamaVisionUrl,
+          model: config.local?.ollamaVisionModel || "qwen2.5vl:7b",
+          maxImages: config.local?.visionMaxImages || 4,
+          maxBytes: config.local?.visionImageMaxBytes || IMAGE_MAX_BYTES,
+        };
 
-        const prompt = input.prompt || input.question || "Describe this image in detail.";
-
-        // Local-Ollama vision path. Activated by config.local.ollamaVisionUrl.
-        if (config.local?.ollamaVisionUrl) {
-          const res = await fetch(`${config.local.ollamaVisionUrl}/api/chat`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: config.local.ollamaVisionModel || "llava:7b",
-              messages: [{ role: "user", content: prompt, images: [base64] }],
-              stream: false,
-            }),
-          });
-          if (!res.ok) return `image analysis failed: ${res.status}`;
-          const data = await res.json();
-          return truncate(data?.message?.content || "could not analyze image");
+        if (url) {
+          const result = await describeImageAttachment({ url, name: "provided-url" }, visionOptions);
+          return truncate(result.description || result.error || "could not analyze image");
         }
 
-        const { GoogleGenAI } = await import("@google/genai");
-        const genai = new GoogleGenAI({ apiKey: config.geminiKeys[0] });
-        const result = await genai.models.generateContent({
-          model: config.geminiFastModel,
-          contents: [{
-            role: "user",
-            parts: [
-              { inlineData: { mimeType, data: base64 } },
-              { text: prompt },
-            ],
-          }],
-        });
-        return truncate(result.text || "could not analyze image");
+        const result = await describeImageAttachments(message, visionOptions);
+        if (!result.allImageAttachments.length) return "no image provided — attach an image or provide a url";
+        return truncate(formatImageDescriptions(result.imageDescriptions, { omittedCount: result.omittedCount }) || "could not analyze image", 2500);
       } catch (e) {
         return `image analysis failed: ${e.message}`;
       }

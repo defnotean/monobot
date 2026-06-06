@@ -9,17 +9,37 @@ vi.mock("@defnotean/shared/safeFetch", () => ({
   safeFetch: vi.fn(),
 }));
 
+vi.mock("@defnotean/shared/localVision", () => ({
+  describeImageAttachment: vi.fn(),
+  describeImageAttachments: vi.fn(),
+  formatImageDescriptions: vi.fn((descriptions: any[], { omittedCount = 0 } = {}) => [
+    "[LOCAL IMAGE EVIDENCE",
+    ...descriptions.map((d, i) => `${i + 1} (${d.name}): ${d.description}`),
+    omittedCount ? `+${omittedCount} more image(s) omitted` : "",
+    "-- end local image evidence --]",
+  ].filter(Boolean).join("\n")),
+}));
+
 vi.mock("../../../config.js", () => ({
   default: {
     klipyApiKey: "test-klipy-key",
     colors: { gif: 0x2b2d31 },
+    local: {
+      ollamaVisionUrl: "http://127.0.0.1:11434",
+      ollamaVisionModel: "qwen2.5vl:3b",
+      visionMaxImages: 4,
+      visionImageMaxBytes: 1234,
+    },
   },
 }));
 
 import { safeFetch } from "@defnotean/shared/safeFetch";
+import { describeImageAttachment, describeImageAttachments } from "@defnotean/shared/localVision";
 import { execute } from "../../../ai/executors/mediaExecutor.js";
 
 const mockSafeFetch = safeFetch as unknown as ReturnType<typeof vi.fn>;
+const mockDescribeImageAttachment = describeImageAttachment as unknown as ReturnType<typeof vi.fn>;
+const mockDescribeImageAttachments = describeImageAttachments as unknown as ReturnType<typeof vi.fn>;
 
 function makeMemberCache(members: Array<{ id: string; username: string; displayName: string; globalName?: string }>) {
   return {
@@ -46,6 +66,62 @@ function makeMemberCache(members: Array<{ id: string; username: string; displayN
 describe("mediaExecutor", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  describe("analyze_image", () => {
+    it("describes multiple attached images through local vision", async () => {
+      const message = {
+        attachments: new Map([
+          ["1", { url: "https://cdn.example.test/one.png", contentType: "image/png", name: "one.png" }],
+          ["2", { url: "https://cdn.example.test/two.jpg", contentType: "image/jpeg", name: "two.jpg" }],
+        ]),
+      };
+      mockDescribeImageAttachments.mockResolvedValueOnce({
+        allImageAttachments: [...message.attachments.values()],
+        imageDescriptions: [
+          { ok: true, name: "one.png", description: "a cat" },
+          { ok: true, name: "two.jpg", description: "an owl" },
+        ],
+        omittedCount: 0,
+      });
+
+      const result = await execute("analyze_image", { prompt: "describe these" }, message, {});
+
+      expect(mockDescribeImageAttachments).toHaveBeenCalledWith(message, {
+        prompt: "describe these",
+        visionUrl: "http://127.0.0.1:11434",
+        model: "qwen2.5vl:3b",
+        maxImages: 4,
+        maxBytes: 1234,
+      });
+      expect(String(result)).toContain("1 (one.png): a cat");
+      expect(String(result)).toContain("2 (two.jpg): an owl");
+    });
+
+    it("uses local vision for a provided image URL without falling back to Gemini", async () => {
+      mockDescribeImageAttachment.mockResolvedValueOnce({
+        ok: true,
+        name: "provided-url",
+        description: "a screenshot of settings",
+      });
+
+      const result = await execute("analyze_image", {
+        image_url: "https://cdn.example.test/settings.png",
+        prompt: "what is this",
+      }, { attachments: new Map() }, {});
+
+      expect(mockDescribeImageAttachment).toHaveBeenCalledWith(
+        { url: "https://cdn.example.test/settings.png", name: "provided-url" },
+        {
+          prompt: "what is this",
+          visionUrl: "http://127.0.0.1:11434",
+          model: "qwen2.5vl:3b",
+          maxImages: 4,
+          maxBytes: 1234,
+        },
+      );
+      expect(result).toBe("a screenshot of settings");
+    });
   });
 
   describe("send_gif", () => {

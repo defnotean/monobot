@@ -19,4 +19,5 @@ export * from "./logRedact.js";
 export * from "./ai/promptBudget.js";
 export * from "./ai/innerState.js";
 export * from "./ai/gifCadence.js";
+export * from "./ai/localVision.js";
 export { createFirewall, spotlight, normalizeText, InMemoryWindowStore, RedisWindowStore } from "./ai/firewall.js";

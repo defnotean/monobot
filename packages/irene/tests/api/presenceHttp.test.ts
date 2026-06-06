@@ -68,7 +68,7 @@ function makeRes(): MockRes {
   return res;
 }
 
-async function call(path: string, ready: boolean) {
+async function call(path: string, ready: boolean, overrides: any = {}) {
   vi.resetModules();
   mockHttp.state.handler = null;
   mockHttp.createServer.mockClear();
@@ -78,6 +78,7 @@ async function call(path: string, ready: boolean) {
     isReady: vi.fn(() => ready),
     ws: { status: ready ? 0 : 5 },
     user: { tag: ready ? "Irene#0001" : "connecting..." },
+    ...overrides,
   };
   startPresenceAPI(client);
   expect(mockHttp.state.handler).toBeTypeOf("function");
@@ -115,6 +116,17 @@ describe("Irene presence HTTP probes", () => {
 
   it("marks /readyz available once Discord is ready", async () => {
     const { status, body } = await call("/readyz", true);
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.discord).toBe("ready");
+  });
+
+  it("treats ws status 0 plus a bot user as ready even if isReady lags", async () => {
+    const { status, body } = await call("/readyz", false, {
+      ws: { status: 0 },
+      user: { tag: "Irene#0001" },
+    });
 
     expect(status).toBe(200);
     expect(body.ok).toBe(true);

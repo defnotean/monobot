@@ -50,7 +50,7 @@ describe("/welcome", () => {
       isOwner: true,
       options: {
         channel,
-        message: "Welcome {user} to {server}! #{membercount} ({username})",
+        message: "Welcome {user} to {server}! #{membercount} ({username}) / {mention}",
       },
     });
 
@@ -59,14 +59,14 @@ describe("/welcome", () => {
     expect(setWelcomeChannel).toHaveBeenCalledWith(
       guild.id,
       channel.id,
-      "Welcome {user} to {server}! #{membercount} ({username})",
+      "Welcome {user} to {server}! #{membercount} ({username}) / {mention}",
     );
     const text = repliedText(interaction);
     // Placeholders must be replaced in the preview.
-    expect(text).toContain(`<@${user.id}>`); // {user}
+    expect(text).toContain("alice"); // {user} and {username}
+    expect(text).toContain(`<@${user.id}>`); // {mention}
     expect(text).toContain("CoolServer"); // {server}
     expect(text).toContain("42"); // {membercount}
-    expect(text).toContain("alice"); // {username}
     expect(text).not.toContain("{membercount}");
   });
 

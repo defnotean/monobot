@@ -69,7 +69,7 @@ vi.mock("../../ai/bumpCorrelation.js", () => ({
 }));
 
 // @ts-expect-error - importing JS module without types
-import { execute } from "../../events/guildMemberAdd.js";
+import { buildWelcomeEmbed, execute } from "../../events/guildMemberAdd.js";
 
 function makeMember(kickImpl: () => Promise<unknown>) {
   const guild = {
@@ -109,6 +109,31 @@ beforeEach(() => {
 });
 
 describe("guildMemberAdd raid auto-kick resilience", () => {
+  it("renders default welcome embed text with a username, leaving the real ping in message content", () => {
+    const member = makeMember(async () => {});
+
+    const { embed, pingContent } = buildWelcomeEmbed(member as any, {}, {});
+
+    expect(embed.data.title).toBe("👋 Welcome, Raider!");
+    expect(embed.data.description).toContain("Everyone say hello to Raider!");
+    expect(embed.data.title).not.toContain("<@member-1>");
+    expect(embed.data.description).not.toContain("<@member-1>");
+    expect(pingContent).toContain("<@member-1>");
+  });
+
+  it("supports {mention} for explicit custom welcome mentions", () => {
+    const member = makeMember(async () => {});
+
+    const { embed } = buildWelcomeEmbed(
+      member as any,
+      { welcome_message: "actual mention: {mention}; display: {user}" },
+      {},
+    );
+
+    expect(embed.data.description).toContain("actual mention: <@member-1>");
+    expect(embed.data.description).toContain("display: Raider");
+  });
+
   it("logs (does not silently swallow) a failing raid kick and does not throw", async () => {
     const member = makeMember(async () => {
       throw new Error("Missing Permissions");

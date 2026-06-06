@@ -10,3 +10,8 @@ coverage/
 # password + JWT secret). Keep out of the repo — the DB schema is captured by
 # packages/*/migrations/.
 .local-setup/
+
+# Local Google Cloud CLI install/config used by the Gemini key provisioning
+# helper. These can contain OAuth state and machine-specific binaries.
+.gcloud-config/
+.tools/
