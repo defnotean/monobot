@@ -22,6 +22,9 @@ P0 + P1 hardening pass across the monorepo. High-level summary:
   Ollama-backed image evidence. Eris and Irene now support multiple image
   attachments while keeping raw image bytes local and out of the external chat
   provider request.
+- Local vision crop passes for tall/large screenshots, so phone screenshots can
+  preserve small UI text instead of relying only on one downscaled whole-image
+  pass.
 - `npm run provision:gemini-keys` helper for Google Cloud CLI users. It creates
   restricted Gemini API keys and writes them to the local bot `.env` files
   without printing key values.

@@ -55,6 +55,15 @@ function env(key, fallback) {
   return process.env[key] || envVars[key] || fallback;
 }
 
+/** @param {string} key @param {number} fallback @param {{ min?: number, max?: number, integer?: boolean }} [options] */
+function envNumber(key, fallback, { min = -Infinity, max = Infinity, integer = false } = {}) {
+  const raw = env(key, String(fallback));
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  const value = integer ? Math.floor(parsed) : parsed;
+  return Math.min(max, Math.max(min, value));
+}
+
 function envJson(key, fallback = {}) {
   const raw = env(key);
   if (!raw) return fallback;
@@ -263,6 +272,7 @@ const config = {
   ownerId: env("DISCORD_USER_ID", DEFAULT_OWNER_ID),
   ownerName: env("DISCORD_OWNER_NAME", DEFAULT_OWNER_NAME),
   port: parseInt(env("PORT", "3001")),
+  dashboardApiKey: env("DASHBOARD_API_KEY"),
 
   // Identifier used for personality / longmemory / audit rows in Supabase.
   // Must be stable across restarts — changing it creates a fresh personality.
@@ -505,8 +515,13 @@ config.local = {
   ollamaEmbedModel: env("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
   ollamaVisionUrl: env("OLLAMA_VISION_URL"),
   ollamaVisionModel: env("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"),
-  visionMaxImages: Number(env("LOCAL_VISION_MAX_IMAGES", "4")) || 4,
-  visionImageMaxBytes: Number(env("LOCAL_VISION_IMAGE_MAX_BYTES", String(5 * 1024 * 1024))) || 5 * 1024 * 1024,
+  visionMaxImages: envNumber("LOCAL_VISION_MAX_IMAGES", 4, { min: 1, integer: true }),
+  visionImageMaxBytes: envNumber("LOCAL_VISION_IMAGE_MAX_BYTES", 12 * 1024 * 1024, { min: 1, integer: true }),
+  visionMaxTiles: envNumber("LOCAL_VISION_MAX_TILES", 4, { min: 0, max: 8, integer: true }),
+  visionTileMinLongEdge: envNumber("LOCAL_VISION_TILE_MIN_LONG_EDGE", 1600, { min: 320, integer: true }),
+  visionTileMinAspect: envNumber("LOCAL_VISION_TILE_MIN_ASPECT", 1.45, { min: 1, max: 10 }),
+  visionTileOverlapRatio: envNumber("LOCAL_VISION_TILE_OVERLAP_RATIO", 0.12, { min: 0, max: 0.4 }),
+  visionDetailMaxChars: envNumber("LOCAL_VISION_DETAIL_MAX_CHARS", 3600, { min: 1200, max: 8000, integer: true }),
 };
 
 export default config;

@@ -279,6 +279,11 @@ export async function execute(toolName, input, message, _context) {
           model: config.local?.ollamaVisionModel || "qwen2.5vl:7b",
           maxImages: config.local?.visionMaxImages || 4,
           maxBytes: config.local?.visionImageMaxBytes || IMAGE_MAX_BYTES,
+          maxTiles: config.local?.visionMaxTiles ?? 4,
+          tileMinLongEdge: config.local?.visionTileMinLongEdge ?? 1600,
+          tileMinAspect: config.local?.visionTileMinAspect ?? 1.45,
+          tileOverlapRatio: config.local?.visionTileOverlapRatio ?? 0.12,
+          detailMaxChars: config.local?.visionDetailMaxChars ?? 3600,
         };
 
         if (url) {

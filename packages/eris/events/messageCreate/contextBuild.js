@@ -121,7 +121,12 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
     visionUrl: config.local?.ollamaVisionUrl,
     model: config.local?.ollamaVisionModel || "qwen2.5vl:7b",
     maxImages: config.local?.visionMaxImages || 4,
-    maxBytes: config.local?.visionImageMaxBytes || 5 * 1024 * 1024,
+    maxBytes: config.local?.visionImageMaxBytes || 12 * 1024 * 1024,
+    maxTiles: config.local?.visionMaxTiles ?? 4,
+    tileMinLongEdge: config.local?.visionTileMinLongEdge ?? 1600,
+    tileMinAspect: config.local?.visionTileMinAspect ?? 1.45,
+    tileOverlapRatio: config.local?.visionTileOverlapRatio ?? 0.12,
+    detailMaxChars: config.local?.visionDetailMaxChars ?? 3600,
   });
   const isTwinMsg = isTwin;
   // Normalize fancy Unicode usernames so AI sees readable text.

@@ -22,7 +22,7 @@ import { normalizeRequestPathname, parseRequestUrl } from "@defnotean/shared/htt
 // awareness sync runs on much longer intervals.
 const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000, maxKeys: 128, globalLimit: 60 });
 const _presenceLimiter = createRateLimiter({ limit: 1, windowMs: 1_000, maxKeys: 1000, globalLimit: 300 });
-const _dashboardLimiter = createRateLimiter({ limit: 30, windowMs: 60_000, maxKeys: 500, globalLimit: 600 });
+const _dashboardLimiter = createRateLimiter({ limit: 180, windowMs: 60_000, maxKeys: 500, globalLimit: 2000 });
 
 function isDiscordGatewayReady(client) {
   return client?.isReady?.() === true || ((client?.ws?.status ?? null) === 0 && !!client?.user?.tag);
@@ -55,7 +55,7 @@ export function isDashboardRequestAuthorized(req) {
 
   const authHeader = req.headers.authorization;
   const token = typeof authHeader === "string" ? authHeader.replace(/^Bearer\s+/i, "") : "";
-  const validKeys = [process.env.DASHBOARD_API_KEY].filter(Boolean);
+  const validKeys = [process.env.DASHBOARD_API_KEY, config.dashboardApiKey].filter(Boolean);
   return !!token && validKeys.some((k) => safeStringEqual(token, k));
 }
 
@@ -320,7 +320,7 @@ export function startPresenceAPI(client) {
       const path = pathname;
       const j = (code, data) => { res.writeHead(code); res.end(JSON.stringify(data)); };
 
-      // ── Rate limiting for API endpoints (per-IP, 30 req/min)
+      // ── Rate limiting for API endpoints (per-IP, dashboard-safe)
       const apiIP = getClientIp(req);
       if (!_dashboardLimiter.allow(apiIP)) { j(429, { error: "rate limited" }); return; }
 

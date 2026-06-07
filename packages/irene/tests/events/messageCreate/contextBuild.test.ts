@@ -10,6 +10,11 @@ vi.mock("../../../config.js", () => ({
       ollamaVisionModel: "qwen2.5vl:3b",
       visionMaxImages: 4,
       visionImageMaxBytes: 1234,
+      visionMaxTiles: 4,
+      visionTileMinLongEdge: 1600,
+      visionTileMinAspect: 1.45,
+      visionTileOverlapRatio: 0.12,
+      visionDetailMaxChars: 3600,
     },
   },
 }));
@@ -278,6 +283,11 @@ describe("contextBuild / collectImages", () => {
       model: "qwen2.5vl:3b",
       maxImages: 4,
       maxBytes: 1234,
+      maxTiles: 4,
+      tileMinLongEdge: 1600,
+      tileMinAspect: 1.45,
+      tileOverlapRatio: 0.12,
+      detailMaxChars: 3600,
     });
     expect(result.allImageAttachments).toEqual([attachment]);
     expect(result.imageDescriptions[0].description).toBe("a small image");

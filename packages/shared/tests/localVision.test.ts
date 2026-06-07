@@ -1,16 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error JS module without declarations
 import {
+  computeImageTileRegions,
+  describeImageBuffer,
   describeImageAttachments,
   formatImageDescriptions,
   getImageAttachments,
   isImageAttachment,
+  readImageDimensions,
+  shouldCreateImageTiles,
 } from "../src/ai/localVision.js";
 
 class Collection<K, V> extends Map<K, V> {
   first() {
     return this.values().next().value;
   }
+}
+
+function pngHeader(width: number, height: number) {
+  const buffer = Buffer.alloc(24);
+  buffer[0] = 0x89;
+  buffer.write("PNG", 1, "ascii");
+  buffer.write("IHDR", 12, "ascii");
+  buffer.writeUInt32BE(width, 16);
+  buffer.writeUInt32BE(height, 20);
+  return buffer;
 }
 
 describe("localVision", () => {
@@ -31,6 +45,51 @@ describe("localVision", () => {
     };
 
     expect(getImageAttachments(message).map((a: any) => a.name)).toEqual(["1.png", "3.jpg"]);
+  });
+
+  it("detects tall screenshots as candidates for high-resolution crop passes", () => {
+    const dimensions = readImageDimensions(pngHeader(1170, 2532));
+
+    expect(dimensions).toEqual({ type: "png", width: 1170, height: 2532 });
+    expect(shouldCreateImageTiles(dimensions, {
+      maxTiles: 4,
+      tileMinLongEdge: 1600,
+      tileMinAspect: 1.45,
+    })).toBe(true);
+    expect(computeImageTileRegions(dimensions!, { maxTiles: 4 })).toMatchObject([
+      { x: 0, y: 0, width: 1170, label: "top" },
+      { x: 0, width: 1170 },
+      { x: 0, width: 1170 },
+    ]);
+  });
+
+  it("adds crop-pass descriptions for high-resolution screenshot evidence", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ message: { content: "Visible: full phone screenshot\nText: small text unclear\nUnclear: tiny UI text" } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ message: { content: "Visible: top notification shade\nText: Wi-Fi, 9:41 AM\nUnclear: none visible" } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ message: { content: "Visible: bottom chat input\nText: Send, Message\nUnclear: none visible" } }) });
+    const makeImageTiles = vi.fn().mockResolvedValue([
+      { buffer: Buffer.from("top-tile"), label: "top", width: 390, height: 720, sourceWidth: 390, sourceHeight: 1560 },
+      { buffer: Buffer.from("bottom-tile"), label: "bottom", width: 390, height: 720, sourceWidth: 390, sourceHeight: 1560 },
+    ]);
+
+    const description = await describeImageBuffer(Buffer.from("full-image"), {
+      visionUrl: "http://127.0.0.1:11434",
+      model: "qwen2.5vl:3b",
+      fetchImpl,
+      makeImageTiles,
+      maxTiles: 2,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(makeImageTiles).toHaveBeenCalledWith(Buffer.from("full-image"), expect.objectContaining({ maxTiles: 2 }));
+    const cropRequestBody = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    expect(cropRequestBody.messages[0].content).toContain("high-resolution crop 1/2 (top)");
+    expect(cropRequestBody.messages[0].content).toContain("Prioritize small UI text");
+    expect(description).toContain("Full image:");
+    expect(description).toContain("High-resolution crop pass:");
+    expect(description).toContain("Wi-Fi, 9:41 AM");
+    expect(description).toContain("Send, Message");
   });
 
   it("describes several images through local Ollama without exposing raw bytes in the formatted block", async () => {

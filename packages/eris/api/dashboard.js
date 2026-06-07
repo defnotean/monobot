@@ -13,7 +13,7 @@ import { normalizeRequestPathname, parseRequestUrl } from "@defnotean/shared/htt
 // resolution. 10/min/IP is well above any healthy poll cadence; legit twin
 // awareness sync runs on much longer intervals.
 const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000, maxKeys: 128, globalLimit: 60 });
-const _dashboardLimiter = createRateLimiter({ limit: 30, windowMs: 60_000, maxKeys: 500, globalLimit: 600 });
+const _dashboardLimiter = createRateLimiter({ limit: 180, windowMs: 60_000, maxKeys: 500, globalLimit: 2000 });
 
 function moodLabel(score) {
   if (score >= 60) return "ecstatic";
@@ -63,7 +63,7 @@ export function isDashboardRequestAuthorized(req) {
 
   const authHeader = req.headers.authorization;
   const token = typeof authHeader === "string" ? authHeader.replace(/^Bearer\s+/i, "") : "";
-  const validKeys = [process.env.DASHBOARD_API_KEY].filter(Boolean);
+  const validKeys = [process.env.DASHBOARD_API_KEY, config.dashboardApiKey].filter(Boolean);
   return !!token && validKeys.some((k) => safeStringEqual(token, k));
 }
 
@@ -77,7 +77,7 @@ export function requireDashboardAuth(req, res) {
 // Per-IP rate-limit gate shared by every dashboard surface. Factored out of
 // handleApiRequest so the admin auxiliary routes (/api/irene/* proxy and
 // /api/logs in adminAuxRoutes.js), which run BEFORE handleApiRequest and so
-// never reach the inline check below, enforce the SAME 30 req/min/IP budget
+// never reach the inline check below, enforce the SAME dashboard req/min/IP budget
 // against the SAME _dashboardLimiter bucket. Returns true (and writes a 429)
 // when the request is over the limit, so callers `return`/short-circuit on
 // true; false means "allowed, keep going". Uses getClientIp (X-Forwarded-For
@@ -140,7 +140,7 @@ export async function handleApiRequest(req, res) {
 
   res.setHeader("Content-Type", "application/json");
 
-  // ── Rate limiting (per-IP, 30 req/min) ──────────────────────────────────
+  // ── Rate limiting (per-IP, dashboard-safe) ───────────────────────────────
   // Shared helper (also used by the admin auxiliary routes) — same bucket,
   // X-Forwarded-For aware so Render's single shared socket peer doesn't
   // collapse all visitors into one key.

@@ -194,12 +194,20 @@ function el(tag, attrs = {}, ...kids) {
 
 // ─── Fetch wrapper that adds Bearer token from localStorage ───────────────
 function authHeaders() {
-  const t = localStorage.getItem(TOKEN_KEY);
+  const t = normalizeDashboardToken(localStorage.getItem(TOKEN_KEY));
   return t ? { 'Authorization': `Bearer ${t}` } : {};
 }
 async function authFetch(url, opts = {}) {
   const headers = { ...(opts.headers || {}), ...authHeaders() };
   return fetch(url, { ...opts, headers });
+}
+
+function normalizeDashboardToken(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^DASHBOARD_API_KEY\s*=\s*/i, '')
+    .replace(/^['"]|['"]$/g, '')
+    .trim();
 }
 
 function apiPath(bot, path) {
@@ -214,7 +222,10 @@ async function api(bot, path, opts = {}) {
   return ct.includes('json') ? r.json() : r.text();
 }
 async function tryApi(bot, path, opts) {
-  try { return await api(bot, path, opts); } catch (e) { return { _error: e.message }; }
+  try { return await api(bot, path, opts); } catch (e) {
+    if (e.message === 'unauthorized') throw e;
+    return { _error: e.message };
+  }
 }
 
 function showError(msg) {
@@ -250,7 +261,7 @@ function showLogin(errMsg) {
 }
 function hideLogin() { $('#login-modal').classList.remove('visible'); }
 function submitLogin() {
-  const tok = $('#login-token').value.trim();
+  const tok = normalizeDashboardToken($('#login-token').value);
   if (!tok) return;
   localStorage.setItem(TOKEN_KEY, tok);
   hideLogin();
@@ -293,19 +304,28 @@ const sections = {
     ]);
     function statCard(bot, stats, mood) {
       const c = bot === 'eris' ? 'eris' : 'irene';
+      const err = stats?._error || mood?._error;
+      if (err) {
+        return el('div', { class: 'card' },
+          el('h3', {}, bot.toUpperCase()),
+          el('div', { class: 'err-box' }, `Stats unavailable: ${err}`),
+        );
+      }
+      const guildCount = stats?.guilds ?? stats?.servers;
+      const moodText = mood?.label || mood?.mood_label || mood?.current_mood || (mood?.score ?? mood?.mood_score ?? '—');
       return el('div', { class: 'card' },
         el('h3', {}, bot.toUpperCase()),
-        el('div', { class: `stat ${c}` }, fmt(stats?.memories ?? stats?.memoryCount ?? '—') + ' memories'),
+        el('div', { class: `stat ${c}` }, fmt(stats?.memories ?? stats?.memoryCount ?? stats?.messages ?? '—') + ' memories'),
         el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Uptime'),
           el('span', {class:'v'}, fmtUptime(stats?.uptime))),
         el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Heap'),
           el('span', {class:'v'}, (stats?.memory ?? '—') + ' MB')),
         el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Guilds'),
-          el('span', {class:'v'}, fmt(stats?.guilds))),
+          el('span', {class:'v'}, fmt(guildCount))),
         el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Users known'),
           el('span', {class:'v'}, fmt(stats?.users ?? stats?.userCount))),
         el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Mood'),
-          el('span', {class:'v'}, mood?.label || (mood?.score != null ? mood.score : '—'))),
+          el('span', {class:'v'}, moodText)),
         el('div', { class: 'stat-row' }, el('span', {class:'k'}, 'Energy'),
           el('span', {class:'v'}, mood?.energy != null ? `${mood.energy}/100` : '—')),
       );

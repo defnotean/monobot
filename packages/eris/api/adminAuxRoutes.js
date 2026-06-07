@@ -90,7 +90,7 @@ export async function handleAdminAuxRoute(req, res) {
   if (routePath.startsWith("/api/irene/") || routePath === "/api/irene") {
     // These aux routes run BEFORE handleApiRequest, where the per-IP limiter
     // normally fires — so without this they'd be auth-gated but NOT rate-
-    // limited. Enforce the SAME 30 req/min/IP bucket here (mirrors the order
+    // limited. Enforce the SAME dashboard req/min/IP bucket here (mirrors the order
     // in handleApiRequest: rate-limit first, then auth).
     if (enforceDashboardRateLimit(req, res)) return true;
     if (!requireDashboardAuth(req, res)) return true;

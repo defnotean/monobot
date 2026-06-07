@@ -74,7 +74,12 @@ at the repo root.
 | `OLLAMA_VISION_URL` | Both | No | — | Local Ollama base URL for Discord image descriptions. Raw image bytes are sent only to this local service; external chat providers receive text evidence. `packages/eris/config.js`, `packages/irene/config.js`. | Your Ollama host, e.g. `http://127.0.0.1:11434` |
 | `OLLAMA_VISION_MODEL` | Both | No | `qwen2.5vl:7b` | Local vision model used for conservative image evidence. `qwen2.5vl:3b` is faster; `7b` is more accurate. | `ollama pull qwen2.5vl:7b` |
 | `LOCAL_VISION_MAX_IMAGES` | Both | No | `4` | Max image attachments described per Discord message. Extra images are noted as omitted. | n/a |
-| `LOCAL_VISION_IMAGE_MAX_BYTES` | Both | No | `5242880` | Per-image fetch cap before local vision analysis. | n/a |
+| `LOCAL_VISION_IMAGE_MAX_BYTES` | Both | No | `12582912` | Per-image fetch cap before local vision analysis. | n/a |
+| `LOCAL_VISION_MAX_TILES` | Both | No | `4` | Max high-resolution crop passes per large/tall image. Set `0` to disable screenshot tiling. | n/a |
+| `LOCAL_VISION_TILE_MIN_LONG_EDGE` | Both | No | `1600` | Long-edge pixel threshold before local vision adds crop passes. | n/a |
+| `LOCAL_VISION_TILE_MIN_ASPECT` | Both | No | `1.45` | Aspect-ratio threshold for tall/wide screenshots when deciding whether to crop. | n/a |
+| `LOCAL_VISION_TILE_OVERLAP_RATIO` | Both | No | `0.12` | Overlap between adjacent crop passes so text near crop boundaries is still visible. | n/a |
+| `LOCAL_VISION_DETAIL_MAX_CHARS` | Both | No | `3600` | Max combined local-vision evidence characters per image after full-image and crop-pass summaries. | n/a |
 | `SUPABASE_URL` | Both | No (strongly recommended) | — | Supabase project URL. Without it, the bot boots with a `[WARN]` and runs fully ephemeral. `packages/eris/config.js:282`, `packages/irene/config.js:266`; warning at `packages/eris/config.js:404-406`, `packages/irene/config.js:394-397`. | supabase.com -> Project Settings -> API -> Project URL |
 | `SUPABASE_KEY` | Both | No (strongly recommended) | — | Service-role or anon key. `packages/eris/config.js:283`, `packages/irene/config.js:267`. | supabase.com -> Project Settings -> API |
 | `SUPABASE_ANON_KEY` | Irene | No | — | Parsed for compatibility, but it does not enable persistence when `SUPABASE_KEY` is unset. `SUPABASE_KEY` is required for Irene persistence. `packages/irene/config.js:268`. | Same as above |
