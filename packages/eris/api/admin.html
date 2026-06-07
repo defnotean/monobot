@@ -153,6 +153,7 @@
       <a data-section="personality"   ><span class="ic">🎭</span> Personality</a>
       <a data-section="relationships" ><span class="ic">💞</span> Relationships</a>
       <a data-section="economy"       ><span class="ic">💰</span> Economy</a>
+      <a data-section="trust"         ><span class="ic">🛡️</span> Trust</a>
       <a data-section="episodes"      ><span class="ic">🎬</span> Episodes</a>
       <a data-section="conversations" ><span class="ic">💬</span> Conversations</a>
       <a data-section="logs"          ><span class="ic">📜</span> Logs</a>
@@ -174,6 +175,7 @@
 const BOTS = ['eris', 'irene'];
 let activeSection = 'overview';
 let refreshTimer = null;
+let selectedTrustGuildId = '';
 const TOKEN_KEY = 'monobot_admin_token';
 
 function $(sel) { return document.querySelector(sel); }
@@ -249,6 +251,48 @@ function timeAgo(iso) {
   if (ms < 3600_000) return `${Math.floor(ms/60000)}m ago`;
   if (ms < 86_400_000) return `${Math.floor(ms/3600000)}h ago`;
   return `${Math.floor(ms/86_400_000)}d ago`;
+}
+function cleanTextValue(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  const lower = text.toLowerCase();
+  return lower === 'undefined' || lower === 'null' ? '' : text;
+}
+function displayUser(row) {
+  return cleanTextValue(row?.username)
+    || cleanTextValue(row?.display_name)
+    || cleanTextValue(row?.displayName)
+    || cleanTextValue(row?.user)
+    || cleanTextValue(row?.user_id)
+    || cleanTextValue(row?.id)
+    || 'Unknown user';
+}
+function memoryText(row) {
+  return cleanTextValue(row?.fact_text)
+    || cleanTextValue(row?.content)
+    || cleanTextValue(row?.fact)
+    || cleanTextValue(row?.text)
+    || JSON.stringify(row);
+}
+function rowId(row, ...keys) {
+  for (const key of keys) {
+    const value = cleanTextValue(row?.[key]);
+    if (value) return value;
+  }
+  return '';
+}
+function scrollLogsToLatest() {
+  const pin = () => {
+    document.querySelectorAll('.log-pane').forEach((pane) => {
+      pane.scrollTop = pane.scrollHeight;
+    });
+  };
+  pin();
+  requestAnimationFrame(() => {
+    pin();
+    requestAnimationFrame(pin);
+  });
+  setTimeout(pin, 50);
 }
 
 // ─── Auth login flow ───────────────────────────────────────────────────────
@@ -342,7 +386,7 @@ const sections = {
       tryApi('irene', '/memories?limit=200'),
     ]);
     function table(bot, data) {
-      const rows = Array.isArray(data) ? data : (data?.memories || data?.rows || []);
+      const rows = Array.isArray(data) ? data : (data?.facts || data?.memories || data?.rows || []);
       const head = el('thead', {}, el('tr', {},
         el('th', {}, 'User'), el('th', {}, 'Content'), el('th', {}, 'When'),
         el('th', {style:'width:60px;'}, 'Actions')));
@@ -350,16 +394,16 @@ const sections = {
       if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:4, class:'empty'}, 'no memories')));
       for (const m of rows.slice(0, 100)) {
         const id = m.id || m.memory_id || m._id;
-        const user = m.user_id || m.username || m.user || '—';
-        const text = m.content || m.fact || m.text || JSON.stringify(m);
+        const user = displayUser(m);
+        const text = memoryText(m);
+        const canDelete = id && m.deletable !== false && !String(id).includes(':');
+        const deleteAttrs = { class: 'btn danger', onclick: () => deleteMemory(bot, id) };
+        if (!canDelete) deleteAttrs.disabled = 'disabled';
         tbody.appendChild(el('tr', {},
-          el('td', {class:'mono'}, String(user).slice(0, 20)),
+          el('td', {class:'mono', title: rowId(m, 'user_id', 'id') || user}, String(user).slice(0, 24)),
           el('td', {class:'truncate', title: text}, text),
           el('td', {class:'mono small'}, timeAgo(m.created_at || m.timestamp || m.updated_at)),
-          el('td', {}, el('button', {
-            class: 'btn danger',
-            onclick: () => deleteMemory(bot, id),
-          }, '✕')),
+          el('td', {}, el('button', deleteAttrs, canDelete ? '✕' : '—')),
         ));
       }
       return el('div', { class: 'card' },
@@ -412,7 +456,12 @@ const sections = {
       let rows = Array.isArray(raw) ? raw : (raw?.relationships || raw?.rows || raw?.users || []);
       // Some endpoints (e.g. /humanity) return relationships as a {userId: {...}}
       // object map rather than an array — coerce so .slice/.length never throw.
-      if (rows && !Array.isArray(rows)) rows = Object.entries(rows).map(([user_id, v]) => ({ user_id, ...v }));
+      if (rows && !Array.isArray(rows)) {
+        rows = Object.entries(rows).map(([user_id, v]) => {
+          const row = v && typeof v === 'object' ? v : { value: v };
+          return { ...row, user_id: cleanTextValue(row.user_id) || user_id };
+        });
+      }
       const head = el('thead', {}, el('tr', {},
         el('th', {}, 'User'), el('th', {}, 'Affinity'),
         el('th', {style:'width:180px;'}, 'Adjust'),
@@ -420,19 +469,21 @@ const sections = {
       const tbody = el('tbody');
       if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:4, class:'empty'}, 'no relationships')));
       for (const r of rows.slice(0, 100)) {
-        const uid = r.user_id || r.id || '—';
-        const user = r.username || r.display_name || uid;
+        const uid = rowId(r, 'user_id', 'id');
+        const user = displayUser({ ...r, user_id: uid });
         const score = r.affinity_score ?? r.affinity ?? r.closeness ?? r.score ?? 0;
         const pct = typeof score === 'number' ? Math.max(0, Math.min(100, (score + 100) / 2)) : null;
+        const applyAttrs = { class: 'btn', onclick: () => adjustAffinity(bot, uid, score) };
+        if (!uid) applyAttrs.disabled = 'disabled';
         tbody.appendChild(el('tr', {},
-          el('td', {class:'mono'}, String(user)),
+          el('td', {class:'mono', title: uid || user}, String(user)),
           el('td', {}, [
             pct != null ? el('span', {class:'meter'}, el('div', {style:`width:${pct}%;`})) : null,
             el('span', {class:'mono'}, String(score)),
           ]),
           el('td', {}, el('div', { class: 'inline-edit' },
             el('input', { type: 'number', placeholder: '±delta', id: `aff-d-${bot}-${uid}`, style: 'width: 80px;' }),
-            el('button', { class: 'btn', onclick: () => adjustAffinity(bot, uid, score) }, 'apply'),
+            el('button', applyAttrs, 'apply'),
           )),
           el('td', {class:'mono small'}, timeAgo(r.updated_at || r.last_seen)),
         ));
@@ -461,16 +512,18 @@ const sections = {
     const topBody = el('tbody');
     if (!topRows.length) topBody.appendChild(el('tr', {}, el('td', {colspan:7, class:'empty'}, top?._error ? `error: ${top._error}` : 'no economy rows')));
     for (const r of topRows) {
+      const user = displayUser(r);
+      const uid = rowId(r, 'user_id', 'id');
       topBody.appendChild(el('tr', {},
-        el('td', {class:'mono', title: r.user_id}, r.username ? String(r.username) : String(r.user_id).slice(0, 20)),
+        el('td', {class:'mono', title: uid || user}, String(user).slice(0, 24)),
         el('td', {class:'mono', style:'color:var(--ok); font-weight:600;'}, fmt(r.balance)),
         el('td', {class:'mono small'}, fmt(r.total_earned)),
         el('td', {class:'mono small'}, fmt(r.total_lost)),
         el('td', {class:'mono small'}, `🔥 ${r.daily_streak || 0}`),
         el('td', {class:'mono small'}, String(r.prestige_level || 0)),
         el('td', {}, el('div', { class: 'inline-edit' },
-          el('input', { type: 'number', placeholder: '±delta', id: `bal-d-${r.user_id}`, style: 'width: 90px;' }),
-          el('button', { class: 'btn', onclick: () => adjustBalance(r.user_id) }, 'apply'),
+          el('input', { type: 'number', placeholder: '±delta', id: `bal-d-${uid}`, style: 'width: 90px;' }),
+          el('button', { class: 'btn', onclick: () => adjustBalance(uid) }, 'apply'),
         )),
       ));
     }
@@ -484,9 +537,11 @@ const sections = {
     for (const t of txRows) {
       const delta = t.amount ?? t.delta ?? 0;
       const isPos = delta > 0;
+      const user = displayUser(t);
+      const uid = rowId(t, 'user_id', 'id');
       txBody.appendChild(el('tr', {},
         el('td', {class:'mono small'}, timeAgo(t.created_at || t.timestamp)),
-        el('td', {class:'mono small'}, String(t.user_id || '—').slice(0, 20)),
+        el('td', {class:'mono small', title: uid || user}, String(user).slice(0, 24)),
         el('td', {class:'mono small'}, String(t.reason || t.type || '—').slice(0, 24)),
         el('td', {class:'mono', style: `color: ${isPos ? 'var(--ok)' : 'var(--err)'}; font-weight: 600;`},
           `${isPos ? '+' : ''}${fmt(delta)}`),
@@ -508,14 +563,122 @@ const sections = {
     );
   },
 
+  async trust() {
+    const [whitelist, guilds, trustData] = await Promise.all([
+      tryApi('eris', '/whitelist').catch(() => ({ rows: [] })),
+      tryApi('irene', '/guilds').catch(() => ({ rows: [] })),
+      tryApi('irene', '/trusted-users').catch(() => ({ rows: [] })),
+    ]);
+    const whitelistRows = whitelist?.rows || [];
+    const guildRows = guilds?.rows || guilds?.guilds || [];
+    const trustRows = trustData?.rows || [];
+    if (!selectedTrustGuildId && guildRows.length) selectedTrustGuildId = guildRows[0].guild_id || guildRows[0].id;
+    if (selectedTrustGuildId && guildRows.length && !guildRows.some((g) => (g.guild_id || g.id) === selectedTrustGuildId)) {
+      selectedTrustGuildId = guildRows[0].guild_id || guildRows[0].id;
+    }
+    const option = (value, label, selected = false) => {
+      const attrs = { value };
+      if (selected) attrs.selected = 'selected';
+      return el('option', attrs, label);
+    };
+
+    const whitelistBody = el('tbody');
+    if (!whitelistRows.length) whitelistBody.appendChild(el('tr', {}, el('td', {colspan:5, class:'empty'}, whitelist?._error ? `error: ${whitelist._error}` : 'no whitelisted guilds')));
+    for (const g of whitelistRows) {
+      const gid = rowId(g, 'guild_id', 'id');
+      whitelistBody.appendChild(el('tr', {},
+        el('td', {class:'mono', title: gid}, cleanTextValue(g.name) || `Guild ${gid}`),
+        el('td', {class:'mono small'}, gid || '—'),
+        el('td', {class:'mono small'}, fmt(g.members)),
+        el('td', {class:'mono small'}, timeAgo(g.added_at)),
+        el('td', {}, el('button', { class: 'btn danger', onclick: () => removeWhitelistGuild(gid) }, 'remove')),
+      ));
+    }
+
+    const selectedTrust = trustRows.find((g) => (g.guild_id || g.id) === selectedTrustGuildId) || {};
+    const selectedGuild = guildRows.find((g) => (g.guild_id || g.id) === selectedTrustGuildId) || selectedTrust;
+    const trustedUsers = selectedTrust.trusted_users || selectedTrust.rows || [];
+    const trustedBody = el('tbody');
+    if (!selectedTrustGuildId) {
+      trustedBody.appendChild(el('tr', {}, el('td', {colspan:3, class:'empty'}, 'no cached guilds')));
+    } else if (!trustedUsers.length) {
+      trustedBody.appendChild(el('tr', {}, el('td', {colspan:3, class:'empty'}, 'no trusted users for this guild')));
+    }
+    for (const u of trustedUsers) {
+      const uid = rowId(u, 'user_id', 'id');
+      const user = displayUser(u);
+      trustedBody.appendChild(el('tr', {},
+        el('td', {class:'mono', title: uid || user}, user),
+        el('td', {class:'mono small'}, uid || '—'),
+        el('td', {}, el('button', { class: 'btn danger', onclick: () => removeTrustedUser(selectedTrustGuildId, uid) }, 'remove')),
+      ));
+    }
+
+    return el('div', { class: 'grid cols-2' },
+      el('div', { class: 'card' },
+        el('h3', {}, `Unified server whitelist · ${whitelistRows.length}`),
+        el('div', { class:'toolbar' },
+          el('select', {
+            class:'field grow',
+            id:'wl-guild-select',
+            onchange: () => {
+              const sel = $('#wl-guild-select');
+              const opt = sel?.selectedOptions?.[0];
+              $('#wl-guild-id').value = sel?.value || '';
+              $('#wl-guild-name').value = opt?.dataset?.name || '';
+            },
+          }, [
+            option('', 'Pick a cached Irene guild...'),
+            ...guildRows.map((g) => {
+              const gid = g.guild_id || g.id;
+              const attrs = { value: gid, 'data-name': cleanTextValue(g.name) || `Guild ${gid}` };
+              return el('option', attrs, `${cleanTextValue(g.name) || `Guild ${gid}`} (${gid})`);
+            }),
+          ]),
+          el('input', { class:'field', id:'wl-guild-id', type:'text', placeholder:'Guild ID' }),
+          el('input', { class:'field', id:'wl-guild-name', type:'text', placeholder:'Name' }),
+          el('button', { class:'btn primary', onclick: addWhitelistGuild }, 'add guild'),
+        ),
+        el('div', { style:'overflow:auto; max-height:60vh;' }, el('table', {},
+          el('thead', {}, el('tr', {}, el('th', {}, 'Guild'), el('th', {}, 'ID'), el('th', {}, 'Members'), el('th', {}, 'Added'), el('th', {}, 'Actions'))),
+          whitelistBody)),
+      ),
+      el('div', { class: 'card' },
+        el('h3', {}, `Irene trusted users · ${cleanTextValue(selectedGuild.name) || selectedTrustGuildId || 'no guild'}`),
+        el('div', { class:'toolbar' },
+          el('select', {
+            class:'field grow',
+            id:'trust-guild-select',
+            onchange: () => {
+              selectedTrustGuildId = $('#trust-guild-select').value;
+              refresh();
+            },
+          }, guildRows.length
+            ? guildRows.map((g) => {
+                const gid = g.guild_id || g.id;
+                return option(gid, `${cleanTextValue(g.name) || `Guild ${gid}`} (${gid})`, gid === selectedTrustGuildId);
+              })
+            : [option('', 'No cached guilds')]),
+          el('input', { class:'field grow', id:'trust-user-input', type:'text', placeholder:'User ID, @mention, or exact name' }),
+          el('button', { class:'btn primary', onclick: addTrustedUser }, 'trust user'),
+        ),
+        el('div', { style:'overflow:auto; max-height:60vh;' }, el('table', {},
+          el('thead', {}, el('tr', {}, el('th', {}, 'User'), el('th', {}, 'ID'), el('th', {}, 'Actions'))),
+          trustedBody)),
+      ),
+    );
+  },
+
   async episodes() {
     const ireneEps = await tryApi('irene', '/episodes?limit=50').catch(() => []);
     const rows = Array.isArray(ireneEps) ? ireneEps : (ireneEps?.episodes || ireneEps?.rows || []);
     const tbody = el('tbody');
     if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:3, class:'empty'}, 'no episodic memories')));
     for (const e of rows.slice(0, 60)) {
+      const user = displayUser(e);
+      const uid = rowId(e, 'user_id', 'id');
       tbody.appendChild(el('tr', {},
-        el('td', {class:'mono'}, String(e.user_id || e.username || '—').slice(0, 20)),
+        el('td', {class:'mono', title: uid || user}, String(user).slice(0, 24)),
         el('td', {class:'truncate'}, e.summary || e.content || JSON.stringify(e)),
         el('td', {class:'mono small'}, timeAgo(e.created_at || e.timestamp)),
       ));
@@ -539,12 +702,15 @@ const sections = {
     function table(bot, raw) {
       const rows = Array.isArray(raw) ? raw : (raw?.conversations || raw?.rows || []);
       const tbody = el('tbody');
-      if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:3, class:'empty'}, 'no conversations')));
+      if (!rows.length) tbody.appendChild(el('tr', {}, el('td', {colspan:4, class:'empty'}, 'no conversations')));
       for (const c of rows.slice(0, 60)) {
         const id = c.id || c.channel_id || c._id;
+        const user = displayUser({ ...c, user_id: rowId(c, 'user_id') || id });
+        const last = cleanTextValue(c.last_message || c.lastMessage || c.content || c.summary);
         tbody.appendChild(el('tr', {},
-          el('td', {class:'mono small truncate'}, String(id || '—')),
-          el('td', {class:'mono'}, fmt(c.message_count ?? c.messages ?? '—')),
+          el('td', {class:'mono small truncate', title: String(id || user)}, String(user).slice(0, 28)),
+          el('td', {class:'mono'}, fmt(c.message_count ?? c.messages ?? c.count ?? '—')),
+          el('td', {class:'small truncate', title: last}, last || '—'),
           el('td', {}, el('button', {
             class: 'btn danger',
             onclick: () => deleteConversation(bot, id),
@@ -554,7 +720,7 @@ const sections = {
       return el('div', { class: 'card' },
         el('h3', {}, `${bot.toUpperCase()} · ${rows.length} conversations`),
         el('div', { style: 'overflow:auto; max-height:65vh;' }, el('table', {},
-          el('thead', {}, el('tr', {}, el('th', {}, 'Channel'), el('th', {}, 'Msgs'), el('th', {}, 'Actions'))),
+          el('thead', {}, el('tr', {}, el('th', {}, 'User / channel'), el('th', {}, 'Msgs'), el('th', {}, 'Last'), el('th', {}, 'Actions'))),
           tbody)),
       );
     }
@@ -569,7 +735,6 @@ const sections = {
     const clean = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, '');
     const erisPane = el('div', { class: 'log-pane eris' }, clean(eL.tail || ''));
     const irenePane = el('div', { class: 'log-pane irene' }, clean(iL.tail || ''));
-    queueMicrotask(() => { erisPane.scrollTop = erisPane.scrollHeight; irenePane.scrollTop = irenePane.scrollHeight; });
     return el('div', { class: 'grid cols-2' },
       el('div', {},
         el('div', { class: 'small', style: 'margin-bottom:6px;' },
@@ -630,6 +795,49 @@ async function adjustBalance(uid) {
     refresh();
   } catch (e) { showError(e.message); }
 }
+async function addWhitelistGuild() {
+  const guild_id = cleanTextValue($('#wl-guild-id')?.value);
+  const name = cleanTextValue($('#wl-guild-name')?.value);
+  if (!guild_id) return alert('enter a guild ID');
+  try {
+    await api('eris', '/whitelist', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guild_id, name }) });
+    showOk(`Whitelisted guild ${name || guild_id}`);
+    refresh();
+  } catch (e) { showError(e.message); }
+}
+async function removeWhitelistGuild(guildId) {
+  if (!guildId) return alert('no guild id');
+  if (!confirm(`Remove guild ${guildId} from the shared whitelist?`)) return;
+  try {
+    await api('eris', `/whitelist/${encodeURIComponent(guildId)}`, { method: 'DELETE' });
+    showOk(`Removed guild ${guildId} from whitelist`);
+    refresh();
+  } catch (e) { showError(e.message); }
+}
+async function addTrustedUser() {
+  const guild_id = cleanTextValue($('#trust-guild-select')?.value || selectedTrustGuildId);
+  const user = cleanTextValue($('#trust-user-input')?.value);
+  if (!guild_id) return alert('pick a guild first');
+  if (!user) return alert('enter a user ID, mention, or exact name');
+  try {
+    const r = await api('irene', '/trusted-users', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guild_id, user }) });
+    selectedTrustGuildId = guild_id;
+    showOk(`Trusted ${displayUser(r.user)} in ${r.guild?.name || guild_id}`);
+    refresh();
+  } catch (e) { showError(e.message); }
+}
+async function removeTrustedUser(guildId, userId) {
+  if (!guildId || !userId) return alert('guild id and user id required');
+  if (!confirm(`Remove trusted access for ${userId} in guild ${guildId}?`)) return;
+  try {
+    await api('irene', `/trusted-users?guild_id=${encodeURIComponent(guildId)}&user_id=${encodeURIComponent(userId)}`, { method: 'DELETE' });
+    selectedTrustGuildId = guildId;
+    showOk(`Removed trusted access for ${userId}`);
+    refresh();
+  } catch (e) { showError(e.message); }
+}
 
 // ─── Wiring ────────────────────────────────────────────────────────────────
 document.querySelectorAll('.nav a').forEach((a) => {
@@ -651,6 +859,7 @@ async function refresh() {
     const c = $('#content');
     c.innerHTML = '';
     c.appendChild(node);
+    if (activeSection === 'logs') scrollLogsToLatest();
     $('#last-refresh').textContent = new Date().toLocaleTimeString();
   } catch (e) {
     if (e.message !== 'unauthorized') showError(e.message);

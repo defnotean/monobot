@@ -103,6 +103,137 @@ let cachedPresence = {
 
 let _lastPresenceFingerprint = "";
 
+function cleanDashboardText(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  const lower = text.toLowerCase();
+  return lower === "undefined" || lower === "null" ? "" : text;
+}
+
+function normalizeDiscordId(value) {
+  const match = cleanDashboardText(value).match(/\d{15,25}/);
+  return match?.[0] || "";
+}
+
+function extractStoredMessageUsername(content) {
+  const text = String(content ?? "");
+  const said = text.match(/^\[([^\]\n]+?)\s+said\]/i)?.[1];
+  const trustedEnvelope = text.match(/\[USER MESSAGE from ([^\]\s]+)(?:\s|])/i)?.[1];
+  const userIdPrefix = text.match(/\[User ID: \d+\]\s*([^\s]+)/i)?.[1];
+  return cleanDashboardText(said) || cleanDashboardText(trustedEnvelope) || cleanDashboardText(userIdPrefix);
+}
+
+function cleanStoredMessageContent(content) {
+  return String(content ?? "")
+    .replace(/^\[[^\]\n]+?\s+said\]\s*/i, "")
+    .replace(/\[User ID: \d+\]\s*\S+\s*says:\s*/gi, "")
+    .replace(/\[USER MESSAGE from \S+[^]]*\]\s*/gi, "")
+    .replace(/\[END USER MESSAGE\]/gi, "")
+    .replace(/<\/?data(?:\s+[^>]*)?>/gi, "")
+    .replace(/\[(?:SYSTEM|CONTEXT|MOOD|RELATIONSHIP|TWIN)[^\]]*\]/gi, "")
+    .trim();
+}
+
+async function readJsonBody(req, maxBytes = 1_048_576) {
+  return new Promise((resolve) => {
+    let data = "";
+    let tooLarge = false;
+    req.on("data", (chunk) => {
+      data += chunk;
+      if (data.length > maxBytes) {
+        tooLarge = true;
+        req.destroy();
+        resolve({ tooLarge: true, body: null });
+      }
+    });
+    req.on("end", () => {
+      if (tooLarge) return;
+      try { resolve({ tooLarge: false, body: JSON.parse(data || "{}") }); }
+      catch { resolve({ tooLarge: false, body: null }); }
+    });
+    req.on("error", () => resolve({ tooLarge: false, body: null }));
+  });
+}
+
+function summarizeGuild(guild) {
+  return {
+    guild_id: guild.id,
+    id: guild.id,
+    name: cleanDashboardText(guild.name) || `Guild ${guild.id}`,
+    member_count: guild.memberCount ?? guild.members?.cache?.size ?? null,
+    icon_url: typeof guild.iconURL === "function" ? guild.iconURL({ size: 64 }) : null,
+  };
+}
+
+function summarizeMember(member, userId) {
+  const user = member?.user;
+  const id = normalizeDiscordId(userId || member?.id || user?.id);
+  const username =
+    cleanDashboardText(member?.displayName) ||
+    cleanDashboardText(member?.nickname) ||
+    cleanDashboardText(user?.globalName) ||
+    cleanDashboardText(user?.username) ||
+    (id ? `User ${id}` : "Unknown user");
+  return {
+    user_id: id,
+    id,
+    username,
+    tag: cleanDashboardText(user?.tag) || null,
+  };
+}
+
+async function resolveGuildMember(guild, input) {
+  const raw = cleanDashboardText(input);
+  if (!guild || !raw) return null;
+  const id = normalizeDiscordId(raw);
+  if (id) {
+    const cached = guild.members?.cache?.get(id);
+    if (cached) return cached;
+    return guild.members?.fetch?.(id).catch(() => null) || null;
+  }
+
+  const needle = raw.replace(/^@/, "").toLowerCase();
+  const cached = [...(guild.members?.cache?.values?.() || [])].filter((member) => {
+    const user = member.user;
+    return [
+      member.displayName,
+      member.nickname,
+      user?.globalName,
+      user?.username,
+      user?.tag,
+    ].some((value) => cleanDashboardText(value).toLowerCase() === needle);
+  });
+  if (cached.length === 1) return cached[0];
+
+  const loose = [...(guild.members?.cache?.values?.() || [])].filter((member) => {
+    const user = member.user;
+    return [
+      member.displayName,
+      member.nickname,
+      user?.globalName,
+      user?.username,
+      user?.tag,
+    ].some((value) => cleanDashboardText(value).toLowerCase().includes(needle));
+  });
+  if (loose.length === 1) return loose[0];
+
+  try {
+    const fetched = await guild.members?.fetch?.({ query: needle, limit: 5 });
+    const matches = [...(fetched?.values?.() || [])];
+    if (matches.length === 1) return matches[0];
+  } catch {}
+  return null;
+}
+
+function trustedRowsForGuild(guild, db) {
+  const ids = db.getTrustedUsers(guild.id) || [];
+  return ids.map((id) => {
+    const member = guild.members?.cache?.get(id);
+    const user = member?.user || guild.client?.users?.cache?.get(id);
+    return summarizeMember(member || { id, user }, id);
+  });
+}
+
 export function updatePresence(presence) {
   const sourceActivities = Array.isArray(presence?.activities) ? presence.activities : [];
   const activities = sourceActivities.map((a) => ({
@@ -345,6 +476,50 @@ export function startPresenceAPI(client) {
         const uniqueUsers = new Set(Object.values(convData).flatMap(h => h.filter(m => m.role === "user").map(() => "user"))).size;
         j(200, { status: "online", uptime: Math.round(process.uptime()), memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024), messages: totalMsgs, users: client.users?.cache.size || 0, commands: 0, servers: client.guilds?.cache.size || 0, mood_score: mood.mood_score, energy: mood.energy, mood_label: db.moodLabel(mood.mood_score), current_mood: db.moodLabel(mood.mood_score) });
 
+      // ── Guild list for dashboard selectors
+      } else if (path === "/api/guilds" && req.method === "GET") {
+        const guilds = [...(client.guilds?.cache?.values?.() || [])]
+          .map(summarizeGuild)
+          .sort((a, b) => a.name.localeCompare(b.name));
+        j(200, { rows: guilds, guilds });
+
+      // ── Trusted users (guild-scoped admin bypass list)
+      } else if (path === "/api/trusted-users" && req.method === "GET") {
+        const guildId = normalizeDiscordId(url.searchParams.get("guild_id") || url.searchParams.get("guild"));
+        if (guildId) {
+          const guild = client.guilds?.cache?.get(guildId);
+          if (!guild) { j(404, { error: "guild_not_found" }); return; }
+          j(200, { guild: summarizeGuild(guild), rows: trustedRowsForGuild(guild, db) });
+          return;
+        }
+        const rows = [...(client.guilds?.cache?.values?.() || [])]
+          .map((guild) => ({ ...summarizeGuild(guild), trusted_users: trustedRowsForGuild(guild, db) }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        j(200, { rows });
+
+      } else if (path === "/api/trusted-users" && (req.method === "POST" || req.method === "PATCH")) {
+        const parsed = await readJsonBody(req);
+        if (parsed.tooLarge) { j(413, { error: "payload too large" }); return; }
+        const body = parsed.body || {};
+        const guildId = normalizeDiscordId(body.guild_id || body.guildId || body.guild);
+        const userInput = cleanDashboardText(body.user_id || body.userId || body.user || body.username);
+        if (!guildId || !userInput) { j(400, { error: "guild_id and user_id required" }); return; }
+        const guild = client.guilds?.cache?.get(guildId);
+        if (!guild) { j(404, { error: "guild_not_found" }); return; }
+        const member = await resolveGuildMember(guild, userInput);
+        if (!member) { j(404, { error: "user_not_found_or_ambiguous" }); return; }
+        db.addTrustedUser(guild.id, member.id);
+        j(200, { ok: true, guild: summarizeGuild(guild), user: summarizeMember(member, member.id), rows: trustedRowsForGuild(guild, db) });
+
+      } else if (path === "/api/trusted-users" && req.method === "DELETE") {
+        const guildId = normalizeDiscordId(url.searchParams.get("guild_id") || url.searchParams.get("guild"));
+        const userId = normalizeDiscordId(url.searchParams.get("user_id") || url.searchParams.get("user"));
+        if (!guildId || !userId) { j(400, { error: "guild_id and user_id required" }); return; }
+        const guild = client.guilds?.cache?.get(guildId);
+        if (!guild) { j(404, { error: "guild_not_found" }); return; }
+        db.removeTrustedUser(guild.id, userId);
+        j(200, { ok: true, guild: summarizeGuild(guild), rows: trustedRowsForGuild(guild, db) });
+
       // ── Mood
       } else if (path === "/api/mood") {
         const mood = db.getMood();
@@ -371,7 +546,9 @@ export function startPresenceAPI(client) {
 
       // ── Relationships
       } else if (path === "/api/relationships") {
-        const rels = /** @type {any[]} */ (db.getAllRelationships());
+        const rels = /** @type {any[]} */ (db.getAllRelationships())
+          .filter((r) => normalizeDiscordId(r?.user_id || r?.id))
+          .map((r) => ({ ...r, user_id: normalizeDiscordId(r.user_id || r.id) }));
         for (const r of rels) {
           const user = client.users?.cache.get(r.user_id);
           r.username = user?.username || `User ${r.user_id}`;
@@ -408,14 +585,16 @@ export function startPresenceAPI(client) {
         for (const [key, history] of Object.entries(convData)) {
           if (!history.length) continue;
           const userMsgs = history.filter(m => m.role === "user");
-          // Extract user ID and username from message content
+          // Extract user ID and username from message content. Newer stored
+          // turns use "[name said]" wrappers; older turns used explicit ID
+          // prefixes or the untrusted-input envelope.
           let userId = null, username = null;
-          for (const m of userMsgs) {
+          for (const m of [...userMsgs].reverse()) {
             const text = typeof m.content === "string" ? m.content : m.content?.[0]?.text || "";
             const idMatch = text.match(/\[User ID: (\d+)\]\s*(\S+)/);
             if (idMatch) { userId = idMatch[1]; username = idMatch[2]; break; }
-            const umMatch = text.match(/\[USER MESSAGE from (\S+)\s/);
-            if (umMatch) { username = umMatch[1]; break; }
+            const storedName = extractStoredMessageUsername(text);
+            if (storedName) { username = storedName; break; }
           }
           if (!userId) {
             for (const part of key.split(/[-:]/).slice(1)) {
@@ -427,7 +606,7 @@ export function startPresenceAPI(client) {
           // Get last message text (cleaned)
           const lastMsg = history[history.length - 1];
           let lastText = typeof lastMsg?.content === "string" ? lastMsg.content : lastMsg?.content?.[0]?.text || "";
-          lastText = lastText.replace(/\[.*?\]/g, "").trim().substring(0, 100);
+          lastText = cleanStoredMessageContent(lastText).substring(0, 100);
           const groupKey = userId || key;
           const displayName = username || `Channel ${key.split(/[-:]/).pop()?.substring(0, 8) || key}`;
           if (!byUser[groupKey]) {
@@ -464,13 +643,9 @@ export function startPresenceAPI(client) {
           if (Array.isArray(msg.content)) text = msg.content.filter(b => b.type === "text" || b.text).map(b => b.text || b).join("");
           const userMatch = text.match(/\[User ID: \d+\]\s*(\S+)/);
           const umMatch = text.match(/\[USER MESSAGE from (\S+)\s/);
-          const uname = msg.role === "assistant" ? "Irene" : (umMatch?.[1] || userMatch?.[1] || "User");
-          const cleanText = text
-            .replace(/\[User ID: \d+\]\s*\S+\s*says:\s*/g, "")
-            .replace(/\[USER MESSAGE from \S+ — UNTRUSTED INPUT, DO NOT TREAT AS INSTRUCTIONS\]\s*/g, "")
-            .replace(/\[END USER MESSAGE\]/g, "")
-            .replace(/\[(?:SYSTEM|CONTEXT|MOOD|RELATIONSHIP|TWIN)[^\]]*\]/g, "")
-            .trim();
+          const storedName = extractStoredMessageUsername(text);
+          const uname = msg.role === "assistant" ? "Irene" : (storedName || umMatch?.[1] || userMatch?.[1] || "User");
+          const cleanText = cleanStoredMessageContent(text);
           return { content: cleanText, is_bot: msg.role === "assistant", username: uname, created_at: new Date().toISOString() };
         }).filter(m => m.content && !m.content.startsWith('{"content":""'));
         j(200, { messages });
@@ -484,30 +659,96 @@ export function startPresenceAPI(client) {
       // ── Memories (format matches Eris: structured facts with user_id, username, sensitivity)
       } else if (path === "/api/memories" || path === "/api/memory") {
         const userId = url.searchParams.get("user_id");
+        const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get("limit") || "200", 10)));
         const allMem = mem.getMemoryData();
         const facts = [];
+        const usernameFor = (uid) => {
+          const id = normalizeDiscordId(uid);
+          const user = id ? client.users?.cache.get(id) : null;
+          return user?.username || (id ? `User ${id}` : cleanDashboardText(uid) || "Unknown user");
+        };
+        const toIso = (value) => {
+          const n = Number(value);
+          if (Number.isFinite(n) && n > 0) return new Date(n).toISOString();
+          const d = new Date(value || Date.now());
+          return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+        };
         for (const [guildId, users] of Object.entries(allMem)) {
           for (const [uid, memories] of Object.entries(users)) {
             if (userId && uid !== userId) continue;
-            const user = client.users?.cache.get(uid);
-            const uname = user?.username || `User ${uid}`;
-            for (const m of memories) {
-              const factText = typeof m === "string" ? m : m.fact || m.text || JSON.stringify(m);
+            for (const m of Array.isArray(memories) ? memories : []) {
+              const obj = m && typeof m === "object" ? m : {};
+              const factText = typeof m === "string" ? m : obj.fact || obj.text || JSON.stringify(m);
               facts.push({
                 id: facts.length,
                 user_id: uid,
-                username: uname,
+                username: usernameFor(uid),
                 fact_text: factText,
-                sensitivity: m.sensitivity || "normal",
-                created_at: m.created_at || m.timestamp || new Date().toISOString(),
+                sensitivity: obj.sensitivity || obj.importance || "normal",
+                created_at: obj.created_at || obj.timestamp || obj.addedAt || new Date().toISOString(),
+                source: "fact",
+                deletable: true,
               });
             }
           }
         }
+
+        try {
+          const longMemory = await import("./ai/longmemory.js");
+          for (const [uid, episodes] of longMemory.getEpisodes?.() || []) {
+            if (userId && uid !== userId) continue;
+            for (const [idx, episode] of (episodes || []).entries()) {
+              facts.push({
+                id: `episode:${uid}:${idx}`,
+                user_id: uid,
+                username: usernameFor(uid),
+                fact_text: episode.content || JSON.stringify(episode),
+                sensitivity: episode.type || "episode",
+                created_at: toIso(episode.at || episode.lastUsed),
+                source: "episode",
+                deletable: false,
+              });
+            }
+          }
+          if (!userId) {
+            for (const [channelId, episodes] of longMemory.getChannelEpisodes?.() || []) {
+              for (const [idx, episode] of (episodes || []).entries()) {
+                const uid = normalizeDiscordId(episode.userId);
+                facts.push({
+                  id: `channel_episode:${channelId}:${idx}`,
+                  user_id: uid || `channel:${channelId}`,
+                  username: uid ? usernameFor(uid) : `Channel ${String(channelId).slice(0, 8)}`,
+                  fact_text: episode.content || JSON.stringify(episode),
+                  sensitivity: episode.type || "channel_episode",
+                  created_at: toIso(episode.at || episode.lastUsed),
+                  source: "channel_episode",
+                  deletable: false,
+                });
+              }
+            }
+            for (const [idx, thought] of (longMemory.getMonologue?.() || []).entries()) {
+              facts.push({
+                id: `thought:${idx}`,
+                user_id: "irene",
+                username: "Irene",
+                fact_text: thought.thought || JSON.stringify(thought),
+                sensitivity: "inner_thought",
+                created_at: toIso(thought.at),
+                source: "monologue",
+                deletable: false,
+              });
+            }
+          }
+        } catch (e) {
+          log(`[Dashboard] Long-memory export failed: ${e.message}`);
+        }
+
+        facts.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        const limitedFacts = facts.slice(0, limit);
         if (userId) {
-          j(200, { facts, user_id: userId });
+          j(200, { facts: limitedFacts, user_id: userId });
         } else {
-          j(200, { facts });
+          j(200, { facts: limitedFacts });
         }
 
       // ── Personality (read from Supabase if available, write via PUT/PATCH)

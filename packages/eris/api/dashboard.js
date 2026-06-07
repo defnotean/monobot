@@ -25,6 +25,71 @@ function moodLabel(score) {
   return "furious";
 }
 
+function cleanDashboardText(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  const lower = text.toLowerCase();
+  return lower === "undefined" || lower === "null" ? "" : text;
+}
+
+function normalizeDiscordId(value) {
+  const match = cleanDashboardText(value).match(/\d{15,25}/);
+  return match?.[0] || "";
+}
+
+async function resolveDashboardUsername(userId, supabase) {
+  const uid = normalizeDiscordId(userId);
+  if (!uid || !supabase) return "";
+  try {
+    const { data: row } = await supabase
+      .from("eris_memories")
+      .select("username")
+      .eq("user_id", uid)
+      .eq("is_bot", false)
+      .not("username", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return cleanDashboardText(row?.username);
+  } catch {
+    return "";
+  }
+}
+
+async function enrichRowsWithUsernames(rows, supabase) {
+  if (!Array.isArray(rows)) return rows;
+  const cache = new Map();
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const existing = cleanDashboardText(row?.username) || cleanDashboardText(row?.display_name);
+    const uid = normalizeDiscordId(row?.user_id || row?.id);
+    if (existing) {
+      row.username = existing;
+      continue;
+    }
+    if (!uid) {
+      row.username = "Unknown user";
+      continue;
+    }
+    if (!cache.has(uid)) {
+      cache.set(uid, await resolveDashboardUsername(uid, supabase));
+    }
+    row.username = cache.get(uid) || `User ${uid}`;
+  }
+  return rows;
+}
+
+function whitelistRowsFromMap(whitelist) {
+  return Object.entries(whitelist || {}).map(([guild_id, info]) => ({
+    guild_id,
+    name: cleanDashboardText(info?.name) || `Guild ${guild_id}`,
+    icon_url: info?.icon_url || null,
+    members: info?.members ?? null,
+    invited_by: info?.invited_by ?? null,
+    added_at: info?.added_at || null,
+  })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
 // Parse an origin/URL string into its canonical "scheme://host:port" form. A
 // prior version used `origin.startsWith(allowed)`, which let attackers register
 // `evil.com.attacker.com` and match an allowlist entry of `https://evil.com`.
@@ -266,18 +331,14 @@ export async function handleApiRequest(req, res) {
       const supabase = db.getSupabase();
       if (userId) {
         const facts = await db.getFacts(userId, 50);
+        for (const fact of facts) if (fact && typeof fact === "object" && !fact.user_id) fact.user_id = userId;
+        await enrichRowsWithUsernames(facts, supabase);
         json(res, 200, { facts, user_id: userId });
       } else if (supabase) {
         // Return all users' facts grouped by user for the memory browser
         const { data: rows } = await supabase.from("eris_facts").select("id, user_id, fact_text, sensitivity, created_at").order("created_at", { ascending: false }).limit(200);
-        // Also resolve usernames from eris_memories
-        const userIds = [...new Set((rows || []).map(r => r.user_id))];
-        const usernames = {};
-        for (const uid of userIds) {
-          const { data: row } = await supabase.from("eris_memories").select("username").eq("user_id", uid).eq("is_bot", false).limit(1).single();
-          usernames[uid] = row?.username || `User ${uid}`;
-        }
-        const facts = (rows || []).map(r => ({ ...r, username: usernames[r.user_id] || `User ${r.user_id}` }));
+        const facts = /** @type {Array<Record<string, any>>} */ (rows || []);
+        await enrichRowsWithUsernames(facts, supabase);
         json(res, 200, { facts });
       } else {
         json(res, 200, { facts: [] });
@@ -308,12 +369,25 @@ export async function handleApiRequest(req, res) {
         const byUser = {};
         for (const msg of (rows || [])) {
           if (msg.is_bot) continue; // Don't create separate entries for bot replies
-          const key = msg.user_id;
-          if (!byUser[key]) byUser[key] = { id: key, username: msg.username || "Unknown", user_id: msg.user_id, channel_ids: [], last_message: msg.content, last_at: msg.created_at, count: 0 };
+          const key = normalizeDiscordId(msg.user_id) || cleanDashboardText(msg.username) || cleanDashboardText(msg.channel_id);
+          if (!key) continue;
+          if (!byUser[key]) {
+            byUser[key] = {
+              id: key,
+              username: cleanDashboardText(msg.username) || "",
+              user_id: normalizeDiscordId(msg.user_id) || null,
+              channel_ids: [],
+              last_message: msg.content,
+              last_at: msg.created_at,
+              count: 0,
+            };
+          }
           if (!byUser[key].channel_ids.includes(msg.channel_id)) byUser[key].channel_ids.push(msg.channel_id);
           byUser[key].count++;
         }
-        json(res, 200, { conversations: Object.values(byUser) });
+        const conversations = Object.values(byUser);
+        await enrichRowsWithUsernames(conversations, supabase);
+        json(res, 200, { conversations });
       } else {
         json(res, 200, { conversations: [] });
       }
@@ -566,14 +640,11 @@ export async function handleApiRequest(req, res) {
     }
 
     if (path === "/api/relationships") {
-      const rels = await db.getAllRelationships();
+      const rels = (await db.getAllRelationships())
+        .filter((r) => normalizeDiscordId(r?.user_id || r?.id))
+        .map((r) => ({ ...r, user_id: normalizeDiscordId(r.user_id || r.id) }));
       const supabase = db.getSupabase();
-      if (supabase && rels.length) {
-        for (const r of rels) {
-          const { data: row } = await supabase.from("eris_memories").select("username").eq("user_id", r.user_id).eq("is_bot", false).limit(1).single();
-          r.username = row?.username || `User ${r.user_id}`;
-        }
-      }
+      await enrichRowsWithUsernames(rels, supabase);
       // Add human-readable summaries
       for (const r of rels) {
         const a = r.affinity_score;
@@ -606,6 +677,48 @@ export async function handleApiRequest(req, res) {
       json(res, 200, { relationships: rels });
       return;
     }
+
+    if ((path === "/api/whitelist" || path.startsWith("/api/whitelist/")) && req.method === "GET") {
+      const whitelist = await db.getWhitelist();
+      json(res, 200, { rows: whitelistRowsFromMap(whitelist), whitelist });
+      return;
+    }
+
+    if (path === "/api/whitelist" && req.method === "POST") {
+      const guildId = normalizeDiscordId(body?.guild_id || body?.guildId || body?.id);
+      if (!guildId) { json(res, 400, { error: "guild_id required" }); return; }
+      const ok = await db.addToWhitelist(guildId, {
+        name: cleanDashboardText(body?.name) || `Guild ${guildId}`,
+        icon_url: body?.icon_url || null,
+        members: body?.members ?? null,
+        invited_by: body?.invited_by || "dashboard",
+      });
+      if (!ok) { json(res, 500, { error: "failed_to_add_whitelist" }); return; }
+      const whitelist = await db.getWhitelist();
+      json(res, 200, { ok: true, rows: whitelistRowsFromMap(whitelist) });
+      return;
+    }
+
+    if (path === "/api/whitelist" && req.method === "DELETE") {
+      const guildId = normalizeDiscordId(url.searchParams.get("guild_id") || url.searchParams.get("id"));
+      if (!guildId) { json(res, 400, { error: "guild_id required" }); return; }
+      const ok = await db.removeFromWhitelist(guildId);
+      if (!ok) { json(res, 500, { error: "failed_to_remove_whitelist" }); return; }
+      const whitelist = await db.getWhitelist();
+      json(res, 200, { ok: true, rows: whitelistRowsFromMap(whitelist) });
+      return;
+    }
+
+    if (path.startsWith("/api/whitelist/") && req.method === "DELETE") {
+      const guildId = normalizeDiscordId(decodeURIComponent(path.replace("/api/whitelist/", "")));
+      if (!guildId) { json(res, 400, { error: "guild_id required" }); return; }
+      const ok = await db.removeFromWhitelist(guildId);
+      if (!ok) { json(res, 500, { error: "failed_to_remove_whitelist" }); return; }
+      const whitelist = await db.getWhitelist();
+      json(res, 200, { ok: true, rows: whitelistRowsFromMap(whitelist) });
+      return;
+    }
+
     if (path === "/api/notes" && req.method === "GET") { json(res, 200, { notes: await db.getNotes(url.searchParams.get("user_id") || config.ownerId, 50) }); return; }
     if (path === "/api/notes" && req.method === "POST") {
       if (!body?.title || !body?.content) { json(res, 400, { error: "title and content required" }); return; }
@@ -671,21 +784,7 @@ export async function handleApiRequest(req, res) {
       // Loose row type: we enrich each row with a resolved `username` below,
       // which the typed economy-select shape doesn't include.
       const rows = /** @type {Array<Record<string, any>>} */ (data || []);
-      // Resolve display names from eris_memories (the same per-user lookup
-      // /api/relationships uses). Deliberately NOT a .in() batch: the local
-      // PostgREST proxy doesn't reliably forward supabase-js's quoted in.(...)
-      // lists, so a batch silently returns no names. Top-N is small (<=100).
-      for (const r of rows) {
-        if (!r.user_id) continue;
-        const { data: m } = await sb
-          .from("eris_memories")
-          .select("username")
-          .eq("user_id", r.user_id)
-          .eq("is_bot", false)
-          .limit(1)
-          .maybeSingle();
-        r.username = m?.username || null;
-      }
+      await enrichRowsWithUsernames(rows, sb);
       json(res, 200, { rows, limit });
       return;
     }
@@ -738,7 +837,9 @@ export async function handleApiRequest(req, res) {
       if (uid) q = q.eq("user_id", uid);
       const { data, error } = await q;
       if (error) { json(res, 500, { error: error.message }); return; }
-      json(res, 200, { rows: data || [], limit });
+      const rows = /** @type {Array<Record<string, any>>} */ (data || []);
+      await enrichRowsWithUsernames(rows, sb);
+      json(res, 200, { rows, limit });
       return;
     }
 
