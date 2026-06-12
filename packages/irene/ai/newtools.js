@@ -90,7 +90,7 @@ export const NEW_EVERYONE_TOOLS = [
     },
   },
   {
-    name: "forget_memory",
+    name: "forget_fact",
     description: "Forget a specific memory about a user. Use when someone says 'forget that', 'don't remember that', 'delete memory at index N'. If `user` is omitted it defaults to the message author — most common case is the speaker asking you to forget THEIR own memory. Call recall_memories first if you need the index.",
     input_schema: {
       type: "object",
@@ -102,7 +102,7 @@ export const NEW_EVERYONE_TOOLS = [
     },
   },
   {
-    name: "clear_all_memories",
+    name: "forget_all",
     description: "Wipe ALL memories about a user. Call this directly when someone says 'forget everything about me', 'clear my memories', 'erase all my data', 'wipe my info'. The `user` arg defaults to the message author when omitted (the most common case — speakers asking you to forget their own data). Permanent — the bot trusts the user's request and respects privacy without confirmation.",
     input_schema: {
       type: "object",

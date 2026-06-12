@@ -45,6 +45,30 @@ describe("tool registry", () => {
     expect(registered).toEqual(declared);
   });
 
+  it("uses verb_noun canonical names for converged tools", () => {
+    const declared = new Set([...ADMIN_TOOLS, ...EVERYONE_TOOLS].map((tool) => tool.name));
+    for (const name of [
+      "set_reminder",
+      "cancel_reminder",
+      "forget_fact",
+      "forget_all",
+      "scrape_url",
+      "list_trusted",
+    ]) {
+      expect(declared).toContain(name);
+    }
+    for (const oldName of [
+      "reminder_set",
+      "reminder_cancel",
+      "forget_memory",
+      "clear_all_memories",
+      "web_read",
+      "list_trusted_users",
+    ]) {
+      expect(declared).not.toContain(oldName);
+    }
+  });
+
   it("keeps always-included core tools selectable", () => {
     const { tier1 } = registry.selectByMessage("", {
       isAdmin: true,
@@ -158,7 +182,7 @@ describe("two-tier selection (Irene)", () => {
   it("always-include tools stay in Tier 1 regardless of message", () => {
     const alwaysInclude = [
       "remember_fact", "recall_memories", "send_gif", "web_search",
-      "calculate", "ask_eris", "reminder_set",
+      "calculate", "ask_eris", "set_reminder",
     ];
     const { tier1, tier2Catalog } = registry.selectByMessage("ban someone", {
       isAdmin: true,
@@ -224,7 +248,7 @@ describe("tier-1 cap (Irene)", () => {
     expect(tier1.length).toBeLessThan(MAX_TIER1_TOOLS);
     // Always-include core survives the tighter cap.
     const tier1Names = new Set(tier1.map((t) => t.name));
-    for (const name of ["remember_fact", "web_search", "ask_eris", "reminder_set"]) {
+    for (const name of ["remember_fact", "web_search", "ask_eris", "set_reminder"]) {
       expect(tier1Names).toContain(name);
     }
   });

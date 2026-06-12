@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../../..");
 const scriptPath = resolve(repoRoot, "scripts/measure-prompt-footprint.mjs");
-const CEILING_BYTES = 26_000;
+const CEILING_BYTES = 18_000;
 
 describe("measure:prompt footprint", () => {
   it("runs on a clean env and keeps worst-case tier-1 schema bytes under ceiling", () => {

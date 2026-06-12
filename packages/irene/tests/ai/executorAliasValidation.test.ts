@@ -39,6 +39,21 @@ describe("executor alias validation", () => {
     expect(() => validateToolAliases(realToolNames, { throwOnDrift: true })).not.toThrow();
   });
 
+  it("keeps old converged tool names as aliases to verb_noun canonical names", () => {
+    expect(TOOL_ALIASES.reminder_set).toBe("set_reminder");
+    expect(TOOL_ALIASES.reminder_cancel).toBe("cancel_reminder");
+    expect(TOOL_ALIASES.forget_memory).toBe("forget_fact");
+    expect(TOOL_ALIASES.clear_all_memories).toBe("forget_all");
+    expect(TOOL_ALIASES.web_read).toBe("scrape_url");
+    expect(TOOL_ALIASES.list_trusted_users).toBe("list_trusted");
+  });
+
+  it("does not keep dead self-aliases for already-canonical tools", () => {
+    expect(TOOL_ALIASES).not.toHaveProperty("snipe");
+    expect(TOOL_ALIASES).not.toHaveProperty("editsnipe");
+    expect(TOOL_ALIASES).not.toHaveProperty("set_birthday");
+  });
+
   it("flags an alias whose target tool doesn't exist (drift)", () => {
     // Build a registry missing one alias target. validateToolAliases should
     // detect the dangling alias and throw a clear, actionable error.

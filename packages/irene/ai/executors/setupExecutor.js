@@ -24,6 +24,94 @@ const HANDLED = new Set([
   "customize_welcome",
 ]);
 
+/**
+ * @param {Record<string, any>} input
+ * @returns {Record<string, any>}
+ */
+export function normalizeSetupTicketArgs(input = {}) {
+  const out = { ...input };
+  const roles = input.roles && typeof input.roles === "object" ? input.roles : {};
+  if (roles.view !== undefined) out.view_roles = roles.view;
+  if (roles.ping !== undefined) out.ping_roles = roles.ping;
+  if (roles.view_auto !== undefined) out.view_auto_category = roles.view_auto;
+  if (roles.ping_auto !== undefined) out.ping_auto_category = roles.ping_auto;
+
+  const welcome = input.welcome && typeof input.welcome === "object" ? input.welcome : {};
+  if (welcome.title !== undefined) out.welcome_title = welcome.title;
+  if (welcome.description !== undefined) out.welcome_description = welcome.description;
+  if (welcome.color !== undefined) out.welcome_color = welcome.color;
+
+  const panel = input.panel && typeof input.panel === "object" ? input.panel : {};
+  if (panel.title !== undefined) out.panel_title = panel.title;
+  if (panel.description !== undefined) out.panel_description = panel.description;
+  if (panel.color !== undefined) out.panel_color = panel.color;
+  if (panel.channel !== undefined) out.panel_channel = panel.channel;
+  if (panel.post !== undefined) out.post_panel = panel.post;
+  if (panel.button && typeof panel.button === "object") {
+    if (panel.button.label !== undefined) out.panel_button_label = panel.button.label;
+    if (panel.button.emoji !== undefined) out.panel_button_emoji = panel.button.emoji;
+  }
+
+  delete out.roles;
+  delete out.welcome;
+  delete out.panel;
+  return out;
+}
+
+/**
+ * @param {Record<string, any>} input
+ * @returns {Record<string, any>}
+ */
+export function normalizeWelcomeArgs(input = {}) {
+  const out = { ...input };
+  const message = input.message && typeof input.message === "object" ? input.message : {};
+  for (const key of ["title", "title_url", "description", "content", "ping_user"]) {
+    if (message[key] !== undefined) out[key] = message[key];
+  }
+
+  const style = input.style && typeof input.style === "object" ? input.style : {};
+  for (const key of ["color", "show_title", "show_thumbnail", "show_banner", "show_author", "show_footer", "show_timestamp"]) {
+    if (style[key] !== undefined) out[key] = style[key];
+  }
+
+  const media = input.media && typeof input.media === "object" ? input.media : {};
+  for (const key of ["thumbnail_url", "banner_url", "show_thumbnail", "show_banner"]) {
+    if (media[key] !== undefined) out[key] = media[key];
+  }
+
+  const author = input.author && typeof input.author === "object" ? input.author : {};
+  if (author.show !== undefined) out.show_author = author.show;
+  if (author.name !== undefined) out.author_name = author.name;
+  if (author.icon_url !== undefined) out.author_icon_url = author.icon_url;
+  if (author.url !== undefined) out.author_url = author.url;
+
+  const footer = input.footer && typeof input.footer === "object" ? input.footer : {};
+  if (footer.show !== undefined) out.show_footer = footer.show;
+  if (footer.text !== undefined) out.footer_text = footer.text;
+  if (footer.icon_url !== undefined) out.footer_icon_url = footer.icon_url;
+  if (footer.timestamp !== undefined) out.show_timestamp = footer.timestamp;
+
+  const fieldMap = {
+    member: ["show_member_field", "member_field_name"],
+    age: ["show_age_field", "age_field_name"],
+    joined: ["show_joined_field", "joined_field_name"],
+  };
+  for (const field of Array.isArray(input.fields) ? input.fields : []) {
+    const spec = fieldMap[field?.key];
+    if (!spec) continue;
+    if (field.show !== undefined) out[spec[0]] = field.show;
+    if (field.name !== undefined) out[spec[1]] = field.name;
+  }
+
+  delete out.message;
+  delete out.style;
+  delete out.media;
+  delete out.author;
+  delete out.footer;
+  delete out.fields;
+  return out;
+}
+
 function hasGuildPermission(member, permission) {
   if (isGuildOwnerMember(member)) return true;
   return Boolean(member?.permissions?.has?.(PermissionFlagsBits.Administrator) || member?.permissions?.has?.(permission));
@@ -632,6 +720,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "setup_ticket": {
+      input = normalizeSetupTicketArgs(input);
       const channelPermErr = requireGuildPermission(guild, message.member, PermissionFlagsBits.ManageChannels, "Manage Channels");
       if (channelPermErr) return channelPermErr;
       const {
@@ -1374,6 +1463,7 @@ export async function execute(toolName, input, message, ctx) {
 
     // ─── Welcome Customization ───────────────────────────────────────
     case "customize_welcome": {
+      input = normalizeWelcomeArgs(input);
       if (input.reset) {
         setWelcomeEmbed(guild.id, null);
         return "Welcome embed reset to defaults.";

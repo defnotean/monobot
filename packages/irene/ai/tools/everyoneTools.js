@@ -409,7 +409,7 @@ export const EVERYONE_TOOLS = [
   // ═══════════════════════════════════════════════════════════════════
   // ─── Reminder Tools ────────────────────────────────────────────────────
   {
-    name: "reminder_set",
+    name: "set_reminder",
     description: "Set a reminder for the user. They'll be pinged in this channel at the specified time with their reminder message.",
     input_schema: {
       type: "object",
@@ -421,8 +421,8 @@ export const EVERYONE_TOOLS = [
     },
   },
   {
-    name: "reminder_cancel",
-    description: "Cancel a USER-SET REMINDER by its reminder ID — the kind set with reminder_set. Use whenever the user says 'cancel reminder N', 'remove my reminder', 'forget that reminder'. Do NOT use cancel_scheduled_task for this — that's for recurring/automated bot tasks, reminders are a separate system.",
+    name: "cancel_reminder",
+    description: "Cancel a USER-SET REMINDER by its reminder ID — the kind set with set_reminder. Use whenever the user says 'cancel reminder N', 'remove my reminder', 'forget that reminder'. Do NOT use cancel_scheduled_task for this — that's for recurring/automated bot tasks, reminders are a separate system.",
     input_schema: {
       type: "object",
       properties: {
@@ -451,7 +451,7 @@ export const EVERYONE_TOOLS = [
   },
   {
     name: "cancel_scheduled_task",
-    description: "Cancel a pending SCHEDULED TASK (a recurring/automated bot action) by its ID. Do NOT use this for reminders — use reminder_cancel for cancelling a user-set reminder. Scheduled tasks and reminders are separate systems.",
+    description: "Cancel a pending SCHEDULED TASK (a recurring/automated bot action) by its ID. Do NOT use this for reminders — use cancel_reminder for cancelling a user-set reminder. Scheduled tasks and reminders are separate systems.",
     input_schema: {
       type: "object",
       properties: {
@@ -519,8 +519,8 @@ export const EVERYONE_TOOLS = [
     },
   },
   {
-    name: "web_read",
-    description: "Fetch and read the FULL TEXT of a SPECIFIC web page given its URL. Use when the user provides an explicit URL and asks you to read/scrape/summarize that page. Do NOT use web_search for this — web_search returns a list of results from a query string, web_read fetches the actual text of one URL.",
+    name: "scrape_url",
+    description: "Fetch and read the FULL TEXT of a SPECIFIC web page given its URL. Use when the user provides an explicit URL and asks you to read/scrape/summarize that page. Do NOT use web_search for this — web_search returns a list of results from a query string, scrape_url fetches the actual text of one URL.",
     input_schema: {
       type: "object",
       properties: {

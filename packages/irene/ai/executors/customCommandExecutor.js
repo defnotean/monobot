@@ -15,6 +15,59 @@ const HANDLED = new Set([
   "delete_custom_command", "list_custom_commands",
 ]);
 
+/**
+ * @param {Record<string, any>} out
+ * @param {Record<string, any>} input
+ * @param {{ edit?: boolean }} [options]
+ * @returns {Record<string, any>}
+ */
+function _applyCustomCommandGroups(out, input, { edit = false } = {}) {
+  const embed = input.embed && typeof input.embed === "object" ? input.embed : {};
+  const embedMap = {
+    title: "embed_title",
+    color: "embed_color",
+    url: "embed_url",
+    image: "embed_image",
+    thumbnail: "embed_thumbnail",
+    footer: "embed_footer",
+    author: "embed_author",
+    author_icon: "embed_author_icon",
+  };
+  for (const [from, to] of Object.entries(embedMap)) {
+    if (embed[from] !== undefined) out[to] = embed[from];
+  }
+  const roles = input.roles && typeof input.roles === "object" ? input.roles : {};
+  if (roles.give !== undefined) out.role_to_give = roles.give;
+  if (roles.remove !== undefined) out.role_to_remove = roles.remove;
+  const options = input.options && typeof input.options === "object" ? input.options : {};
+  if (options.admin_only !== undefined) out.admin_only = options.admin_only;
+  if (options.auto_delete !== undefined) out.auto_delete = options.auto_delete;
+  if (edit && input.description !== undefined && input.cmd_description === undefined) {
+    out.cmd_description = input.description;
+    delete out.description;
+  }
+  delete out.embed;
+  delete out.roles;
+  delete out.options;
+  return out;
+}
+
+/**
+ * @param {Record<string, any>} input
+ * @returns {Record<string, any>}
+ */
+export function normalizeCustomCommandArgs(input = {}) {
+  return _applyCustomCommandGroups({ ...input }, input);
+}
+
+/**
+ * @param {Record<string, any>} input
+ * @returns {Record<string, any>}
+ */
+export function normalizeEditCustomCommandArgs(input = {}) {
+  return _applyCustomCommandGroups({ ...input }, input, { edit: true });
+}
+
 export function resolveCustomCommandRole(guild, value, findRole) {
   if (!value) return null;
   const raw = String(value).trim();
@@ -77,6 +130,7 @@ export async function execute(toolName, input, message, ctx) {
 
   switch (toolName) {
     case "create_custom_command": {
+      input = normalizeCustomCommandArgs(input);
       const existing = getCustomCommand(guild.id, input.trigger);
       if (existing) return `!${input.trigger} already exists. Use edit_custom_command to modify it.`;
       const roleReason = validateCommandRoles(guild, input, {
@@ -106,6 +160,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "edit_custom_command": {
+      input = normalizeEditCustomCommandArgs(input);
       const cmd = getCustomCommand(guild.id, input.trigger);
       if (!cmd) return `!${input.trigger} doesn't exist`;
       const updated = { ...cmd };

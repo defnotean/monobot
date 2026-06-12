@@ -346,15 +346,36 @@ export async function commitPendingAction(pending, { guild, member, clickedBy, d
     return { ok: true, message: `Kicked ${target.user.tag}. Reason: ${reason}` };
   }
 
-  if (pending.action === "purge_messages") {
-    // Replay the purge through the normal executor case now that a human has
-    // confirmed. We rebuild a minimal message from the click context and set
-    // `confirmedAction` so the purge case skips the confirm gate. The stored
+  if (pending.action === "purge_messages" || pending.action === "lockdown_server") {
+    // Replay through the normal executor case now that a human has confirmed.
+    // We rebuild a minimal message from the click context and set
+    // `confirmedAction` so the case skips the confirm gate. The stored
     // `message` is reused for its channel/client; author becomes the clicker
     // so audit attribution is correct.
     const replayMsg = { ...pending.message, member, author: clickedBy };
     const replayCtx = { ...pending.ctx, confirmedAction: true };
-    const result = await execute("purge_messages", pending.input, replayMsg, replayCtx);
+    const result = await execute(pending.action, pending.input, replayMsg, replayCtx);
+    return { ok: true, message: String(result) };
+  }
+
+  // Destructive channel/role tools deferred by channelExecutor/roleExecutor
+  // (they gate through _maybeDeferToConfirm below). Replay through their own
+  // executors so the permission/hierarchy gates re-run against the confirming
+  // human. Dynamic import: both files statically import THIS module for the
+  // gate helper, so a static import here would create a module cycle.
+  if (pending.action === "delete_channel" || pending.action === "nuke_channel") {
+    const { execute: executeChannel } = await import("./channelExecutor.js");
+    const replayMsg = { ...pending.message, member, author: clickedBy };
+    const replayCtx = { ...pending.ctx, confirmedAction: true };
+    const result = await executeChannel(pending.action, pending.input, replayMsg, replayCtx);
+    return { ok: true, message: String(result) };
+  }
+
+  if (pending.action === "delete_role" || pending.action === "mass_role") {
+    const { execute: executeRole } = await import("./roleExecutor.js");
+    const replayMsg = { ...pending.message, member, author: clickedBy };
+    const replayCtx = { ...pending.ctx, confirmedAction: true };
+    const result = await executeRole(pending.action, pending.input, replayMsg, replayCtx);
     return { ok: true, message: String(result) };
   }
 
@@ -369,11 +390,41 @@ const HANDLED = new Set([
   "find_message", "snipe", "editsnipe", "tempban",
 ]);
 
+/**
+ * @param {Record<string, any>} input
+ * @returns {Record<string, any>}
+ */
+export function normalizePurgeMessagesArgs(input = {}) {
+  const out = { ...input };
+  if (input.channel && typeof input.channel === "object") {
+    if (input.channel.id !== undefined) out.channel_id = input.channel.id;
+    if (input.channel.name !== undefined) out.channel_name = input.channel.name;
+  }
+  const filters = input.filters && typeof input.filters === "object" ? input.filters : {};
+  for (const key of [
+    "from_user", "exclude_user", "only_keep_media_from_user", "content_type",
+    "contains", "not_contains", "has_links", "is_pinned",
+  ]) {
+    if (filters[key] !== undefined) out[key] = filters[key];
+  }
+  const range = input.range && typeof input.range === "object" ? input.range : {};
+  for (const key of ["before_message_id", "after_message_id", "before_date", "after_date"]) {
+    if (range[key] !== undefined) out[key] = range[key];
+  }
+  delete out.channel;
+  delete out.filters;
+  delete out.range;
+  return out;
+}
+
 // A destructive AI-initiated action that should be deferred to a human
 // Confirm click. Returns the pending-confirm result object, or null if this
 // call should execute immediately (not AI-initiated, already confirmed, or a
 // purge under the threshold).
-function _maybeDeferToConfirm(toolName, input, message, ctx, opts = {}) {
+// Exported so the channel/role executors can gate their destructive tools
+// (delete_channel / nuke_channel / delete_role / mass_role) through the SAME
+// pending-action store + Confirm button instead of growing a parallel copy.
+export function _maybeDeferToConfirm(toolName, input, message, ctx, opts = {}) {
   // Slash mod commands never reach this executor; only the AI tool path sets
   // ctx.aiInitiated. If the dispatch hasn't been wired to set the flag yet
   // (see openConcerns), the gate stays off and behavior is unchanged.
@@ -852,6 +903,14 @@ export async function execute(toolName, input, message, ctx) {
       // whole server via the AI path. ManageChannels matches the safety helper.
       if (!_memberHasPerm(message.member, PermissionFlagsBits.ManageChannels, guild))
         return "You can't lock down the server.";
+      // AI-initiated lockdowns defer to a human Confirm click, same as the
+      // other destructive tools (ban/kick/purge/delete_channel/...).
+      const lockDefer = _maybeDeferToConfirm("lockdown_server", input, message, ctx, {
+        requiredPerm: PermissionFlagsBits.ManageChannels,
+        targetId: guild.id,
+        summary: `Lock down the entire server (reason: ${input.reason || "No reason"})`,
+      });
+      if (lockDefer) return lockDefer;
       const { activateLockdown } = await import("../../utils/safety.js");
       const lockReason = input.reason || "manual lockdown by admin";
       const ok = await activateLockdown(guild, lockReason);
@@ -937,6 +996,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "purge_messages": {
+      input = normalizePurgeMessagesArgs(input);
       // Match /purge slash-command gate (ManageMessages). Audit flagged this
       // as HIGH severity — previously relied on the upstream ADMIN_TOOLS
       // gate alone, so a stale trusted_users entry could drive a 500-message

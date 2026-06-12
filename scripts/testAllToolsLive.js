@@ -305,8 +305,8 @@ const IRENE_TESTS = [
   // ── Memory ──
   { cat: "memory",     prompt: "remember that user 1234567890123456789 mains jett in valorant",                          expect: "remember_fact" },
   { cat: "memory",     prompt: "what do you remember about me?",                                                         expect: "recall_memories" },
-  { cat: "memory",     prompt: "forget my memory at index 3",                                                              expect: "forget_memory" },
-  { cat: "memory",     prompt: "clear all memories about me",                                                             expect: "clear_all_memories" },
+  { cat: "memory",     prompt: "forget my memory at index 3",                                                              expect: "forget_fact" },
+  { cat: "memory",     prompt: "clear all memories about me",                                                             expect: "forget_all" },
   { cat: "memory",     prompt: "save a directive: be extra polite in #serious",                                          expect: "save_directive" },
   { cat: "memory",     prompt: "list all the directives for this server",                                                expect: "list_directives" },
   { cat: "memory",     prompt: "remove directive 1",                                                                     expect: "remove_directive" },
@@ -390,7 +390,7 @@ const IRENE_TESTS = [
   { cat: "srv_cfg",    prompt: "set up verification for new members with the Verified role",                            expect: "setup_verification" },
   { cat: "srv_cfg",    prompt: "trust user 1234567890123456789",                                                         expect: "trust_user" },
   { cat: "srv_cfg",    prompt: "untrust user 1234567890123456789",                                                       expect: "untrust_user" },
-  { cat: "srv_cfg",    prompt: "list all trusted users",                                                                 expect: "list_trusted_users" },
+  { cat: "srv_cfg",    prompt: "list all trusted users",                                                                 expect: "list_trusted" },
   { cat: "srv_cfg",    prompt: "set up the log channel as 5555555555555555555",                                          expect: "set_log_channel" },
   { cat: "srv_cfg",    prompt: "set autorole to Member",                                                                  expect: "set_autorole" },
   { cat: "srv_cfg",    prompt: "whitelist this server: discord.gg/abc123",                                               expect: "whitelist_server" },
@@ -407,9 +407,7 @@ const IRENE_TESTS = [
   // set_escalation requires at least one of mute_at/kick_at/ban_at.
   { cat: "srv_cfg",    prompt: "set up automod escalation: auto-mute at 3 warnings, auto-kick at 5, auto-ban at 7",     expect: "set_escalation" },
   { cat: "srv_cfg",    prompt: "set up server stats channels",                                                           expect: "setup_stats_channels" },
-  // The model often emits `set_starboard` (a common phrasing); the executor's
-  // TOOL_ALIASES remaps it to setup_starboard, so both are functionally correct.
-  { cat: "srv_cfg",    prompt: "set up a starboard in channel 5555555555555555555 with 5 stars",                        expect: ["setup_starboard", "set_starboard"] },
+  { cat: "srv_cfg",    prompt: "set up a starboard in channel 5555555555555555555 with 5 stars",                        expect: "setup_starboard" },
   { cat: "srv_cfg",    prompt: "toggle auto responders on",                                                              expect: "toggle_auto_responders" },
   { cat: "srv_cfg",    prompt: "toggle twin chat with eris on",                                                          expect: "toggle_twin_chat" },
   { cat: "srv_cfg",    prompt: "toggle voice tracking on",                                                               expect: "toggle_voice_tracking" },
@@ -525,7 +523,7 @@ const IRENE_TESTS = [
   { cat: "util",       prompt: "calculate 23 * 47 + 12",                                                                 expect: "calculate" },
   { cat: "util",       prompt: "summarize the last 50 messages in this channel",                                         expect: "summarize_channel" },
   { cat: "util",       prompt: "search the web for current weather in tokyo",                                            expect: "web_search" },
-  { cat: "util",       prompt: "read the page https://example.com/article",                                              expect: "web_read" },
+  { cat: "util",       prompt: "read the page https://example.com/article",                                              expect: "scrape_url" },
   { cat: "util",       prompt: "send a gif of a cat dancing",                                                            expect: "send_gif" },
   // set_gif_style only accepts 'raw' or 'embed' per its enum.
   { cat: "util",       prompt: "set the gif style to raw — no embed border",                                            expect: "set_gif_style" },
@@ -533,11 +531,11 @@ const IRENE_TESTS = [
   { cat: "util",       prompt: "generate an image of a sunset over mountains",                                          expect: "generate_image" },
   { cat: "util",       prompt: "show me the last deleted message in this channel",                                      expect: "snipe" },
   { cat: "util",       prompt: "show me the last edited message",                                                       expect: "editsnipe" },
-  { cat: "util",       prompt: "set a 30m reminder to drink water",                                                     expect: "reminder_set" },
+  { cat: "util",       prompt: "set a 30m reminder to drink water",                                                     expect: "set_reminder" },
   // The model may emit either canonical name; the executor's TOOL_ALIASES handles both.
-  // Make the prompt explicit so the model picks reminder_cancel (not cancel_scheduled_task,
+  // Make the prompt explicit so the model picks cancel_reminder (not cancel_scheduled_task,
   // which is a different feature for automated bot tasks).
-  { cat: "util",       prompt: "cancel my reminder with id 5",                                                          expect: ["reminder_cancel", "cancel_reminder"] },
+  { cat: "util",       prompt: "cancel my reminder with id 5",                                                          expect: ["cancel_reminder", "cancel_reminder"] },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────

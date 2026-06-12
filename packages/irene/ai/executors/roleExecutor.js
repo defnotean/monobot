@@ -4,6 +4,7 @@ import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { log } from "../../utils/logger.js";
 import { hasAdministratorMember, hasManageChannelsMember, hasManageRolesMember } from "../../utils/permissions.js";
 import { DANGEROUS_PERMS, checkRoleMutationHierarchy, checkRoleReorderHierarchy } from "../hierarchy.js";
+import { _maybeDeferToConfirm } from "./moderationExecutor.js";
 
 const HANDLED = new Set([
   "create_role", "delete_role", "edit_role", "reorder_roles",
@@ -47,6 +48,25 @@ const PERMISSION_MAP = {
   deafen_members:     PermissionFlagsBits.DeafenMembers,
   administrator:      PermissionFlagsBits.Administrator,
 };
+
+export const ROLE_PERMISSION_KEYS = Object.keys(PERMISSION_MAP);
+
+/**
+ * @param {Record<string, any>} input
+ * @returns {Record<string, any>}
+ */
+export function normalizeRolePermissionArgs(input = {}) {
+  const out = { ...input };
+  for (const key of Array.isArray(input.allow) ? input.allow : []) {
+    if (ROLE_PERMISSION_KEYS.includes(key)) out[key] = true;
+  }
+  for (const key of Array.isArray(input.deny) ? input.deny : []) {
+    if (ROLE_PERMISSION_KEYS.includes(key)) out[key] = false;
+  }
+  delete out.allow;
+  delete out.deny;
+  return out;
+}
 
 function isGuildOwner(member, guild) {
   return Boolean(member?.id && guild?.ownerId && member.id === guild.ownerId);
@@ -147,14 +167,15 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "set_role_permissions": {
-      const role = findRole(guild, input.role_name);
-      if (!role) return `Couldn't find role "${input.role_name}"`;
+      const args = normalizeRolePermissionArgs(input);
+      const role = findRole(guild, args.role_name);
+      if (!role) return `Couldn't find role "${args.role_name}"`;
       const hierarchyErr = checkRoleMutationHierarchy(actor, role, guild, "edit");
       if (hierarchyErr) return hierarchyErr;
-      const grantErr = dangerousGrantError(input, actor, guild);
+      const grantErr = dangerousGrantError(args, actor, guild);
       if (grantErr) return grantErr;
 
-      const { perms, changed } = buildPermissionBitfield(input, role.permissions.bitfield);
+      const { perms, changed } = buildPermissionBitfield(args, role.permissions.bitfield);
       if (!changed.length) return "No permission changes specified";
       await role.setPermissions(perms, `Permissions set ${by}`);
       return `Updated @${role.name} permissions: ${changed.join(", ")}`;
@@ -190,6 +211,14 @@ export async function execute(toolName, input, message, ctx) {
       if (!role) return `Couldn't find role "${input.name}"`;
       const hierarchyErr = checkRoleMutationHierarchy(actor, role, guild, "delete");
       if (hierarchyErr) return hierarchyErr;
+      // AI-initiated deletions defer to a human Confirm click — same gate as
+      // ban/kick (see moderationExecutor's pending-action store).
+      const deleteDefer = _maybeDeferToConfirm("delete_role", input, message, ctx, {
+        requiredPerm: PermissionFlagsBits.ManageRoles,
+        targetId: role.id,
+        summary: `Delete role **@${role.name}** (permanent — removed from every member)`,
+      });
+      if (deleteDefer) return deleteDefer;
       await role.delete(`Deleted ${by}`);
       return `Deleted role "${input.name}"`;
     }
@@ -289,6 +318,15 @@ export async function execute(toolName, input, message, ctx) {
     case "mass_role": {
       const role = findRole(guild, input.role_name);
       if (!role) return `Couldn't find role "${input.role_name}"`;
+      // A guild-wide role mutation is destructive at scale (one hallucinated
+      // call can strip/grant a role for thousands of members), so AI-initiated
+      // calls defer to a human Confirm click BEFORE the full member fetch.
+      const massDefer = _maybeDeferToConfirm("mass_role", input, message, ctx, {
+        requiredPerm: PermissionFlagsBits.ManageRoles,
+        targetId: role.id,
+        summary: `${input.action === "give" ? "Give" : "Remove"} role **@${role.name}** ${input.action === "give" ? "to" : "from"} ${input.filter_role ? `every member with "${input.filter_role}"` : "EVERY member"}`,
+      });
+      if (massDefer) return massDefer;
       // Fetch ALL members, not just the first 100 — the old `{ limit: 100 }`
       // silently skipped every user past the limit on large guilds, meaning
       // a "give role to everyone" ran on 100/10,000 members. discord.js

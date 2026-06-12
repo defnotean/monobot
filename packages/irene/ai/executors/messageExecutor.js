@@ -15,6 +15,50 @@ const HANDLED = new Set([
   "send_message", "send_animated_message", "create_thread",
 ]);
 
+/**
+ * @param {Record<string, any>} input
+ * @returns {Record<string, any>}
+ */
+export function normalizeSendMessageArgs(input = {}) {
+  const out = { ...input };
+  if (input.channel && typeof input.channel === "object") {
+    if (input.channel.id !== undefined) out.channel_id = input.channel.id;
+    if (input.channel.name !== undefined) out.channel_name = input.channel.name;
+  }
+  const embed = input.embed && typeof input.embed === "object" ? input.embed : {};
+  const embedMap = {
+    title: "embed_title",
+    description: "embed_description",
+    color: "embed_color",
+    image: "embed_image",
+    thumbnail: "embed_thumbnail",
+    fields: "embed_fields",
+    timestamp: "embed_timestamp",
+  };
+  for (const [from, to] of Object.entries(embedMap)) {
+    if (embed[from] !== undefined) out[to] = embed[from];
+  }
+  if (embed.author && typeof embed.author === "object") {
+    if (embed.author.name !== undefined) out.embed_author = embed.author.name;
+    if (embed.author.icon !== undefined) out.embed_author_icon = embed.author.icon;
+  } else if (embed.author !== undefined) {
+    out.embed_author = embed.author;
+  }
+  if (embed.footer && typeof embed.footer === "object") {
+    if (embed.footer.text !== undefined) out.embed_footer = embed.footer.text;
+    if (embed.footer.icon !== undefined) out.embed_footer_icon = embed.footer.icon;
+  } else if (embed.footer !== undefined) {
+    out.embed_footer = embed.footer;
+  }
+  const components = input.components && typeof input.components === "object" ? input.components : {};
+  if (components.buttons !== undefined) out.buttons = components.buttons;
+  if (components.dropdown !== undefined) out.dropdown = components.dropdown;
+  delete out.channel;
+  delete out.embed;
+  delete out.components;
+  return out;
+}
+
 function hasChannelPermission(channel, member, permission) {
   if (isGuildOwnerMember(member)) return true;
   const scoped = channel?.permissionsFor?.(member);
@@ -325,6 +369,7 @@ export async function execute(toolName, input, message, ctx) {
 
     // ─── Messaging ───────────────────────────────────────────────────
     case "send_message": {
+      input = normalizeSendMessageArgs(input);
       const ch = findChannel(guild, input.channel_id || input.channel_name);
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       if (!canSendToChannel(ch, message.member)) return "You need View Channel and Send Messages in that channel.";

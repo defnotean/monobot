@@ -5,12 +5,57 @@ import { logAudit } from "../../database.js";
 import { sendModLog } from "../../utils/logger.js";
 import { modEmbed } from "../../utils/embeds.js";
 import { hasManageChannelsMember } from "../../utils/permissions.js";
+import { _maybeDeferToConfirm } from "./moderationExecutor.js";
 
 const HANDLED = new Set([
   "create_channel", "delete_channel", "nuke_channel", "rename_channel",
   "set_channel_topic", "set_slowmode", "lock_channel", "unlock_channel",
   "move_channel", "clone_channel", "set_channel_permissions",
 ]);
+
+export const CHANNEL_PERMISSION_ALIASES = {
+  view: "allow_view",
+  send: "allow_send",
+  read_history: "allow_read_history",
+  react: "allow_react",
+  attach: "allow_attach",
+  embed_links: "allow_embed_links",
+  use_ext_emoji: "allow_use_ext_emoji",
+  mention_everyone: "allow_mention_everyone",
+  manage_messages: "allow_manage_messages",
+  use_slash: "allow_use_slash",
+  connect: "allow_connect",
+  speak: "allow_speak",
+  stream: "allow_stream",
+  move_members: "allow_move_members",
+};
+
+function _setChannelPermList(out, list, value) {
+  for (const key of Array.isArray(list) ? list : []) {
+    const target = CHANNEL_PERMISSION_ALIASES[key];
+    if (target) out[target] = value;
+  }
+}
+
+/**
+ * @param {Record<string, any>} input
+ * @returns {Record<string, any>}
+ */
+export function normalizeChannelPermissionArgs(input = {}) {
+  const out = { ...input };
+  if (input.channel && typeof input.channel === "object") {
+    if (input.channel.id !== undefined) out.channel_id = input.channel.id;
+    if (input.channel.name !== undefined) out.channel_name = input.channel.name;
+  }
+  _setChannelPermList(out, input.allow, true);
+  _setChannelPermList(out, input.deny, false);
+  _setChannelPermList(out, input.inherit, null);
+  delete out.channel;
+  delete out.allow;
+  delete out.deny;
+  delete out.inherit;
+  return out;
+}
 
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
@@ -92,6 +137,15 @@ export async function execute(toolName, input, message, ctx) {
       const ch = findChannel(guild, target);
       if (!ch) return `Couldn't find channel "${target}"`;
       const name = ch.name;
+      // AI-initiated deletions defer to a human Confirm click — same gate as
+      // ban/kick (see moderationExecutor's pending-action store). Slash/manual
+      // paths never set ctx.aiInitiated, so they execute immediately as before.
+      const deleteDefer = _maybeDeferToConfirm("delete_channel", input, message, ctx, {
+        requiredPerm: PermissionFlagsBits.ManageChannels,
+        targetId: ch.id,
+        summary: `Delete channel **#${name}** (permanent — all messages lost)`,
+      });
+      if (deleteDefer) return deleteDefer;
       await ch.delete(`Deleted ${by}`);
       logAudit(guild.id, "delete_channel", message.author.id, target);
       return `Deleted channel #${name}`;
@@ -103,6 +157,14 @@ export async function execute(toolName, input, message, ctx) {
       if (!ch) return `Couldn't find channel "${target}"`;
       if (!ch.isTextBased()) return "Can only nuke text channels";
       const name = ch.name;
+      // Nuke = clone + delete; just as destructive as delete_channel, so it
+      // takes the same AI-initiated confirm gate.
+      const nukeDefer = _maybeDeferToConfirm("nuke_channel", input, message, ctx, {
+        requiredPerm: PermissionFlagsBits.ManageChannels,
+        targetId: ch.id,
+        summary: `Nuke channel **#${name}** (clone + delete — wipes all messages)`,
+      });
+      if (nukeDefer) return nukeDefer;
       const clone = await ch.clone({ reason: `Nuked ${by}` });
       await clone.setPosition(ch.position).catch(() => {});
       await ch.delete(`Nuked ${by}`);
@@ -166,6 +228,7 @@ export async function execute(toolName, input, message, ctx) {
     }
 
     case "set_channel_permissions": {
+      input = normalizeChannelPermissionArgs(input);
       const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
       if (!ch) return `Couldn't find channel "${input.channel_name}"`;
       let target;

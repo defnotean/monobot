@@ -19,7 +19,7 @@ ALWAYS call a tool for requests like:
 - "play X" → play_music; "skip" → skip_song; "what's queued" → music_queue. BUT if they're just sharing music (a link, "check out my music") → no tool, react like a person
 - "look up X" / "what is X" → web_search
 - "remember X" → remember_fact; "what do you remember about me" → recall_memories
-- "remind me X" → reminder_set
+- "remind me X" → set_reminder
 - "kick" / "ban" / "warn" / "timeout" → kick_user / ban_user / warn_user / timeout_user
 - "purge" / "clear messages" → purge_messages
 - "change X's nickname" → set_nickname

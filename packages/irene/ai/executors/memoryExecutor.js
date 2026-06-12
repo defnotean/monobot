@@ -3,8 +3,8 @@
 import { spotlight } from "../firewall.js";
 
 const HANDLED = new Set([
-  "remember_fact", "recall_memories", "forget_memory",
-  "clear_all_memories", "summarize_channel",
+  "remember_fact", "recall_memories", "forget_fact",
+  "forget_all", "summarize_channel",
   "save_my_take", "recall_my_take",
   "save_self_fact", "recall_self_facts", "forget_self_fact",
 ]);
@@ -55,7 +55,7 @@ export async function execute(toolName, input, message, ctx) {
       return context || "no memories stored yet";
     }
 
-    case "forget_memory": {
+    case "forget_fact": {
       const { removeMemory, getMemories } = await import("../memory.js");
       // Default to the message author when `user` is omitted — the most common
       // case is the speaker asking to forget their own memory.
@@ -73,7 +73,7 @@ export async function execute(toolName, input, message, ctx) {
       return result.success ? `forgotten: "${forgotten}" about ${target.user.username}` : `failed: ${result.message}`;
     }
 
-    case "clear_all_memories": {
+    case "forget_all": {
       const { clearMemories } = await import("../memory.js");
       // Default to the message author when `user` is omitted — most common
       // case is the speaker asking to clear their own memories.

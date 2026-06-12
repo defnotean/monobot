@@ -267,8 +267,8 @@ function checkWebRateLimit(userId, rateLimit) {
 
 const HANDLED = new Set([
   "configure_giveaway_pings", "configure_suggestions", "manage_giveaway",
-  "toggle_voice_listen", "manage_scrim", "reminder_set", "reminder_cancel",
-  "calculate", "web_search", "web_read", "ask_eris",
+  "toggle_voice_listen", "manage_scrim", "set_reminder", "cancel_reminder",
+  "calculate", "web_search", "scrape_url", "ask_eris",
   "schedule_task", "cancel_scheduled_task", "list_scheduled_tasks",
 ]);
 
@@ -369,7 +369,7 @@ export async function execute(toolName, input, message, ctx) {
       return "Unsupported action.";
     }
 
-    case "reminder_set": {
+    case "set_reminder": {
       const delayMs = (input.delay_minutes ?? 0) * 60_000;
       if (delayMs <= 0) return "delay must be greater than 0 minutes";
       const fireAt = Date.now() + delayMs;
@@ -405,7 +405,7 @@ export async function execute(toolName, input, message, ctx) {
       return `Reminder set (ID: ${reminder.id}) — I'll ping you <t:${fireTs}:R> with: "${input.message}"`;
     }
 
-    case "reminder_cancel": {
+    case "cancel_reminder": {
       const reminderId = input.reminder_id;
       const { getReminders } = await import("../../database.js");
       const reminders = getReminders();
@@ -620,7 +620,7 @@ export async function execute(toolName, input, message, ctx) {
       }
     }
 
-    case "web_read": {
+    case "scrape_url": {
       const rateErr = checkWebRateLimit(message.author.id, webRateLimitPerMin);
       if (rateErr) return rateErr;
       if (!input.url) return "No URL provided.";

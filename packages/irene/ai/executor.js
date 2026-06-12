@@ -47,7 +47,7 @@
  *  - personalizeExecutor — server persona/avatar/banner, per-channel personality
  *  - audioExecutor     — music playback, queue, filters, lyrics mode, TTS
  *  - levelingExecutor  — XP toggles, level rewards, leaderboards
- *  - advancedExecutor  — twin coordination (`ask_eris`), web_search / web_read,
+ *  - advancedExecutor  — twin coordination (`ask_eris`), web_search / scrape_url,
  *                        calculate, reminders, scheduled tasks, image gen
  *  - memoryExecutor    — remember_fact / recall / forget / directives
  *  - toggleExecutor    — feature flags (auto-responders, invite filter, etc.)
@@ -257,7 +257,7 @@ const CACHEABLE_TOOLS = new Set([
   "recall_memories", "get_server_info", "get_user_info",
   "list_roles", "get_role_permissions", "list_emojis",
   "count_members", "who_has_role", "random_member",
-  "list_custom_commands", "list_auto_responders", "list_trusted_users",
+  "list_custom_commands", "list_auto_responders", "list_trusted",
   "list_whitelist", "music_queue", "now_playing",
   "list_birthdays", "voice_leaderboard", "server_milestones",
   "list_members", "list_directives",
@@ -269,7 +269,7 @@ const CACHE_INVALIDATING_TOOLS = new Set([
   "create_role", "delete_role", "edit_role", "give_role", "remove_role",
   "mass_role", "set_role_permissions", "reorder_roles",
   "ban_user", "kick_user", "warn_user", "timeout_user", "tempban", "set_nickname",
-  "remember_fact", "forget_memory", "clear_all_memories",
+  "remember_fact", "forget_fact", "forget_all",
   "create_custom_command", "edit_custom_command", "delete_custom_command",
   "create_auto_responder", "delete_auto_responder",
   "add_emoji", "remove_emoji",
@@ -449,7 +449,7 @@ const GUILD_REQUIRED_TOOLS = new Set([
   "set_create_vc_channel", "set_vc_template", "set_vc_default_limit",
   "set_vc_naming_mode", "toggle_vc_rich_presence", "set_afk_channel",
   "set_welcome_channel", "customize_welcome", "set_access_role", "setup_verification",
-  "trust_user", "untrust_user", "list_trusted_users", "set_log_channel",
+  "trust_user", "untrust_user", "list_trusted", "set_log_channel",
   "set_autorole", "whitelist_server", "unwhitelist_server", "list_whitelist",
   "set_dm_results", "set_dm_welcome", "set_leave_channel",
   "set_server_avatar", "set_server_banner", "set_server_persona",

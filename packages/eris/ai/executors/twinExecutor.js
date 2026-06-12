@@ -11,6 +11,18 @@ import { PermissionFlagsBits } from "discord.js";
 
 const HANDLED = new Set(["ask_irene"]);
 
+/**
+ * @param {Record<string, any>} input
+ * @returns {Record<string, any>}
+ */
+export function normalizeAskIreneArgs(input = {}) {
+  if (!input.params || typeof input.params !== "object" || Array.isArray(input.params)) {
+    return { ...input };
+  }
+  const { params, ...rest } = input;
+  return { ...rest, ...params };
+}
+
 const COMMAND_PERMISSIONS = new Map([
   ["announce", PermissionFlagsBits.ManageMessages],
   ["ban", PermissionFlagsBits.BanMembers],
@@ -63,6 +75,7 @@ export async function execute(toolName, input, message, _context) {
   switch (toolName) {
 
     case "ask_irene": {
+      input = normalizeAskIreneArgs(input);
       if (!message.guild) return "i can only ask irene to do server stuff — this only works in a server, not DMs";
 
       const command = (input.command || "").toLowerCase().trim();

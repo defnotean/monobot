@@ -32,6 +32,11 @@ describe("executor alias resolution + registry validation", () => {
     expect(registered.has(resolved.name)).toBe(true);
   });
 
+  it("does not keep dead self-aliases for game watch tools", () => {
+    expect(TOOL_ALIASES).not.toHaveProperty("track_game");
+    expect(TOOL_ALIASES).not.toHaveProperty("untrack_game");
+  });
+
   it("(b) returns a structured {unknown, normalized} error for a name that is not in the registry post-alias", () => {
     // A name with no alias mapping and not in the registry: normalized == original.
     const out = resolveToolName("definitely_not_a_real_tool_xyz");

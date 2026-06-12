@@ -6,7 +6,7 @@ import { hasAdministratorMember, isAdminMember } from "../../utils/permissions.j
 const HANDLED = new Set([
   "toggle_twin_chat", "toggle_auto_responders", "toggle_voice_tracking",
   "create_auto_responder", "list_auto_responders", "delete_auto_responder",
-  "server_milestones", "trust_user", "untrust_user", "list_trusted_users",
+  "server_milestones", "trust_user", "untrust_user", "list_trusted",
   "toggle_invite_filter",
 ]);
 
@@ -96,7 +96,7 @@ export async function execute(toolName, input, message, ctx) {
       return `done`;
     }
 
-    case "list_trusted_users": {
+    case "list_trusted": {
       const ids = getTrustedUsers(guild.id);
       if (!ids.length) return `Nobody is explicitly trusted on this server right now.`;
 

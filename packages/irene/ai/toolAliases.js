@@ -7,7 +7,8 @@ import { log } from "../utils/logger.js";
 
 export const TOOL_ALIASES = {
   remember: "remember_fact", save_fact: "remember_fact", memorize: "remember_fact",
-  forget: "forget_memory", clear_memories: "clear_all_memories", forget_everything: "clear_all_memories",
+  forget: "forget_fact", forget_memory: "forget_fact",
+  clear_memories: "forget_all", forget_everything: "forget_all", clear_all_memories: "forget_all",
   recall: "recall_memories", memories: "recall_memories", facts: "recall_memories",
   play: "play_music", play_song: "play_music", music: "play_music", song: "play_music",
   skip: "skip_song", next: "skip_song", stop: "stop_music", pause: "pause_music", resume: "resume_music",
@@ -24,7 +25,7 @@ export const TOOL_ALIASES = {
   lock: "lock_channel", unlock: "unlock_channel", lockdown: "lockdown_server",
   slowmode: "set_slowmode", slow: "set_slowmode",
   nickname: "set_nickname", nick: "set_nickname",
-  find: "find_message", snipe: "snipe", deleted: "snipe", editsnipe: "editsnipe", edit_snipe: "editsnipe", esnipe: "editsnipe",
+  find: "find_message", deleted: "snipe", edit_snipe: "editsnipe", esnipe: "editsnipe",
   disconnect: "disconnect_user_from_voice", dc: "disconnect_user_from_voice",
   move_user: "move_user_to_voice",
   topic: "set_channel_topic",
@@ -42,13 +43,14 @@ export const TOOL_ALIASES = {
   calc: "calculate", math: "calculate", calculator: "calculate",
   gif: "send_gif", reaction: "send_gif",
   search: "web_search", google: "web_search", lookup: "web_search",
-  read_page: "web_read", scrape: "web_read",
+  read_page: "scrape_url", scrape: "scrape_url", web_read: "scrape_url",
   image: "generate_image", draw: "generate_image", generate: "generate_image", create_image: "generate_image",
   summarize: "summarize_channel", summary: "summarize_channel", what_did_i_miss: "summarize_channel",
-  remind: "reminder_set", reminder: "reminder_set", cancel_reminder: "reminder_cancel",
+  remind: "set_reminder", reminder: "set_reminder",
+  reminder_set: "set_reminder", reminder_cancel: "cancel_reminder",
   giveaway: "manage_giveaway", start_giveaway: "manage_giveaway",
   welcome: "customize_welcome", test_welcome: "send_test_welcome",
-  birthday: "get_birthday", bday: "get_birthday", set_birthday: "set_birthday", birthdays: "list_birthdays",
+  birthday: "get_birthday", bday: "get_birthday", birthdays: "list_birthdays",
   starboard: "setup_starboard", set_starboard: "setup_starboard", stats: "setup_stats_channels",
   ticket: "setup_ticket", verify: "setup_verification",
   autorole: "set_autorole", log_channel: "set_log_channel",
@@ -73,7 +75,7 @@ export const TOOL_ALIASES = {
   persona: "set_server_persona", server_avatar: "set_server_avatar", server_banner: "set_server_banner",
   channel_persona: "set_channel_personality",
   whitelist: "whitelist_server", unwhitelist: "unwhitelist_server", whitelisted: "list_whitelist",
-  trust: "trust_user", trusted: "list_trusted_users", untrust: "untrust_user",
+  trust: "trust_user", trusted: "list_trusted", list_trusted_users: "list_trusted", untrust: "untrust_user",
 };
 
 // ─── Alias resolution + registry validation ────────────────────────────────

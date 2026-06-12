@@ -126,7 +126,7 @@ Per-tool budgets, key pool rotation, fallback-model retries, and the `quickReply
 
 Single dispatch entry on each bot: `executeTool(toolName, input, message)` in `ai/executor.js`. It applies four layers before invoking the actual handler:
 
-1. **TOOL_ALIASES** — hand-curated map for model name drift (e.g. `play → play_music`, `coinflip → coinflip_bet`). Eris's map has ~150 entries ([packages/eris/ai/executor.js:37-135](packages/eris/ai/executor.js#L37-L135)); Irene's is smaller and similar.
+1. **TOOL_ALIASES** — hand-curated map for model name drift (e.g. `play → play_music`, `coinflip → coinflip_bet`). Eris's map has 277 entries ([packages/eris/ai/executor.js:43-139](packages/eris/ai/executor.js#L43-L139)); Irene's has 181 ([packages/irene/ai/toolAliases.js](packages/irene/ai/toolAliases.js)).
 2. **Per-user rate limit** via `utils/toolRateLimit.js` — expensive tools (web search, image, terminal) are capped per user per window.
 3. **Read-only cache** — `LRUCache(200, 15_000)` keyed by `userId:toolName:JSON(args)`. `CACHEABLE_TOOLS` is the allowlist; `CACHE_INVALIDATING_TOOLS` clears the user's cache after writes; `TWO_USER_TOOLS` (transfers, rob, trade, marry) also clears the target's cache ([packages/eris/ai/executor.js:140-201](packages/eris/ai/executor.js#L140-L201)).
 4. **Sub-executor walk** — iterate the `SUB_EXECUTORS` array, first non-`undefined` result wins. Each sub-executor declares its `HANDLED` Set and returns a string result or `undefined`.
@@ -135,7 +135,18 @@ Single dispatch entry on each bot: `executeTool(toolName, input, message)` in `a
 
 **Irene sub-executors** ([packages/irene/ai/executors/](packages/irene/ai/executors/)): `channel`, `role`, `moderation` (with `checkHierarchy`), `voice`, `setup`, `personalize`, `audio`, `leveling`, `advanced`, `memory`, `toggle`, `message`, `server`. The `setupExecutor` is composite — owns welcome / verify / reaction-roles / starboard / ticket flows. A residual `switch` in `executor.js` handles tools not yet extracted.
 
-**Tier model (planned — not yet wired).** `ai/toolRegistry.js` implements a two-tier split: tools in `_alwaysInclude` (memory, web, GIF, notes, mood) plus the matched-category tools would form Tier 1 (full schemas), and the rest would become a Tier 2 name-only catalog appended to the prompt, with the executor dispatching by name regardless. **Neither bot uses this path in the live message loop today.** Eris's `events/messageCreate/toolProfiles.js` sends a full, profile-filtered schema every turn (twin / chat / task profiles, plus owner tools), and Irene's `messageCreate.js` sends all tools every message; the registry's `getToolsFor()` tiering is implemented but not yet called from the hot path. From the registry the live code consumes only `getEconomyMutatingTools()`. The registry is tracking usage for when Tier 2 is wired in.
+**Tier model (live on both bots).** `ai/toolRegistry.js` implements a two-tier split: tools in `_alwaysInclude` (memory, web, GIF, notes, mood) plus the matched-category and recently-used tools form Tier 1 (full schemas sent to the model); everything else becomes a Tier 2 name-only catalog (grouped by category, schemas deliberately omitted to save tokens) appended to the system prompt, with the executor dispatching by name regardless of tier — so a Tier-2 tool is still callable, the catalog is just how the model learns it exists. Eris computes the split per turn at [packages/eris/events/messageCreate/contextBuild.js:456](packages/eris/events/messageCreate/contextBuild.js#L456) via `pickToolProfile` ([packages/eris/events/messageCreate/toolProfiles.js](packages/eris/events/messageCreate/toolProfiles.js) → `registry.selectByMessage`, with an extra intent-regex pass that demotes core tools the message clearly doesn't need); Irene calls `toolRegistry.selectByMessage` directly with a 32-tool Tier-1 cap ([packages/irene/events/messageCreate/contextBuild.js:342-348](packages/irene/events/messageCreate/contextBuild.js#L342-L348), cap constant `MAX_TIER1_TOOLS` at [packages/irene/ai/toolRegistry.js](packages/irene/ai/toolRegistry.js), overridable via `TOOLS_TIER1_MAX`).
+
+Measured Tier-1 footprint per profile (June 2026, [scripts/measure-prompt-footprint.mjs](scripts/measure-prompt-footprint.mjs)):
+
+| Profile | Tier-1 schemas | Schema bytes |
+|---|---|---|
+| Eris owner casual | 29 | 16,278 bytes |
+| Eris owner admin intent | 29 | 16,278 bytes |
+| Irene admin casual | 16 | 10,664 bytes |
+| Irene admin moderation intent | 28 | 16,264 bytes |
+
+Two env knobs tune the tiering: `TOOLS_TIER1_MAX` bounds the Tier-1 schema count per turn (lower it to 16–20 for local models — see [docs/self-hosting.md](docs/self-hosting.md)), and `TOOLS_SHADOW_LOG=1` logs what a tighter cap *would have* dropped without changing behavior, so a cap can be tuned against live traffic before it's enforced.
 
 Hallucinated tool names accumulate in `_unknownToolCounts` and get logged at hit #1 and every 10th hit thereafter so prompt drift becomes visible.
 

@@ -229,9 +229,9 @@ export const registry = new ToolRegistry();
 export function registerPresenceBotTools(ADMIN_TOOLS, EVERYONE_TOOLS) {
   // ── Always-include (core tools available to everyone) ──
   const alwaysInclude = [
-    "remember_fact", "recall_memories", "forget_memory", "clear_all_memories",
-    "send_gif", "show_image", "send_file", "edit_image", "web_search", "web_read", "calculate", "snipe", "editsnipe",
-    "ask_eris", "reminder_set", "reminder_cancel",
+    "remember_fact", "recall_memories", "forget_fact", "forget_all",
+    "send_gif", "show_image", "send_file", "edit_image", "web_search", "scrape_url", "calculate", "snipe", "editsnipe",
+    "ask_eris", "set_reminder", "cancel_reminder",
   ];
   registry.registerAlwaysInclude(alwaysInclude);
   registry.registerTools(
@@ -280,7 +280,7 @@ export function registerPresenceBotTools(ADMIN_TOOLS, EVERYONE_TOOLS) {
   registry.registerTools(
     ADMIN_TOOLS.filter(t => [
       "set_welcome_channel", "customize_welcome", "set_access_role",
-      "setup_verification", "trust_user", "untrust_user", "list_trusted_users",
+      "setup_verification", "trust_user", "untrust_user", "list_trusted",
       "set_log_channel", "set_autorole", "whitelist_server", "unwhitelist_server",
       "list_whitelist", "set_dm_results", "set_dm_welcome", "set_leave_channel",
       "set_server_avatar", "set_server_banner", "set_server_persona",
