@@ -4,6 +4,7 @@
 // Called from main executor.js via delegation.
 
 import * as db from "../../database.js";
+import { resolveAction } from "../blackjackEngine.js";
 import { resolveMember } from "../../utils/discord.js";
 import { log } from "../../utils/logger.js";
 
@@ -243,52 +244,63 @@ export async function execute(toolName, input, message, _context) {
       return withGameLock(lockKey, async () => {
         const game = db.getActiveGame(message.channel.id, message.author.id, "blackjack");
         if (!game) return "no active blackjack game \u2014 start one first";
-        const { handValue, randomQuip } = await import("../gambling.js");
+        const { randomQuip } = await import("../gambling.js");
         const { blackjackHitEmbed, blackjackResultEmbed } = await import("../gameVisuals.js");
         const { deck, playerHand, dealerHand } = game.gameState;
-        let stake = game.stake;
         if (action === "double") {
           // Escrow the additional stake for the double-down. If the player
           // can't cover it, reject the double (the original game stays open).
           const extra = await db.tryDeductBalance(message.author.id, game.stake, "gamble_blackjack_stake", "blackjack:double");
           if (!extra.ok) return `can't double \u2014 you only have ${extra.balance ?? 0} coins`;
-          stake *= 2;
-          playerHand.push(deck.pop());
-        } else if (action === "hit") {
-          playerHand.push(deck.pop());
-          if (handValue(playerHand) < 21) {
-            db.saveActiveGame(message.channel.id, message.author.id, "blackjack", { deck, playerHand, dealerHand, doubled: false }, game.stake);
-            const { embed, row } = blackjackHitEmbed(playerHand, dealerHand, handValue(playerHand), game.stake);
-            await message.channel.send({ embeds: [embed], components: [row] });
-            return "hit or stand?";
-          }
         }
+
+        const result = resolveAction({ deck, playerHand, dealerHand, stake: game.stake }, action);
+        if (!result.resolved) {
+          db.saveActiveGame(message.channel.id, message.author.id, "blackjack", {
+            deck: result.state.deck,
+            playerHand: result.state.playerHand,
+            dealerHand: result.state.dealerHand,
+            doubled: false,
+          }, game.stake);
+          const { embed, row } = blackjackHitEmbed(result.state.playerHand, result.state.dealerHand, result.playerValue, game.stake);
+          await message.channel.send({ embeds: [embed], components: [row] });
+          return "hit or stand?";
+        }
+
         db.deleteActiveGame(message.channel.id, message.author.id, "blackjack");
-        const playerValue = handValue(playerHand);
-        if (playerValue > 21) {
+        if (result.outcome === "bust") {
           // Stake already escrowed at start/double — nothing more to debit.
           const econ = await db.getBalance(message.author.id);
-          await db.recordGameResult(message.author.id, "blackjack", false, stake, 0);
-          await message.channel.send({ embeds: [blackjackResultEmbed(playerHand, dealerHand, playerValue, handValue(dealerHand), "BUST!", -stake, stake, econ.balance)] });
-          return await randomQuip({ won: false, game: "blackjack", amount: stake });
+          await db.recordGameResult(message.author.id, "blackjack", false, result.state.stake, 0);
+          await message.channel.send({ embeds: [blackjackResultEmbed(
+            result.state.playerHand,
+            result.state.dealerHand,
+            result.playerValue,
+            result.dealerValue,
+            result.resultText,
+            result.payout,
+            result.state.stake,
+            econ.balance,
+          )] });
+          return await randomQuip({ won: false, game: "blackjack", amount: result.state.stake });
         }
-        while (handValue(dealerHand) < 17) dealerHand.push(deck.pop());
-        const dealerValue = handValue(dealerHand);
-        let resultText, won;
-        if (dealerValue > 21) { resultText = "Dealer Busts!"; won = true; }
-        else if (playerValue > dealerValue) { resultText = "You Win!"; won = true; }
-        else if (playerValue < dealerValue) { resultText = "Dealer Wins"; won = false; }
-        else { resultText = "Push (Tie)"; won = null; }
         // Stake already escrowed: on win credit 2× (refund + winnings), on push
         // refund the stake, on loss the stake stays gone (no further debit).
-        const credit = won === true ? stake * 2 : won === null ? stake : 0;
-        const newBalance = credit > 0
-          ? await db.updateBalance(message.author.id, credit, won ? "gamble_win" : "gamble_push", `blackjack:${resultText}`)
+        const newBalance = result.credit > 0
+          ? await db.updateBalance(message.author.id, result.credit, result.won ? "gamble_win" : "gamble_push", `blackjack:${result.resultText}`)
           : (await db.getBalance(message.author.id)).balance;
-        if (won !== null) await db.recordGameResult(message.author.id, "blackjack", won, stake, won ? stake * 2 : 0);
-        const payout = won === true ? stake : won === false ? -stake : 0;
-        await message.channel.send({ embeds: [blackjackResultEmbed(playerHand, dealerHand, playerValue, dealerValue, resultText, payout, stake, newBalance)] });
-        return await randomQuip({ won: !!won, game: "blackjack", amount: stake });
+        if (result.won !== null) await db.recordGameResult(message.author.id, "blackjack", result.won, result.state.stake, result.recordPayout);
+        await message.channel.send({ embeds: [blackjackResultEmbed(
+          result.state.playerHand,
+          result.state.dealerHand,
+          result.playerValue,
+          result.dealerValue,
+          result.resultText,
+          result.payout,
+          result.state.stake,
+          newBalance,
+        )] });
+        return await randomQuip({ won: !!result.won, game: "blackjack", amount: result.state.stake });
       });
     }
 

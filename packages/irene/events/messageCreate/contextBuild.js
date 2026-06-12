@@ -31,13 +31,13 @@
 //   - tracks personality interaction
 //   - sets message._charBudget for the post-process trimmer
 
-import { MessageFlags } from "discord.js";
+import { PermissionFlagsBits } from "discord.js";
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
 import {
   listCustomCommands, getServerPersona, getChannelPersonality,
   getMood, getRelationship, moodLabel as getMoodLabel,
-  updateRelationship, shiftMood, getAllRelationships,
+  updateRelationship, shiftMood, getAllRelationships, getTrustedUsers,
 } from "../../database.js";
 import { buildInnerStateContext } from "@defnotean/shared/innerState";
 import { ADMIN_TOOLS, EVERYONE_TOOLS } from "../../ai/tools.js";
@@ -81,6 +81,59 @@ export function safeIdentityName(message) {
     || message?.author?.username
     || "user";
   return sanitizeIdentityText(raw);
+}
+
+export async function resolveDMContext(message) {
+  const userId = message.author.id;
+  const isBotOwner = userId === config.ownerId;
+  let bestGuild = null;
+  let isAdmin = false;
+
+  const guildIds = [...message.client.guilds.cache.keys()];
+  const checks = guildIds.map(async (guildId) => {
+    const guild = message.client.guilds.cache.get(guildId);
+    if (!guild || !guild.members?.me) return null;
+
+    const member = guild.members.cache.get(userId)
+      ?? await guild.members.fetch(userId).catch(() => null);
+    if (!member) return null;
+
+    if (!message.client.guilds.cache.has(guildId)) return null;
+
+    const memberAdmin =
+      isBotOwner ||
+      member.id === guild.ownerId ||
+      member.permissions.has(PermissionFlagsBits.Administrator) ||
+      member.permissions.has(PermissionFlagsBits.ManageGuild) ||
+      getTrustedUsers(guild.id).includes(member.id);
+    return { guild, memberAdmin };
+  });
+
+  const results = await Promise.all(checks);
+  for (const res of results) {
+    if (!res) continue;
+    if (!bestGuild || (!isAdmin && res.memberAdmin)) bestGuild = res.guild;
+    if (res.memberAdmin) isAdmin = true;
+  }
+
+  return { guild: bestGuild, isAdmin };
+}
+
+export async function buildMessageContext(message, { isDM, dmGuild }) {
+  const guild = isDM ? dmGuild : message.guild;
+  const dmMember = isDM ? await dmGuild.members.fetch(message.author.id).catch(() => null) : null;
+  const msgCtx = isDM
+    ? new Proxy(message, {
+        get(target, prop) {
+          if (prop === "guild") return dmGuild;
+          if (prop === "member") return dmMember;
+          const val = target[prop];
+          return typeof val === "function" ? val.bind(target) : val;
+        },
+      })
+    : message;
+
+  return { guild, msgCtx };
 }
 
 // Strict tool-call forcing directive. Some models (notably gpt-oss-120b on

@@ -1,6 +1,7 @@
 import { log } from "../utils/logger.js";
 import { MessageFlags } from "discord.js";
 import * as db from "../database.js";
+import { resolveAction } from "../ai/blackjackEngine.js";
 
 // In-flight interaction guard for re-entrant game buttons. The economy lock
 // in database.js already serializes the mutations, but it does so by queuing —
@@ -163,65 +164,52 @@ async function handleGameButton(interaction) {
         const game = db.getActiveGame(channelId, userId, "blackjack");
         if (!game) return interaction.reply({ content: "you don't have an active blackjack game", flags: MessageFlags.Ephemeral });
 
-        const { handValue, randomQuip } = await import("../ai/gambling.js");
+        const { randomQuip } = await import("../ai/gambling.js");
         const { blackjackHitEmbed, blackjackResultEmbed } = await import("../ai/gameVisuals.js");
         const { deck, playerHand, dealerHand } = game.gameState;
-        let stake = game.stake;
+        const action = id === "bj_hit" ? "hit" : id === "bj_stand" ? "stand" : "double";
 
         if (id === "bj_double") {
           // Use the unsafe variant — outer withUserLock is already held.
-          const deduct = await db.tryDeductBalanceUnsafe(userId, stake, "gamble_double", "blackjack:double");
+          const deduct = await db.tryDeductBalanceUnsafe(userId, game.stake, "gamble_double", "blackjack:double");
           if (!deduct.ok) {
             if (deduct.reason === "insufficient") {
               return interaction.reply({ content: `can't double — you only have ${deduct.balance} coins. hit or stand instead`, flags: MessageFlags.Ephemeral });
             }
             return interaction.reply({ content: `can't double right now: ${deduct.reason}`, flags: MessageFlags.Ephemeral });
           }
-          stake *= 2;
-          playerHand.push(deck.pop());
-        } else if (id === "bj_hit") {
-          playerHand.push(deck.pop());
-          const pv = handValue(playerHand);
-          if (pv < 21) {
-            // Still playing — update game and show new hand
-            db.saveActiveGame(channelId, userId, "blackjack", { deck, playerHand, dealerHand }, game.stake);
-            const { embed, row } = blackjackHitEmbed(playerHand, dealerHand, pv, game.stake);
-            return interaction.update({ embeds: [embed], components: [row] });
-          }
-          // 21 or bust — fall through to resolve
+        }
+
+        const result = resolveAction({ deck, playerHand, dealerHand, stake: game.stake }, action);
+        if (!result.resolved) {
+          // Still playing — update game and show new hand
+          db.saveActiveGame(channelId, userId, "blackjack", {
+            deck: result.state.deck,
+            playerHand: result.state.playerHand,
+            dealerHand: result.state.dealerHand,
+          }, game.stake);
+          const { embed, row } = blackjackHitEmbed(result.state.playerHand, result.state.dealerHand, result.playerValue, game.stake);
+          return interaction.update({ embeds: [embed], components: [row] });
         }
 
         // ── Resolve the hand ──────────────────────────────────────────────
         db.deleteActiveGame(channelId, userId, "blackjack");
-        const playerValue = handValue(playerHand);
 
-        if (playerValue > 21) {
+        if (result.outcome === "bust") {
           const newBalance = (await db.getBalance(userId)).balance;
-          await db.recordGameResult(userId, "blackjack", false, stake, 0);
-          const embed = blackjackResultEmbed(playerHand, dealerHand, playerValue, handValue(dealerHand), "BUST!", -stake, stake, newBalance);
-          const quip = await randomQuip({ won: false, game: "blackjack", amount: stake });
+          await db.recordGameResult(userId, "blackjack", false, result.state.stake, 0);
+          const embed = blackjackResultEmbed(result.state.playerHand, result.state.dealerHand, result.playerValue, result.dealerValue, result.resultText, result.payout, result.state.stake, newBalance);
+          const quip = await randomQuip({ won: false, game: "blackjack", amount: result.state.stake });
           return interaction.update({ embeds: [embed], components: [], content: quip });
         }
 
-        // Dealer plays
-        while (handValue(dealerHand) < 17) dealerHand.push(deck.pop());
-        const dealerValue = handValue(dealerHand);
-
-        let resultText, won;
-        if (dealerValue > 21) { resultText = "Dealer Busts!"; won = true; }
-        else if (playerValue > dealerValue) { resultText = "You Win!"; won = true; }
-        else if (playerValue < dealerValue) { resultText = "Dealer Wins"; won = false; }
-        else { resultText = "Push (Tie)"; won = null; }
-
-        const credit = won === true ? stake * 2 : won === null ? stake : 0;
-        const newBalance = credit > 0
-          ? await db.updateBalanceUnsafe(userId, credit, won ? "gamble_win" : "gamble_push", `blackjack:${resultText}`)
+        const newBalance = result.credit > 0
+          ? await db.updateBalanceUnsafe(userId, result.credit, result.won ? "gamble_win" : "gamble_push", `blackjack:${result.resultText}`)
           : (await db.getBalance(userId)).balance;
-        if (won !== null) await db.recordGameResult(userId, "blackjack", won, stake, won ? stake * 2 : 0);
+        if (result.won !== null) await db.recordGameResult(userId, "blackjack", result.won, result.state.stake, result.recordPayout);
 
-        const payout = won === true ? stake : won === false ? -stake : 0;
-        const embed = blackjackResultEmbed(playerHand, dealerHand, playerValue, dealerValue, resultText, payout, stake, newBalance);
-        const quip = await randomQuip({ won: !!won, game: "blackjack", amount: stake });
+        const embed = blackjackResultEmbed(result.state.playerHand, result.state.dealerHand, result.playerValue, result.dealerValue, result.resultText, result.payout, result.state.stake, newBalance);
+        const quip = await randomQuip({ won: !!result.won, game: "blackjack", amount: result.state.stake });
         return interaction.update({ embeds: [embed], components: [], content: quip });
       });
     } finally {
