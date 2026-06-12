@@ -1,6 +1,7 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { successEmbed, errorEmbed } from "../../utils/embeds.js";
 import { getQueue, deleteQueue } from "../../music/player.js";
+import { requireDjAndSameVc } from "../../utils/musicGuard.js";
 
 export const data = new SlashCommandBuilder()
   .setName("stop")
@@ -12,18 +13,8 @@ export async function execute(interaction) {
     return interaction.reply({ embeds: [errorEmbed("Nothing Playing", "There's nothing to stop.")], ephemeral: true });
   }
 
-  // ── Must be in the same VC as the bot, or an admin ────────────────────────
-  const botVc   = interaction.guild.members.cache.get(interaction.client.user.id)?.voice?.channel;
-  const userVc  = interaction.member?.voice?.channel;
-  const isAdmin = interaction.member?.permissions.has(PermissionFlagsBits.Administrator)
-    || interaction.member?.id === interaction.guild.ownerId;
-
-  if (!isAdmin && (!userVc || userVc.id !== botVc?.id)) {
-    return interaction.reply({
-      embeds: [errorEmbed("Not In Channel", "You need to be in the same voice channel as me to stop the music.")],
-      ephemeral: true,
-    });
-  }
+  // ── DJ + same-VC — /stop is documented as DJ-protected (see /dj) ──────────
+  if (!(await requireDjAndSameVc(interaction))) return;
 
   const songCount = queue.songs.length;
   deleteQueue(interaction.guild.id);

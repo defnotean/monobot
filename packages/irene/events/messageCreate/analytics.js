@@ -107,7 +107,11 @@ export function maybeAfterthought({ message, resolvedReply, systemPromptWithMemo
 // DM the result too if commands were used — only if server has DM results
 // enabled AND the user hasn't individually opted out.
 export async function mirrorToDm({ toolsUsed, isDM, guild, message, chunks }) {
-  if (!(toolsUsed && !isDM && getDmResults(guild.id) && !isDmOptout(message.author.id))) return;
+  // The Gemini lane reports toolsUsed as a boolean, the OpenAI-compat lane as
+  // an ARRAY of tool names — an empty array is truthy, which used to DM-mirror
+  // every compat reply. Only count tools as used when the array is non-empty.
+  const usedTools = Array.isArray(toolsUsed) ? toolsUsed.length > 0 : Boolean(toolsUsed);
+  if (!(usedTools && !isDM && getDmResults(guild.id) && !isDmOptout(message.author.id))) return;
   try {
     const dm = await message.author.createDM();
     for (const chunk of chunks) await dm.send({ content: chunk, flags: MessageFlags.SuppressEmbeds });

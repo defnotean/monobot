@@ -3,6 +3,7 @@
 // tool calls it emits. The "quick reply ack" + rate-limit pool wiring also
 // happen here since they're directly tied to the AI call itself.
 
+import config from "../../config.js";
 import * as db from "../../database.js";
 import { log } from "../../utils/logger.js";
 import { runGeminiChat, looksLikeTask, quickReply, setRateLimitCallbacks } from "../../ai/providers/index.js";
@@ -64,7 +65,7 @@ export async function invokeAI({ message, cleanMessage, systemInstruction, forma
   // ─── 4. AI CALL  +  5. TOOL DISPATCH (inline callback) ──────────────
   // Main AI call
   const t0Ai = Date.now();
-  const result = await runGeminiChat(workClient, systemInstruction, formattedTools, history, userMsg, async (toolName, toolArgs) => {
+  const aiPromise = runGeminiChat(workClient, systemInstruction, formattedTools, history, userMsg, async (toolName, toolArgs) => {
     db.logToolUsage(toolName, message.author.id, message.channel.id);
     // executeTool now static import
     const t0 = Date.now();
@@ -73,6 +74,23 @@ export async function invokeAI({ message, cleanMessage, systemInstruction, forma
     if (elapsed > 2000) log(`[TOOL] ${toolName} took ${elapsed}ms (slow)`);
     return toolResult;
   }, { routerToolNames });
+
+  // Outer turn deadline — the OpenAI-compat lane can spin many iterations of
+  // slow calls while this await holds the per-channel lock, wedging the
+  // channel. Race against config.timeouts.turnDeadline (mirrors Irene's
+  // orchestrator race) and resolve with the standard error-reply shape so
+  // downstream rendering — and the lock release — proceed normally. The
+  // orphaned provider promise is detached, not cancelled; Promise.race keeps
+  // its eventual rejection handled.
+  const turnDeadlineMs = config.timeouts?.turnDeadline ?? 180_000;
+  let deadlineTimer;
+  const deadline = new Promise((resolve) => {
+    deadlineTimer = setTimeout(() => {
+      log(`[MSG] ${activeProviderLabel()} turn exceeded ${Math.ceil(turnDeadlineMs / 1000)}s deadline — releasing channel`);
+      resolve({ text: "that took too long, try again in a sec", toolsUsed: [] });
+    }, turnDeadlineMs);
+  });
+  const result = await Promise.race([aiPromise, deadline]).finally(() => clearTimeout(deadlineTimer));
 
   const aiMs = Date.now() - t0Ai;
   if (aiMs > 5000) log(`[PERF] ${activeProviderLabel()} took ${aiMs}ms (prompt ${systemInstruction.length} chars, history ${history.length} msgs)`);

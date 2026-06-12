@@ -1,6 +1,7 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { successEmbed, errorEmbed } from "../../utils/embeds.js";
 import { getQueue } from "../../music/player.js";
+import { requireDjAndSameVc } from "../../utils/musicGuard.js";
 
 export const data = new SlashCommandBuilder()
   .setName("skip")
@@ -12,20 +13,8 @@ export async function execute(interaction) {
     return interaction.reply({ embeds: [errorEmbed("Nothing Playing", "There's nothing to skip.")], ephemeral: true });
   }
 
-  const { requireDj } = await import("./dj.js");
-  if (!(await requireDj(interaction))) return;
-
-  const botVc   = interaction.guild.members.cache.get(interaction.client.user.id)?.voice?.channel;
-  const userVc  = interaction.member?.voice?.channel;
-  const isAdmin = interaction.member?.permissions.has(PermissionFlagsBits.Administrator)
-    || interaction.member?.id === interaction.guild.ownerId;
-
-  if (!isAdmin && (!userVc || userVc.id !== botVc?.id)) {
-    return interaction.reply({
-      embeds: [errorEmbed("Not In Channel", "You need to be in the same voice channel as me to skip.")],
-      ephemeral: true,
-    });
-  }
+  // Same DJ + same-VC checks as before, factored into the shared guard.
+  if (!(await requireDjAndSameVc(interaction))) return;
 
   const skipped = queue.songs[0];
   // Bypass single-track loop for this one stop — without this, stopTrack()

@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const crypto = require('crypto');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 
 // ─── ENV ─────────────────────────────────────────────────────────────────────
 const envPath = path.join(__dirname, '..', '.env');
@@ -71,12 +71,13 @@ const DESTRUCTIVE_PATTERNS = [
     new RegExp(`\\bnet${WS}+user\\b.*\\/(add|delete)`, "iu"),
     new RegExp(`\\btakeown${WS}+\\/f`, "iu"),
     /\bicacls\b.*\/deny/iu,
-    /\bRemove-Item\b[^|]*-Recurse[^|]*-Force/iu,
-    new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Recurse[^|]*-Force`, "iu"),
-    new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Force[^|]*-Recurse`, "iu"),
+    new RegExp(`\\b(?:Remove-Item|ri|rd|rm|del|erase|rmdir)\\b(?=[^|]*${WS}-r(?:e(?:c(?:u(?:r(?:se?)?)?)?)?)?\\b)(?=[^|]*${WS}-f(?:o(?:r(?:ce?)?)?)?\\b)`, "iu"),
     /\bStop-Computer\b/iu,
     /\bRestart-Computer\b/iu,
     /\bClear-EventLog\b/iu,
+    /(?:^|[^-=>])>{1,2}(?!&)/u,
+    /\b(?:Set-Content|Add-Content|Out-File|Tee-Object)\b/iu,
+    /\[(?:System\.)?IO\.File\]\s*::\s*Write/iu,
     new RegExp(`\\bpowershell(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
     new RegExp(`\\bpwsh(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
     new RegExp(`\\bcmd(\\.exe)?\\b[^|]*${WS}\\/c\\b`, "iu"),
@@ -91,7 +92,7 @@ const HARD_BLOCK_PATTERNS = [
     /\bSet-ExecutionPolicy\b/iu,
     new RegExp(`\\b(?:curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\\b[^|]*(?:\\||;|&&)${WS}*(?:sh|bash|pwsh|powershell|iex|Invoke-Expression)\\b`, "iu"),
 ];
-const CHAIN_SPLIT = /(?:&&|\|\||;|\||&|`|\$\()/u;
+const CHAIN_SPLIT = /(?:&&|\|\||;|\||&|`|\$\(|>{1,2})/u;
 
 function normalizeForMatch(command) {
     if (typeof command !== 'string') return '';
@@ -166,6 +167,79 @@ function gateShellCommand(command, { confirm } = {}) {
     return { ok: true };
 }
 
+// ─── FILESYSTEM CONTAINMENT ────────────────────────────────────────────────────
+// The renderer must never get arbitrary-path filesystem access through the
+// read-dir/read-file/write-file IPC: containment is enforced HERE in main, not
+// in the renderer. Only roots that main itself handed to the renderer (the
+// folder picked in the open-folder dialog, clone destinations under
+// ~/EvilIreneRepos) are readable/writable, and writes to persistence/secret
+// targets are denied outright even inside an allowed root.
+const allowedFsRoots = new Set();
+
+function addAllowedFsRoot(rootPath) {
+    if (typeof rootPath !== 'string' || !rootPath) return;
+    try { allowedFsRoots.add(path.resolve(rootPath)); } catch {}
+}
+
+// Resolve a renderer-supplied path and require it to live inside one of the
+// allowlisted roots (case-insensitive on win32). Returns the resolved absolute
+// path, or null when the path escapes every root — path.resolve collapses `..`
+// segments, so the prefix check covers both absolute escapes and traversal.
+function resolveInAllowedRoot(targetPath, roots = allowedFsRoots) {
+    if (typeof targetPath !== 'string' || !targetPath) return null;
+    let resolved;
+    try { resolved = path.resolve(targetPath); } catch { return null; }
+    const fold = process.platform === 'win32' ? (s) => s.toLowerCase() : (s) => s;
+    const candidate = fold(resolved);
+    for (const root of roots) {
+        const base = fold(root);
+        if (candidate === base || candidate.startsWith(base + path.sep)) return resolved;
+    }
+    return null;
+}
+
+// Hard-deny writes to persistence / secret / hook targets regardless of root:
+// Startup folders (run-at-logon persistence), .env secret files, SSH keys and
+// config, and git hooks (code execution on the next git command).
+const SENSITIVE_WRITE_PATTERNS = [
+    /[\\/]start menu[\\/]programs[\\/]startup([\\/]|$)/i,
+    /(^|[\\/])[^\\/]*\.env(\.[^\\/]*)?$/i,
+    /(^|[\\/])\.ssh([\\/]|$)/i,
+    /[\\/]\.git[\\/]hooks([\\/]|$)/i,
+];
+function isSensitiveWritePath(resolvedPath) {
+    if (typeof resolvedPath !== 'string' || !resolvedPath) return false;
+    return SENSITIVE_WRITE_PATTERNS.some(re => re.test(resolvedPath));
+}
+
+// Validate a renderer-supplied clone request: https + github.com only (URL
+// parse, not regex), no embedded credentials, and a repo name that cannot
+// traverse out of the clone root. Combined with execFile (argv, no cmd.exe
+// string) this closes the quote-breakout injection in the old exec() form.
+function validateCloneRequest(cloneUrl, repoName) {
+    let u;
+    try { u = new URL(String(cloneUrl)); } catch { return { ok: false, error: 'invalid clone URL' }; }
+    if (u.protocol !== 'https:' || u.hostname.toLowerCase() !== 'github.com') {
+        return { ok: false, error: 'only https://github.com clone URLs are allowed' };
+    }
+    if (u.username || u.password) {
+        return { ok: false, error: 'credentials in clone URLs are not allowed' };
+    }
+    const name = String(repoName || '');
+    if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') {
+        return { ok: false, error: 'invalid repo name' };
+    }
+    return { ok: true };
+}
+
+// open-external allowlist: parse the URL in MAIN (the renderer is untrusted)
+// and allow only http/https/mailto — no file:, no app/custom protocols.
+function isAllowedExternalUrl(url) {
+    let u;
+    try { u = new URL(String(url)); } catch { return false; }
+    return u.protocol === 'http:' || u.protocol === 'https:' || u.protocol === 'mailto:';
+}
+
 // ─── LOCAL-COMMAND AUTHENTICATION ──────────────────────────────────────────────
 // local_commands is an UNAUTHENTICATED host-command channel: anyone who can
 // insert a row gets shell on the owner's box. Before exec, the poller must
@@ -207,7 +281,10 @@ function verifyLocalCommand(row, { ownerId, secret, now = Date.now() } = {}) {
 
 // Exported for unit tests (required from a non-Electron context). Under Electron
 // these are also used directly within this module.
-module.exports = { looksDestructive, looksHardBlocked, gateShellCommand, verifyLocalCommand, normalizeForMatch };
+module.exports = {
+    looksDestructive, looksHardBlocked, gateShellCommand, verifyLocalCommand, normalizeForMatch,
+    resolveInAllowedRoot, isSensitiveWritePath, validateCloneRequest, isAllowedExternalUrl,
+};
 
 // ─── ELECTRON ────────────────────────────────────────────────────────────────
 // Guarded require: when this file is loaded outside Electron (e.g. a vitest
@@ -221,6 +298,7 @@ const BrowserWindow = electron && electron.BrowserWindow;
 const ipcMain = electron && electron.ipcMain;
 const dialog = electron && electron.dialog;
 const shell = electron && electron.shell;
+const session = electron && electron.session;
 
 const { createClient } = require('@supabase/supabase-js');
 
@@ -240,10 +318,19 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
+            // The preload only touches contextBridge/ipcRenderer, so the
+            // renderer can run fully sandboxed.
+            sandbox: true,
             webSecurity: true
         },
         title: 'Eris IDE'
     });
+    // The app is a single local file: any renderer-initiated navigation away
+    // from it is hostile, and so is any new window.
+    mainWindow.webContents.on('will-navigate', (event, url) => {
+        if (url !== mainWindow.webContents.getURL()) event.preventDefault();
+    });
+    mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     mainWindow.loadFile('index.html');
 }
 
@@ -412,6 +499,25 @@ async function callGemini(message, history = [], systemOverride = null, useSearc
 // vitest (no Electron) `app` is null and we skip straight past, leaving only the
 // exported pure helpers reachable.
 if (app) app.whenReady().then(() => {
+    // CSP for everything served in the default session (mirrored by the
+    // <meta http-equiv> tag in index.html in case file:// responses skip
+    // webRequest). The renderer makes NO direct network calls — GitHub API,
+    // Supabase, Gemini, and Discord all run in the main process — so
+    // connect-src is fully closed; images allow the GitHub avatar host used
+    // by the sidebar, styles/fonts allow the Google Fonts import in styles.css.
+    const CSP = [
+        "default-src 'none'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "img-src 'self' data: https://avatars.githubusercontent.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "connect-src 'none'",
+    ].join('; ');
+    if (session?.defaultSession) {
+        session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+            callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [CSP] } });
+        });
+    }
     createWindow();
 
     // ── Agent ──────────────────────────────────────────────────────────────────
@@ -484,29 +590,41 @@ if (app) app.whenReady().then(() => {
 
     // ── File System ───────────────────────────────────────────────────────────
     ipcMain.handle('read-dir', async (_, dirPath) => {
+        // Containment: only roots main itself handed out are listable.
+        const resolved = resolveInAllowedRoot(dirPath);
+        if (!resolved) return { ok: false, error: 'path is outside the allowed workspace', items: [] };
         try {
-            const items = fs.readdirSync(dirPath, { withFileTypes: true });
-            return { ok: true, items: items.map(i => ({ name: i.name, isDir: i.isDirectory(), path: path.join(dirPath, i.name) })) };
+            const items = fs.readdirSync(resolved, { withFileTypes: true });
+            return { ok: true, items: items.map(i => ({ name: i.name, isDir: i.isDirectory(), path: path.join(resolved, i.name) })) };
         } catch (err) { return { ok: false, error: err.message, items: [] }; }
     });
 
     ipcMain.handle('read-file', async (_, filePath) => {
         // Kill switch gates filesystem reads too, not just the terminal.
         if (isPcAgentDisabled()) return { ok: false, error: 'PC agent is disabled (PC_AGENT_DISABLED=1).' };
-        try { return { ok: true, content: fs.readFileSync(filePath, 'utf8') }; }
+        const resolved = resolveInAllowedRoot(filePath);
+        if (!resolved) return { ok: false, error: 'path is outside the allowed workspace' };
+        try { return { ok: true, content: fs.readFileSync(resolved, 'utf8') }; }
         catch (err) { return { ok: false, error: err.message }; }
     });
 
     ipcMain.handle('write-file', async (_, { filePath, content }) => {
         // Kill switch gates filesystem writes too, not just the terminal.
         if (isPcAgentDisabled()) return { ok: false, error: 'PC agent is disabled (PC_AGENT_DISABLED=1).' };
-        try { fs.writeFileSync(filePath, content, 'utf8'); return { ok: true }; }
+        const resolved = resolveInAllowedRoot(filePath);
+        if (!resolved) return { ok: false, error: 'path is outside the allowed workspace' };
+        if (isSensitiveWritePath(resolved)) return { ok: false, error: 'refusing to write to a sensitive path (Startup/.env/.ssh/.git hooks)' };
+        try { fs.writeFileSync(resolved, content, 'utf8'); return { ok: true }; }
         catch (err) { return { ok: false, error: err.message }; }
     });
 
     ipcMain.handle('open-folder-dialog', async () => {
         const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
-        return result.canceled ? null : result.filePaths[0];
+        if (result.canceled) return null;
+        const folder = result.filePaths[0];
+        // The user explicitly picked this folder — it becomes an allowed root.
+        addAllowedFsRoot(folder);
+        return folder;
     });
 
     // ── Settings / API Keys ───────────────────────────────────────────────────
@@ -598,40 +716,55 @@ if (app) app.whenReady().then(() => {
 
     ipcMain.handle('github-clone', async (_, { cloneUrl, repoName }) => {
         const os = require('os');
+        // The renderer is untrusted: validate URL + repo name in main, then
+        // clone via execFile argv (no cmd.exe string, no quote breakout).
+        const valid = validateCloneRequest(cloneUrl, repoName);
+        if (!valid.ok) return { ok: false, error: valid.error };
         const targetDir = path.join(os.homedir(), 'EvilIreneRepos');
-        
+
         // Ensure the global workspace directory exists
         if (!fs.existsSync(targetDir)) {
             fs.mkdirSync(targetDir, { recursive: true });
         }
-        
+
         const destPath = path.join(targetDir, repoName);
-        
-        // Check if we already cloned it 
+
+        // Check if we already cloned it
         if (fs.existsSync(destPath)) {
+            addAllowedFsRoot(destPath);
             return { ok: true, path: destPath, output: 'Already cloned! Opening local copy...' };
         }
-        
+
         return new Promise(resolve => {
-            exec(`git clone "${cloneUrl}" "${destPath}"`, { timeout: 120000 }, (err, stdout, stderr) => {
+            execFile('git', ['clone', String(cloneUrl), destPath], { timeout: 120000 }, (err, stdout, stderr) => {
                 const out = (stdout + stderr).trim();
                 if (err && !fs.existsSync(destPath)) resolve({ ok: false, error: out || err.message });
-                else resolve({ ok: true, path: destPath, output: out });
+                else {
+                    // The clone destination becomes an allowed FS root so the
+                    // explorer/editor can browse it.
+                    addAllowedFsRoot(destPath);
+                    resolve({ ok: true, path: destPath, output: out });
+                }
             });
         });
     });
 
     ipcMain.handle('github-pull', async (_, folderPath) => {
+        // git pull runs repo hooks — only allow it inside allowlisted roots.
+        const resolved = resolveInAllowedRoot(folderPath);
+        if (!resolved) return { ok: false, output: 'path is outside the allowed workspace' };
         return new Promise(resolve => {
-            exec('git pull', { cwd: folderPath, timeout: 30000 }, (err, stdout, stderr) => {
+            execFile('git', ['pull'], { cwd: resolved, timeout: 30000 }, (err, stdout, stderr) => {
                 resolve({ ok: !err, output: (stdout + stderr).trim() });
             });
         });
     });
 
     ipcMain.handle('github-status', async (_, folderPath) => {
+        const resolved = resolveInAllowedRoot(folderPath);
+        if (!resolved) return { ok: false, output: 'path is outside the allowed workspace' };
         return new Promise(resolve => {
-            exec('git status', { cwd: folderPath, timeout: 10000 }, (err, stdout, stderr) => {
+            execFile('git', ['status'], { cwd: resolved, timeout: 10000 }, (err, stdout, stderr) => {
                 resolve({ ok: !err, output: (stdout + stderr).trim() });
             });
         });
@@ -647,7 +780,10 @@ if (app) app.whenReady().then(() => {
     ipcMain.on('close-app', () => app.quit());
     ipcMain.on('minimize-app', () => mainWindow?.minimize());
     ipcMain.on('maximize-app', () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize());
-    ipcMain.on('open-external', (_, url) => shell.openExternal(url));
+    ipcMain.on('open-external', (_, url) => {
+        if (!isAllowedExternalUrl(url)) return;
+        shell.openExternal(String(url));
+    });
 });
 
 if (app) app.on('window-all-closed', () => app.quit());

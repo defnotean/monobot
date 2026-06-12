@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from "discord.js";
 import { successEmbed, errorEmbed } from "../../utils/embeds.js";
 import { getQueue } from "../../music/player.js";
+import { requireDjAndSameVc } from "../../utils/musicGuard.js";
 
 export const data = new SlashCommandBuilder()
   .setName("resume")
@@ -11,6 +12,8 @@ export async function execute(interaction) {
   if (!queue) {
     return interaction.reply({ embeds: [errorEmbed("Nothing Playing", "Nothing to resume.")], ephemeral: true });
   }
+
+  if (!(await requireDjAndSameVc(interaction))) return;
 
   if (!queue.playing && !queue.songs.length) {
     return interaction.reply({ content: "nothing to resume — queue is empty", flags: 64 });

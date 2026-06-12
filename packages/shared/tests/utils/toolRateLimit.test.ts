@@ -49,6 +49,36 @@ describe("checkToolRateLimit", () => {
     expect(result.allowed).toBe(true);
   });
 
+  it("caps destructive delete/nuke-class tools at 3 per 5 minutes", () => {
+    for (const tool of ["delete_channel", "nuke_channel", "delete_role", "mass_role"]) {
+      for (let i = 0; i < 3; i++) {
+        expect(checkToolRateLimit("destrtest1", tool).allowed).toBe(true);
+      }
+      const blocked = checkToolRateLimit("destrtest1", tool);
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.retryAfterMs).toBeGreaterThan(0);
+      expect(blocked.retryAfterMs).toBeLessThanOrEqual(300_000);
+    }
+  });
+
+  it("caps ban/kick/purge at 5 per 5 minutes", () => {
+    for (const tool of ["ban_user", "kick_user", "purge_messages"]) {
+      for (let i = 0; i < 5; i++) {
+        expect(checkToolRateLimit("destrtest2", tool).allowed).toBe(true);
+      }
+      expect(checkToolRateLimit("destrtest2", tool).allowed).toBe(false);
+    }
+  });
+
+  it("caps lockdown_server at 3 per 5 minutes", () => {
+    for (let i = 0; i < 3; i++) {
+      expect(checkToolRateLimit("destrtest3", "lockdown_server").allowed).toBe(true);
+    }
+    const blocked = checkToolRateLimit("destrtest3", "lockdown_server");
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.retryAfterMs).toBeLessThanOrEqual(300_000);
+  });
+
   it("includes Irene-only entries (generate_image, say_tts)", () => {
     // Both are gated, so 5 calls hit the cap on generate_image
     for (let i = 0; i < 5; i++) {

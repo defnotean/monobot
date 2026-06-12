@@ -49,6 +49,14 @@ vi.mock("../../utils/vcpanel.js", () => ({
   updateControlPanel: (...a: any[]) => updateControlPanel(...a),
 }));
 
+// voice/listener.js is dynamically imported by the handler for the
+// voice-capture consent notice; mock it so the heavy real module (config,
+// @google/genai, prism probe) never loads in this test environment.
+const notifyMemberJoined = vi.fn(async () => true);
+vi.mock("../../voice/listener.js", () => ({
+  notifyMemberJoined: (...a: any[]) => notifyMemberJoined(...a),
+}));
+
 // embeds.js — only logEvent is used by voiceStateUpdate, but we keep the
 // real implementation so the embed.data shape stays realistic for assertions.
 // (No vi.mock for embeds — let the real module run.)
@@ -147,6 +155,7 @@ beforeEach(() => {
   initRenameTimer.mockClear();
   createControlPanel.mockClear();
   updateControlPanel.mockClear();
+  notifyMemberJoined.mockClear();
   // Wipe shared temp VC maps so cross-test state doesn't bleed.
   tempvc.tempChannels.clear();
   tempvc.pendingCreateVcUsers.clear();
@@ -401,6 +410,33 @@ describe("voiceStateUpdate", () => {
     expect(member.voice.setChannel).toHaveBeenCalledTimes(1);
     expect(createControlPanel).toHaveBeenCalledTimes(1);
     expect(tempvc.pendingCreateVcUsers.size).toBe(0);
+  });
+
+  it("invokes the voice-capture consent hook when a member joins a channel", async () => {
+    const guild = makeGuild();
+    const user = makeUser();
+    const member = { id: user.id, user, guild };
+    const newCh = makeChannel("ch-300", "hangout", { members: [member] });
+    const oldState = makeState({ channel: null, member, guild });
+    const newState = makeState({ channel: newCh, member, guild });
+
+    await execute(oldState, newState);
+
+    expect(notifyMemberJoined).toHaveBeenCalledTimes(1);
+    expect(notifyMemberJoined).toHaveBeenCalledWith(guild.id, newCh.id, member);
+  });
+
+  it("does not invoke the consent hook when a member leaves voice", async () => {
+    const guild = makeGuild();
+    const user = makeUser();
+    const member = { id: user.id, user, guild };
+    const oldCh = makeChannel("ch-301", "hangout", { members: [member] });
+    const oldState = makeState({ channel: oldCh, member, guild });
+    const newState = makeState({ channel: null, member, guild });
+
+    await execute(oldState, newState);
+
+    expect(notifyMemberJoined).not.toHaveBeenCalled();
   });
 
   it("queues a rename + refreshes the control panel when a member joins a temp VC", async () => {

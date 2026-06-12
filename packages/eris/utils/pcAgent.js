@@ -58,14 +58,20 @@ const DESTRUCTIVE_PATTERNS = [
   new RegExp(`\\bnet${WS}+user\\b.*\\/(add|delete)`, "iu"),
   new RegExp(`\\btakeown${WS}+\\/f`, "iu"),
   /\bicacls\b.*\/deny/iu,
-  // PowerShell Remove-Item; its aliases (ri, rd, rm, del, erase, rmdir) under
-  // Recurse + Force are equally dangerous.
-  /\bRemove-Item\b[^|]*-Recurse[^|]*-Force/iu,
-  new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Recurse[^|]*-Force`, "iu"),
-  new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Force[^|]*-Recurse`, "iu"),
+  // PowerShell Remove-Item and its aliases (ri, rd, rm, del, erase, rmdir)
+  // with -Recurse and -Force in ANY order, including parameter abbreviations
+  // (-r/-rec/-recurse, -f/-fo/-force). Lookaheads make flag order irrelevant.
+  new RegExp(`\\b(?:Remove-Item|ri|rd|rm|del|erase|rmdir)\\b(?=[^|]*${WS}-r(?:e(?:c(?:u(?:r(?:se?)?)?)?)?)?\\b)(?=[^|]*${WS}-f(?:o(?:r(?:ce?)?)?)?\\b)`, "iu"),
   /\bStop-Computer\b/iu,
   /\bRestart-Computer\b/iu,
   /\bClear-EventLog\b/iu,
+  // Output redirection (>, >>) writes files anywhere the shell can reach
+  // (Startup folder = persistence) — confirmable, not silent. `2>&1`-style
+  // stream merges and `->`/`=>` arrows are excluded.
+  /(?:^|[^-=>])>{1,2}(?!&)/u,
+  // PowerShell file-writing cmdlets and .NET static file writers.
+  /\b(?:Set-Content|Add-Content|Out-File|Tee-Object)\b/iu,
+  /\[(?:System\.)?IO\.File\]\s*::\s*Write/iu,
   // PowerShell -EncodedCommand is opaque to every regex below it — reject
   // outright. Match canonical and abbreviated forms (-enc, -ec, -e).
   new RegExp(`\\bpowershell(\\.exe)?\\b[^|]*${WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
@@ -88,9 +94,9 @@ const HARD_BLOCK_PATTERNS = [
 ];
 
 // Chain operators — if a destructive command sits after `;`, `&&`, `||`, `|`,
-// `&`, backtick, or `$()`, the leading clause shouldn't mask it. Split on
-// these and re-check each fragment.
-const CHAIN_SPLIT = /(?:&&|\|\||;|\||&|`|\$\()/u;
+// `&`, backtick, `$()`, or an output redirection (`>`, `>>`), the leading
+// clause shouldn't mask it. Split on these and re-check each fragment.
+const CHAIN_SPLIT = /(?:&&|\|\||;|\||&|`|\$\(|>{1,2})/u;
 
 /**
  * Normalize a command for pattern matching. NFKC folds homoglyphs/width

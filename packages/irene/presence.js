@@ -23,6 +23,13 @@ import { normalizeRequestPathname, parseRequestUrl } from "@defnotean/shared/htt
 const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000, maxKeys: 128, globalLimit: 60 });
 const _presenceLimiter = createRateLimiter({ limit: 1, windowMs: 1_000, maxKeys: 1000, globalLimit: 300 });
 const _dashboardLimiter = createRateLimiter({ limit: 180, windowMs: 60_000, maxKeys: 500, globalLimit: 2000 });
+// Dedicated per-IP limiter for the signed twin endpoints (/api/twin/*). These
+// deliberately do NOT share _dashboardLimiter: that bucket is consumed by
+// unauthenticated traffic before auth runs, so a public /api/health flood
+// could exhaust the shared global budget and silently 429 Eris's signed
+// cross-bot moderation calls. No global cap here — per-IP only — so flooded
+// public buckets can never starve the twin channel.
+const _twinCommandLimiter = createRateLimiter({ limit: 60, windowMs: 60_000, maxKeys: 256 });
 
 function isDiscordGatewayReady(client) {
   return client?.isReady?.() === true || ((client?.ws?.status ?? null) === 0 && !!client?.user?.tag);
@@ -412,8 +419,10 @@ export function startPresenceAPI(client) {
         uptime: process.uptime(),
       }));
     } else if (pathname === "/health") {
+      // NOTE: unauthenticated — never include identifying config here. This
+      // response used to leak the owner's Discord ID in a `user` field.
       res.writeHead(200);
-      res.end(JSON.stringify({ ok: true, user: config.ownerId, bot: client.user?.tag || "connecting..." }));
+      res.end(JSON.stringify({ ok: true, bot: client.user?.tag || "connecting...", uptime: process.uptime() }));
     } else if (pathname.startsWith("/tts/")) {
       // Serve generated TTS audio files
       const id = (pathname.split("/tts/")[1] || "").replace(/\/$/, "");
@@ -451,14 +460,18 @@ export function startPresenceAPI(client) {
       const path = pathname;
       const j = (code, data) => { res.writeHead(code); res.end(JSON.stringify(data)); };
 
-      // ── Rate limiting for API endpoints (per-IP, dashboard-safe)
+      // ── Rate limiting for API endpoints (per-IP, dashboard-safe).
+      // Twin endpoints get a DEDICATED bucket — the shared dashboard bucket is
+      // consumed by unauthenticated traffic before auth runs, so a public
+      // /api/health flood could starve Eris's signed twin commands.
+      const isTwinPath = path.startsWith("/api/twin/");
       const apiIP = getClientIp(req);
-      if (!_dashboardLimiter.allow(apiIP)) { j(429, { error: "rate limited" }); return; }
+      const apiLimiter = isTwinPath ? _twinCommandLimiter : _dashboardLimiter;
+      if (!apiLimiter.allow(apiIP)) { j(429, { error: "rate limited" }); return; }
 
       // ── Auth check — accept DASHBOARD_API_KEY.
       // Localhost bypass is disabled by default; explicitly opt in with
       // DASHBOARD_ALLOW_LOCALHOST_BYPASS=1 for trusted single-user machines.
-      const isTwinPath = path.startsWith("/api/twin/");
       if (!isTwinPath && path !== "/api/health" && !isDashboardRequestAuthorized(req)) {
         j(401, { error: "unauthorized" });
         return;
@@ -884,8 +897,11 @@ export function startPresenceAPI(client) {
             }
             const { requester_id, guild_id, channel_id, command, args } = parsedBody;
 
-            // 2. Verify requester is owner or trusted
-            const isOwner = requester_id === config.ownerId;
+            // 2. Verify requester is owner or trusted. Guard against an unset
+            // ownerId (DISCORD_USER_ID absent → config.ownerId === ""): a body
+            // with requester_id "" must NOT satisfy the owner check (fail
+            // closed, mirrors antinuke.js's `config?.ownerId &&` guard).
+            const isOwner = Boolean(config.ownerId) && requester_id === config.ownerId;
             const trustedList = db.getTrustedUsers(guild_id);
             const isTrusted = Array.isArray(trustedList) && trustedList.includes(requester_id);
             if (!isOwner && !isTrusted) {
@@ -938,9 +954,17 @@ export function startPresenceAPI(client) {
             // allowlist-checked in step 3 (resolveTwinCommand) — see the
             // module-level TWIN_ALIASES / TWIN_COMMAND_ALLOWLIST.
 
-            // 7. Execute the tool directly
-            const { executeTool } = await import("./ai/executor.js");
-            const result = await executeTool(resolvedCommand, args || {}, fakeMessage);
+            // 7. Execute the tool directly. aiInitiated:true engages
+            // moderationExecutor's destructive-action confirm gate — a relayed
+            // ban/kick/purge is AI-initiated on Eris's side, so it must defer
+            // to the same human Confirm button instead of firing immediately.
+            const { executeTool, postDeferralIfNeeded } = await import("./ai/executor.js");
+            const rawResult = await executeTool(resolvedCommand, args || {}, fakeMessage, { aiInitiated: true });
+            // A deferred destructive action comes back as a confirm-prompt
+            // OBJECT, not a string — post the Confirm/Cancel buttons into the
+            // resolved channel (same render bridge the AI tool loop uses) and
+            // report the pending notice back to Eris instead.
+            const result = await postDeferralIfNeeded(rawResult, channel);
             log(`[Twin] Executed ${command}${resolvedCommand !== command ? ` (→ ${resolvedCommand})` : ""}: ${String(result).slice(0, 100)}`);
 
             // 8. Push a synthetic history note so Irene's next AI turn in this
@@ -975,7 +999,7 @@ export function startPresenceAPI(client) {
             let commandForLog = "(unparsed)";
             try { commandForLog = JSON.parse(body)?.command || commandForLog; } catch {}
             log(`[Twin] Command error for "${commandForLog}": ${e.message}`);
-            j(500, { success: false, error: e.message?.slice(0, 200) || "internal server error" });
+            j(500, { success: false, error: "internal server error" }); // Never expose internals
           }
         });
 

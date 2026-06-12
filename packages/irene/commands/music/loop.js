@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from "discord.js";
 import { successEmbed, errorEmbed } from "../../utils/embeds.js";
 import { getQueue } from "../../music/player.js";
+import { requireDjAndSameVc } from "../../utils/musicGuard.js";
 
 export const data = new SlashCommandBuilder()
   .setName("loop")
@@ -21,6 +22,8 @@ export async function execute(interaction) {
   if (!queue || !queue.playing) {
     return interaction.reply({ embeds: [errorEmbed("Nothing Playing", "Nothing is playing right now.")], ephemeral: true });
   }
+
+  if (!(await requireDjAndSameVc(interaction))) return;
 
   const mode = interaction.options.getString("mode");
 

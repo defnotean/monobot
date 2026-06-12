@@ -406,6 +406,10 @@ export function makeInteraction({
   if (!guild.channels.cache.has(channel.id)) guild.channels.cache.set(channel.id, channel);
   if (!guild.members.cache.has(member.id)) guild.members.cache.set(member.id, member);
   client.guilds.cache.set(guild.id, guild);
+  // discord.js Guild objects expose `.client`; several handlers (e.g. the music
+  // DJ/same-VC guard in utils/musicGuard.js) read `guild.client.user.id` to
+  // locate the bot member. Wire it so the mock matches the real surface.
+  if (!guild.client) guild.client = client;
 
   /** Recorded reply/editReply/followUp payloads, in call order. */
   const _replies = [];

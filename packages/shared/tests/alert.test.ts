@@ -87,4 +87,66 @@ describe("sendAlert", () => {
       sendAlert("uncaught-exception", "x", { webhookUrl: WEBHOOK, now: 0 }),
     ).resolves.toBe(false);
   });
+
+  // P2 #10 — sendAlert must redact at the source so no caller (e.g. a crash
+  // handler passing a raw err.message) can leak a secret into the webhook.
+  // logRedact is intentionally NOT mocked: these assert the real patterns.
+  describe("redaction", () => {
+    /** Pull the embed description out of the last webhook POST body. */
+    function lastDescription(): string {
+      const [, opts] = mockedFetch.mock.calls[mockedFetch.mock.calls.length - 1];
+      return JSON.parse(opts.body).embeds[0].description;
+    }
+
+    it("redacts provider-prefixed API keys (sk-...) from the payload", async () => {
+      await sendAlert("uncaught-exception", "upstream 401: invalid key sk-FAKEFAKEFAKEFAKEFAKE12345", { webhookUrl: WEBHOOK, now: 0 });
+      const desc = lastDescription();
+      expect(desc).not.toContain("sk-FAKEFAKEFAKEFAKEFAKE12345");
+      expect(desc).toContain("[REDACTED]");
+      // Non-secret context survives so the alert is still actionable.
+      expect(desc).toContain("upstream 401: invalid key");
+    });
+
+    it("redacts Authorization header credentials but keeps the scheme", async () => {
+      await sendAlert("uncaught-exception", "fetch failed: Authorization: Bearer SuperSecretValue1234567890", { webhookUrl: WEBHOOK, now: 0 });
+      const desc = lastDescription();
+      expect(desc).not.toContain("SuperSecretValue1234567890");
+      expect(desc).toContain("Bearer [REDACTED]");
+    });
+
+    it("redacts query-string tokens in URLs but keeps the param name", async () => {
+      await sendAlert("uncaught-exception", "GET https://api.example.com/v1/search?api_key=AbCd1234EfGh5678 -> 401", { webhookUrl: WEBHOOK, now: 0 });
+      const desc = lastDescription();
+      expect(desc).not.toContain("AbCd1234EfGh5678");
+      expect(desc).toContain("api_key=[REDACTED]");
+      expect(desc).toContain("https://api.example.com/v1/search");
+    });
+
+    it("redacts known secret env-var values (highest-confidence path)", async () => {
+      const prev = process.env.GEMINI_API_KEY;
+      process.env.GEMINI_API_KEY = "supersecret-gemini-value-9876";
+      try {
+        await sendAlert("uncaught-exception", "provider rejected supersecret-gemini-value-9876", { webhookUrl: WEBHOOK, now: 0 });
+      } finally {
+        if (prev === undefined) delete process.env.GEMINI_API_KEY;
+        else process.env.GEMINI_API_KEY = prev;
+      }
+      const desc = lastDescription();
+      expect(desc).not.toContain("supersecret-gemini-value-9876");
+      expect(desc).toContain("[REDACTED]");
+    });
+
+    it("redacts BEFORE the 2000-char slice so a token cut in half can't slip through", async () => {
+      // The token STRADDLES the 2000-char boundary: "Bearer " ends at index
+      // 1992, so the token's first 7 chars ("SECRETt", indices 1993-1999) land
+      // inside the slice window. Slicing FIRST would hand the redactor a 7-char
+      // fragment — below the Bearer pattern's {8,} minimum, unredactable — and
+      // this test would fail. Redact-first leaves no fragment at all.
+      const message = "p".repeat(1985) + " Bearer SECRETtok12345678";
+      await sendAlert("uncaught-exception", message, { webhookUrl: WEBHOOK, now: 0 });
+      const desc = lastDescription();
+      expect(desc.length).toBeLessThanOrEqual(2000);
+      expect(desc).not.toContain("SECRET");
+    });
+  });
 });

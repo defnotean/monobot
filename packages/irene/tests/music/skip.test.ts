@@ -18,8 +18,12 @@ vi.mock("../../utils/embeds.js", () => ({
   }),
   errorEmbed: (title: string, desc: string) => ({ title, desc }),
 }));
+// skip.js now goes through the shared musicGuard (requireDjAndSameVc), which
+// imports getDjRole from this module — provide it (null = no DJ role set, so
+// only the same-VC check applies, which these fixtures satisfy).
 vi.mock("../../commands/music/dj.js", () => ({
   requireDj: vi.fn(async () => true),
+  getDjRole: vi.fn(() => null),
 }));
 
 import { execute } from "../../commands/music/skip.js";
@@ -52,6 +56,10 @@ function makeInteraction({ botVcId = "vc1", userVcId = "vc1", admin = false } = 
       id: "g1",
       ownerId: "owner",
       members: { cache: { get: () => ({ voice: { channel: { id: botVcId } } }) } },
+      // The DJ/same-VC guard reads guild.client.user.id to locate the bot
+      // member; real Guild objects expose `.client`, so the mock must too.
+      client: { user: { id: "bot" } },
+      roles: { cache: { get: () => null } },
     },
     client: { user: { id: "bot" } },
     member: {

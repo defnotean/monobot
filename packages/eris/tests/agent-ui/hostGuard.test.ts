@@ -1,14 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { createRequire } from "module";
 import { createHmac } from "crypto";
+import path from "path";
 
 // agent-ui/main.js is a CommonJS Electron module. Its `require('electron')` is
 // guarded so the file still loads outside Electron, exporting the pure
 // host-side guard helpers (looksDestructive, verifyLocalCommand). We load it
 // here to test those points-of-effect in isolation — no Electron, no Supabase.
 const require = createRequire(import.meta.url);
+const {
+    gateShellCommand, looksDestructive, looksHardBlocked, verifyLocalCommand,
+    resolveInAllowedRoot, isSensitiveWritePath, validateCloneRequest, isAllowedExternalUrl,
 // @ts-expect-error - importing CJS JS module without types
-const { gateShellCommand, looksDestructive, looksHardBlocked, verifyLocalCommand } = require("../../agent-ui/main.js");
+} = require("../../agent-ui/main.js");
 
 describe("agent-ui host looksDestructive (ported copy)", () => {
   const destructive = [
@@ -70,6 +74,149 @@ describe("agent-ui host shell gate", () => {
 
   it("allows routine direct commands", () => {
     expect(gateShellCommand("npm test -- --run tests/agent-ui/hostGuard.test.ts", {}).ok).toBe(true);
+  });
+});
+
+describe("agent-ui host gate — redirection & PowerShell file writers (pcAgent parity)", () => {
+  const fileWriters = [
+    '"payload" > "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\run.bat"',
+    "echo evil >> C:\\Users\\me\\boot.ps1",
+    "Set-Content -Path x -Value y",
+    "Out-File -FilePath run.bat",
+    '[IO.File]::WriteAllText("C:\\x.txt", $d)',
+    "Remove-Item -Force -Recurse x",      // reversed flag order
+    "rm -fo -rec x",                       // abbreviated flags
+  ];
+
+  it.each(fileWriters)("flags %s as destructive (confirm required)", (cmd) => {
+    expect(looksDestructive(cmd)).not.toBeNull();
+    expect(gateShellCommand(cmd, {}).ok).toBe(false);
+    expect(gateShellCommand(cmd, { confirm: true }).ok).toBe(true);
+  });
+
+  it("does not flag stream merges or arrows", () => {
+    expect(looksDestructive("dir 2>&1")).toBeNull();
+    expect(looksDestructive('git log --format="%h -> %s"')).toBeNull();
+  });
+});
+
+describe("agent-ui fs containment (resolveInAllowedRoot)", () => {
+  const root = path.resolve("ws-root");
+  const roots = new Set([root]);
+
+  it("allows paths inside an allowed root", () => {
+    const p = path.join(root, "src", "app.js");
+    expect(resolveInAllowedRoot(p, roots)).toBe(p);
+  });
+
+  it("allows the root itself (read-dir of the workspace)", () => {
+    expect(resolveInAllowedRoot(root, roots)).toBe(root);
+  });
+
+  it("rejects absolute paths outside every root", () => {
+    expect(resolveInAllowedRoot(path.resolve("elsewhere", "file.txt"), roots)).toBeNull();
+  });
+
+  it("rejects .. traversal that escapes the root", () => {
+    expect(resolveInAllowedRoot(path.join(root, "..", "escape.txt"), roots)).toBeNull();
+    expect(resolveInAllowedRoot(path.join(root, "a", "..", "..", "x"), roots)).toBeNull();
+  });
+
+  it("rejects sibling directories sharing the root as a name prefix", () => {
+    expect(resolveInAllowedRoot(`${root}-evil${path.sep}x`, roots)).toBeNull();
+  });
+
+  it("rejects everything when no roots have been allowed", () => {
+    expect(resolveInAllowedRoot(path.join(root, "a.js"), new Set())).toBeNull();
+  });
+
+  it("rejects non-string input", () => {
+    expect(resolveInAllowedRoot(null, roots)).toBeNull();
+    expect(resolveInAllowedRoot(undefined, roots)).toBeNull();
+    expect(resolveInAllowedRoot("", roots)).toBeNull();
+  });
+
+  if (process.platform === "win32") {
+    it("is case-insensitive on win32", () => {
+      const p = path.join(root.toUpperCase(), "SRC", "APP.JS");
+      expect(resolveInAllowedRoot(p, roots)).toBe(path.resolve(p));
+    });
+  }
+});
+
+describe("agent-ui sensitive write deny (isSensitiveWritePath)", () => {
+  const denied = [
+    "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\run.bat",
+    "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp\\evil.lnk",
+    "C:\\proj\\.env",
+    "C:\\proj\\.env.local",
+    "C:\\proj\\prod.env",
+    "/home/u/.ssh/authorized_keys",
+    "C:\\Users\\me\\.ssh\\config",
+    "C:\\proj\\.git\\hooks\\pre-commit",
+    "/home/u/repo/.git/hooks/post-checkout",
+  ];
+  const allowed = [
+    "C:\\proj\\src\\app.js",
+    "C:\\proj\\environment.js",
+    "/home/u/proj/envfile",
+    "C:\\proj\\.github\\workflows\\test.yml",
+    "C:\\proj\\docs\\ssh-guide.md",
+  ];
+
+  it.each(denied)("denies write to %s", (p) => {
+    expect(isSensitiveWritePath(p)).toBe(true);
+  });
+  it.each(allowed)("allows write to %s", (p) => {
+    expect(isSensitiveWritePath(p)).toBe(false);
+  });
+});
+
+describe("agent-ui github-clone validation (validateCloneRequest)", () => {
+  it("accepts normal GitHub https clone URLs", () => {
+    expect(validateCloneRequest("https://github.com/user/repo.git", "repo").ok).toBe(true);
+    expect(validateCloneRequest("https://github.com/org/my-repo_1.2", "my-repo_1.2").ok).toBe(true);
+  });
+
+  const badUrls = [
+    "http://github.com/user/repo.git",             // not https
+    "https://evil.com/user/repo.git",               // wrong host
+    "https://github.com.evil.com/user/repo.git",    // suffix spoof
+    "git@github.com:user/repo.git",                 // ssh form, not a URL
+    "file:///C:/Windows/System32",                  // local scheme
+    "https://user:pass@github.com/user/repo.git",   // embedded credentials
+    "not a url",
+  ];
+  it.each(badUrls)("rejects clone URL %s", (u) => {
+    expect(validateCloneRequest(u, "repo").ok).toBe(false);
+  });
+
+  const badNames = ["..", ".", "a/b", "a\\b", 'x" && calc.exe', "", "re po"];
+  it.each(badNames)("rejects repo name %j", (n) => {
+    expect(validateCloneRequest("https://github.com/u/r.git", n).ok).toBe(false);
+  });
+});
+
+describe("agent-ui open-external allowlist (isAllowedExternalUrl)", () => {
+  const allowed = [
+    "https://github.com/settings/tokens",
+    "http://localhost:3000/",
+    "mailto:someone@example.com",
+  ];
+  const denied = [
+    "file:///C:/Windows/System32/calc.exe",
+    "javascript:alert(1)",
+    "vbscript:msgbox(1)",
+    "ms-settings:windowsupdate",
+    "not a url",
+    "",
+  ];
+
+  it.each(allowed)("allows %s", (u) => {
+    expect(isAllowedExternalUrl(u)).toBe(true);
+  });
+  it.each(denied)("denies %j", (u) => {
+    expect(isAllowedExternalUrl(u)).toBe(false);
   });
 });
 

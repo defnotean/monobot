@@ -468,6 +468,17 @@ export async function execute(oldState, newState) {
   const member = newState.member ?? oldState.member;
   if (!member || member.user.bot) return;
 
+  // ── Voice-capture consent notice ──────────────────────────────────────────
+  // If a /listen session is live in the channel the member just joined, give
+  // them a one-time recording notice (once per member per session — tracked in
+  // the listener's session state). Best-effort; never blocks the handler.
+  if (newState.channel && oldState.channel?.id !== newState.channel.id) {
+    try {
+      const { notifyMemberJoined } = await import("../voice/listener.js");
+      await notifyMemberJoined(guild.id, newState.channel.id, member);
+    } catch { /* listener module unavailable — nothing to notify */ }
+  }
+
   // Log voice events to mod log channel
   await logVoiceEvent(guild, member, oldState, newState);
 

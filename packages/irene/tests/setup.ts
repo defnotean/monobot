@@ -7,6 +7,7 @@ process.env.GEMINI_API_KEY ||= "test-gemini-key";
 process.env.BOT_NAME ||= "irene-test";
 process.env.TWIN_API_SECRET ||= "test-twin-secret";
 process.env.ERIS_API_URL ||= "https://test-twin.local";
+process.env.DISCORD_USER_ID ||= "123456789012345678";
 
 // Enable module-internal test hooks (e.g. voice/listener.js exposes its
 // _pcmToWav16kMono helper on globalThis so the regression test exercises the

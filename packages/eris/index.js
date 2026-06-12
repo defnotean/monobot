@@ -12,7 +12,7 @@ import { fileURLToPath } from "url";
 import http from "http";
 import config from "./config.js";
 import { initDatabase, flushAll, isPersistenceHealthy } from "./database.js";
-import { log } from "./utils/logger.js";
+import { log, redact } from "./utils/logger.js";
 import { maybeAutoDeploy } from "./utils/autoDeploy.js";
 import { sendAlert } from "@defnotean/shared/alert";
 import { handleAdminAuxRoute } from "./api/adminAuxRoutes.js";
@@ -283,7 +283,9 @@ process.on("uncaughtException", (err) => {
   log(`[SYS] Uncaught exception: ${err?.message || err}`);
   // Fire-and-forget alert before we exit. We don't await — the process is in
   // undefined state and Render restarts us; the POST is best-effort.
-  try { sendAlert("uncaught-exception", err?.message || String(err), { bot: "ERIS", log }); } catch {}
+  // redact() here is defense in depth — sendAlert redacts at the source too,
+  // but this keeps the call site consistent with Irene's crash handlers.
+  try { sendAlert("uncaught-exception", redact(err?.message ?? err), { bot: "ERIS", log }); } catch {}
   try { flushAll(); } catch {}
   process.exit(1);
 });

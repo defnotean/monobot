@@ -26,16 +26,38 @@ const karaoke = vi.hoisted(() => ({
 
 vi.mock("../../../music/player.js", () => player);
 vi.mock("../../../ai/karaoke.js", () => karaoke);
+vi.mock("../../../utils/logger.js", () => ({ log: vi.fn() }));
 
 // @ts-expect-error - importing JS module without types
 import { execute } from "../../../ai/executors/musicExecutor.js";
+// The DJ + same-VC gate runs the REAL utils/musicGuard.js, which reads the DJ
+// role from the real commands/music/dj.js store.
+// @ts-expect-error - importing JS module without types
+import { setDjRole, removeDjRole } from "../../../commands/music/dj.js";
 
-const guild = { id: "guild-1" };
+// Guild fixture rich enough for the DJ + same-VC guard: the bot is connected
+// to voice channel "vc1" and the default member (below) shares it.
+const BOT_ID = "bot-1";
+const guild = {
+  id: "guild-1",
+  ownerId: "owner-9",
+  client: { user: { id: BOT_ID } },
+  members: {
+    cache: new Map([[BOT_ID, { voice: { channel: { id: "vc1" } } }]]),
+    fetch: vi.fn(async () => null),
+  },
+  roles: { cache: new Map() },
+};
 
-function buildMessage({ inVc = true } = {}) {
+function buildMessage({ inVc = true, roleIds = [] as string[] } = {}) {
   return {
     author: { id: "u1", toString: () => "<@u1>" },
-    member: inVc ? { voice: { channel: { id: "vc1" } } } : { voice: { channel: null } },
+    member: {
+      id: "u1",
+      voice: { channel: inVc ? { id: "vc1" } : null },
+      permissions: { has: () => false },
+      roles: { cache: new Map(roleIds.map((r) => [r, {}])) },
+    },
     channel: { id: "txt1" },
     guild,
     client: {},
@@ -203,6 +225,52 @@ describe("toggle_loop", () => {
     expect(queue.looping).toBe(false);
     expect(queue.loopingQueue).toBe(false);
     expect(String(r)).toMatch(/looping disabled/i);
+  });
+});
+
+describe("DJ + same-VC gate (AI path)", () => {
+  it("blocks skip_song when the requester is not in the bot's voice channel", async () => {
+    const stopTrack = vi.fn();
+    player.getQueue.mockReturnValue({ songs: [{ title: "Current" }], player: { stopTrack } });
+    const r = await execute("skip_song", {}, buildMessage({ inVc: false }), ctx);
+    expect(String(r)).toMatch(/same voice channel/i);
+    expect(stopTrack).not.toHaveBeenCalled();
+  });
+
+  it("blocks stop_music for a non-DJ when a DJ role is set", async () => {
+    setDjRole(guild.id, "dj-role-1");
+    try {
+      const r = await execute("stop_music", {}, buildMessage(), ctx);
+      expect(String(r)).toMatch(/only \*\*.+\*\* can use this command/i);
+      expect(player.deleteQueue).not.toHaveBeenCalled();
+    } finally {
+      removeDjRole(guild.id);
+    }
+  });
+
+  it("allows playback control for a member holding the DJ role", async () => {
+    setDjRole(guild.id, "dj-role-1");
+    try {
+      const r = await execute("stop_music", {}, buildMessage({ roleIds: ["dj-role-1"] }), ctx);
+      expect(player.deleteQueue).toHaveBeenCalledWith("guild-1");
+      expect(String(r)).toMatch(/stopped the music/i);
+    } finally {
+      removeDjRole(guild.id);
+    }
+  });
+
+  it("blocks set_volume from outside the VC before touching the player", async () => {
+    const setGlobalVolume = vi.fn();
+    player.getQueue.mockReturnValue({ player: { setGlobalVolume } });
+    const r = await execute("set_volume", { volume: 50 }, buildMessage({ inVc: false }), ctx);
+    expect(String(r)).toMatch(/same voice channel/i);
+    expect(setGlobalVolume).not.toHaveBeenCalled();
+  });
+
+  it("does not gate read-only tools like music_queue", async () => {
+    player.getQueue.mockReturnValue({ songs: [{ title: "Current", duration: "3:00" }] });
+    const r = await execute("music_queue", {}, buildMessage({ inVc: false }), ctx);
+    expect(String(r)).toMatch(/\*\*Current\*\*/);
   });
 });
 

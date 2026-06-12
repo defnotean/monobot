@@ -41,6 +41,7 @@ import {
 } from "../../ai/executors/moderationExecutor.js";
 // @ts-expect-error - importing JS module without types
 import { logAudit } from "../../database.js";
+import { _resetForTest as _resetToolRateLimit } from "@defnotean/shared/toolRateLimit";
 
 vi.mock("../../database.js", async (orig) => {
   const actual: any = await orig();
@@ -104,6 +105,10 @@ function buildMessage(guildId: string, target: any, send = vi.fn(async () => ({}
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The destructive-tool rate caps (ban_user 5/5min etc.) persist module-scope
+  // window state across executeTool calls within this file. Reset so the file
+  // is immune to the cap regardless of how many ban_user calls it accumulates.
+  _resetToolRateLimit();
 });
 
 // ─── (a) detection + post ──────────────────────────────────────────────────

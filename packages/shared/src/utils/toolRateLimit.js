@@ -25,6 +25,20 @@ const TOOL_LIMITS = {
   // back-and-forth without being a denial-of-voice vector.
   // Irene-only; Eris doesn't expose TTS.
   say_tts:        { max: 10, windowMs: 60_000 },
+  // Destructive moderation / server-structure tools — sliding-window caps so
+  // a runaway AI loop (or an injected prompt driving a mod's session) can't
+  // mass-delete the server faster than a human can react. These only gate the
+  // AI tool path (executeTool); slash-command moderation never routes through
+  // here. Deliberately tight: no legitimate conversation needs more than a
+  // handful of channel/role deletions in five minutes.
+  ban_user:       { max: 5, windowMs: 300_000 },
+  kick_user:      { max: 5, windowMs: 300_000 },
+  purge_messages: { max: 5, windowMs: 300_000 },
+  delete_channel: { max: 3, windowMs: 300_000 },
+  nuke_channel:   { max: 3, windowMs: 300_000 },
+  delete_role:    { max: 3, windowMs: 300_000 },
+  mass_role:      { max: 3, windowMs: 300_000 },
+  lockdown_server: { max: 3, windowMs: 300_000 },
 };
 
 // userId:toolName → [timestamp, timestamp, ...]

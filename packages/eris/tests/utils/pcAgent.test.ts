@@ -179,6 +179,58 @@ describe("pcAgent.looksDestructive — safe commands still pass", () => {
   });
 });
 
+describe("pcAgent.looksDestructive — output redirection & PowerShell file writers (audit bypass #5)", () => {
+  const fileWriters = [
+    '"payload" > "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\run.bat"',
+    "echo evil >> C:\\Users\\me\\boot.ps1",
+    "Set-Content -Path x -Value y",
+    "add-content profile.ps1 'payload'",             // case variation
+    "Out-File -FilePath run.bat -InputObject $p",
+    "Get-Process | Tee-Object -FilePath log.txt",
+    '[IO.File]::WriteAllText("C:\\x.txt", $data)',
+    '[System.IO.File]::WriteAllBytes("C:\\x.bin", $bytes)',
+    "git status > status.txt",                       // redirect after safe cmd
+  ];
+
+  it.each(fileWriters)("flags %s", async (cmd) => {
+    const { looksDestructive } = await loadPcAgent();
+    expect(looksDestructive(cmd)).not.toBeNull();
+  });
+
+  const notWriters = [
+    "dir 2>&1",                                      // stream merge, not a file write
+    'git log --format="%h -> %s"',                   // arrow, not redirection
+    "npm ls --depth=1",
+  ];
+
+  it.each(notWriters)("does not flag %s", async (cmd) => {
+    const { looksDestructive } = await loadPcAgent();
+    expect(looksDestructive(cmd)).toBeNull();
+  });
+});
+
+describe("pcAgent.looksDestructive — Remove-Item flag order/abbreviations (audit bypass #6)", () => {
+  const variants = [
+    "Remove-Item -Force -Recurse x",                 // reversed flag order
+    "Remove-Item x -Recurse -Force",                 // flags after target
+    "rm -fo -rec x",                                 // abbreviated, reversed
+    "ri -r -f C:\\data",                             // shortest abbreviations
+    "del -force -recurse C:\\stuff",                 // alias, lowercase, reversed
+    "rmdir -Rec -Fo C:\\dir",                        // mixed abbreviation lengths
+  ];
+
+  it.each(variants)("flags %s", async (cmd) => {
+    const { looksDestructive } = await loadPcAgent();
+    expect(looksDestructive(cmd)).not.toBeNull();
+  });
+
+  it("still does not flag Recurse without Force", async () => {
+    const { looksDestructive } = await loadPcAgent();
+    expect(looksDestructive("Get-ChildItem -Recurse C:\\Users")).toBeNull();
+    expect(looksDestructive("Remove-Item -Recurse C:\\tmp\\cache")).toBeNull();
+  });
+});
+
 describe("pcAgent.looksHardBlocked - opaque/elevated shell forms", () => {
   const hardBlocked = [
     "powershell -EncodedCommand U3RvcC1Db21wdXRlcg==",

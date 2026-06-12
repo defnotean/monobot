@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from "discord.js";
 import { successEmbed, errorEmbed } from "../../utils/embeds.js";
 import { getQueue } from "../../music/player.js";
+import { requireDjAndSameVc } from "../../utils/musicGuard.js";
 
 export const data = new SlashCommandBuilder()
   .setName("shuffle")
@@ -11,6 +12,8 @@ export async function execute(interaction) {
   if (!queue || queue.songs.length < 2) {
     return interaction.reply({ embeds: [errorEmbed("Nothing to Shuffle", "Need at least 2 songs in the queue.")], ephemeral: true });
   }
+
+  if (!(await requireDjAndSameVc(interaction))) return;
 
   // One-time shuffle: randomise all songs after the currently playing one
   const current = queue.songs[0];

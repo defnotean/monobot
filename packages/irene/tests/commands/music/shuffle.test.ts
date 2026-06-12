@@ -5,11 +5,15 @@ vi.mock("../../../music/player.js", () => ({
 }));
 
 // @ts-expect-error JS helper without types
-import { makeInteraction, repliedText } from "../../_helpers/mockDiscord.js";
+import { makeInteraction, repliedText, PermissionFlagsBits } from "../../_helpers/mockDiscord.js";
 import * as player from "../../../music/player.js";
 import * as shuffle from "../../../commands/music/shuffle.js";
 
 const getQueue = player.getQueue as unknown as ReturnType<typeof vi.fn>;
+// The DJ/same-VC guard now fronts /shuffle; an Administrator bypasses it, so
+// these behavior tests build an admin interaction (the guard itself is
+// exercised separately in djGuardedCommands.test.ts).
+const adminI = (o = {}) => makeInteraction({ permissions: [PermissionFlagsBits.Administrator], ...o });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -22,14 +26,14 @@ afterEach(() => {
 describe("/shuffle", () => {
   it("refuses when there is no queue", async () => {
     getQueue.mockReturnValue(null);
-    const interaction = makeInteraction({});
+    const interaction = adminI({});
     await shuffle.execute(interaction);
     expect(repliedText(interaction)).toMatch(/Nothing to Shuffle/i);
   });
 
   it("refuses when fewer than two songs are queued", async () => {
     getQueue.mockReturnValue({ songs: [{ title: "only" }] });
-    const interaction = makeInteraction({});
+    const interaction = adminI({});
     await shuffle.execute(interaction);
     expect(repliedText(interaction)).toMatch(/at least 2 songs/i);
   });
@@ -43,7 +47,7 @@ describe("/shuffle", () => {
       shuffle: false,
     };
     getQueue.mockReturnValue(queue);
-    const interaction = makeInteraction({});
+    const interaction = adminI({});
     await shuffle.execute(interaction);
 
     // Current track is never moved out of position 0
@@ -60,7 +64,7 @@ describe("/shuffle", () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     const queue: any = { songs: [{ title: "a" }, { title: "b" }], shuffle: true };
     getQueue.mockReturnValue(queue);
-    const interaction = makeInteraction({});
+    const interaction = adminI({});
     await shuffle.execute(interaction);
     expect(queue.shuffle).toBe(false);
     expect(repliedText(interaction)).toMatch(/Off/);

@@ -26,6 +26,10 @@
  *     webhook URL goes through the same private-IP / redirect re-validation as
  *     every other outbound fetch. (A misconfigured ALERT_WEBHOOK_URL pointing
  *     at an internal host is refused, not exploited.)
+ *   - **Redacted at the source.** The `message` is run through the shared
+ *     `redactString()` before it lands in the embed, so a raw error message
+ *     that embeds an API key / Authorization header / query-string token never
+ *     reaches the webhook channel — even if a caller forgets to redact.
  *
  * @section Usage
  *   import { sendAlert } from "@defnotean/shared/alert";
@@ -37,6 +41,7 @@
  */
 
 import { safeFetch } from "./safeFetch.js";
+import { redactString } from "./logRedact.js";
 
 // Minimum spacing between two alerts of the SAME kind. Anything sooner is
 // dropped as a duplicate so an incident that retriggers in a tight loop can't
@@ -55,7 +60,8 @@ const _lastSent = new Map();
  *
  * @param {string} kind - short stable identifier for the alert class (e.g.
  *   `"uncaught-exception"`, `"persistence-unhealthy"`). Used as the dedupe key.
- * @param {string} [message] - human-readable detail line.
+ * @param {string} [message] - human-readable detail line. Always passed
+ *   through the shared log redactor before it reaches the webhook payload.
  * @param {object} [opts]
  * @param {string} [opts.bot] - originating bot tag for the embed title (e.g. `"ERIS"`).
  * @param {(msg: string) => void} [opts.log] - optional logger for internal failures.
@@ -85,10 +91,12 @@ export async function sendAlert(kind, message, opts = {}) {
     _lastSent.set(key, now);
 
     const title = bot ? `[${bot}] ${key}` : key;
+    // Redact BEFORE slicing — slicing first could cut a token in half and let
+    // the fragment slip past the shape-based patterns.
     const payload = {
       embeds: [{
         title: title.slice(0, 256),
-        description: String(message ?? "").slice(0, 2000) || "(no detail)",
+        description: redactString(String(message ?? "")).slice(0, 2000) || "(no detail)",
         color: 0xe74c3c, // red — these are all problem signals
         timestamp: new Date(now).toISOString(),
       }],

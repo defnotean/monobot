@@ -21,17 +21,18 @@ const _DESTRUCTIVE_PATTERNS = [
     new RegExp(`\\bnet${_WS}+user\\b.*\\/(add|delete)`, "iu"),
     new RegExp(`\\btakeown${_WS}+\\/f`, "iu"),
     /\bicacls\b.*\/deny/iu,
-    /\bRemove-Item\b[^|]*-Recurse[^|]*-Force/iu,
-    new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Recurse[^|]*-Force`, "iu"),
-    new RegExp(`\\b(ri|rd|rm|del|erase|rmdir)\\b[^|]*-Force[^|]*-Recurse`, "iu"),
+    new RegExp(`\\b(?:Remove-Item|ri|rd|rm|del|erase|rmdir)\\b(?=[^|]*${_WS}-r(?:e(?:c(?:u(?:r(?:se?)?)?)?)?)?\\b)(?=[^|]*${_WS}-f(?:o(?:r(?:ce?)?)?)?\\b)`, "iu"),
     /\bStop-Computer\b/iu,
     /\bRestart-Computer\b/iu,
     /\bClear-EventLog\b/iu,
+    /(?:^|[^-=>])>{1,2}(?!&)/u,
+    /\b(?:Set-Content|Add-Content|Out-File|Tee-Object)\b/iu,
+    /\[(?:System\.)?IO\.File\]\s*::\s*Write/iu,
     new RegExp(`\\bpowershell(\\.exe)?\\b[^|]*${_WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
     new RegExp(`\\bpwsh(\\.exe)?\\b[^|]*${_WS}-(EncodedCommand|enc|ec|e)\\b`, "iu"),
     new RegExp(`\\bcmd(\\.exe)?\\b[^|]*${_WS}\\/c\\b`, "iu"),
 ];
-const _CHAIN_SPLIT = /(?:&&|\|\||;|\||&|`|\$\()/u;
+const _CHAIN_SPLIT = /(?:&&|\|\||;|\||&|`|\$\(|>{1,2})/u;
 function _normalizeForMatch(command) {
     if (typeof command !== 'string') return '';
     let s;
@@ -57,6 +58,36 @@ function looksDestructive(command) {
         }
     }
     return null;
+}
+
+// Strict read-only allowlist — the ONLY commands an LLM-authored terminal plan
+// step may run without a per-step human confirmation. Anchored and intentionally
+// narrow: anything chained, redirected, multi-line, or simply not listed here
+// requires the owner to confirm the exact command first.
+const _READONLY_ALLOWLIST = [
+    /^(?:Get-ChildItem|dir|ls)(?:\s+[^<>|;&(){}$`]*)?$/i,
+    /^(?:Get-Content|type|cat)\s+[^<>|;&(){}$`]+$/i,
+    /^Get-Process(?:\s+[^<>|;&(){}$`]*)?$/i,
+    /^git\s+(?:status|log|diff|branch)(?:\s+[^<>|;&(){}$`]*)?$/i,
+    /^node\s+--version$/i,
+    /^npm\s+ls(?:\s+[^<>|;&(){}$`]*)?$/i,
+    /^(?:pwd|Get-Location)$/i,
+    /^whoami$/i,
+    /^systeminfo$/i,
+];
+function isReadOnlyCommand(command) {
+    if (!command || typeof command !== 'string') return false;
+    const cmd = _normalizeForMatch(command).trim();
+    if (!cmd) return false;
+    // No multi-statement smuggling: newlines, chain operators, pipes,
+    // redirection, backticks, and subexpressions all disqualify.
+    if (/[\r\n]/.test(cmd) || _CHAIN_SPLIT.test(cmd)) return false;
+    // PowerShell command-grouping `( ... )` and script blocks `{ ... }` execute
+    // their contents just like `$(...)` does — e.g. `Get-Content (Start-Process x)`
+    // runs Start-Process. `$` alone covers variable/member smuggling. Reject all
+    // grouping/expansion characters outright before consulting the allowlist.
+    if (/[(){}$]/.test(cmd)) return false;
+    return _READONLY_ALLOWLIST.some(re => re.test(cmd));
 }
 
 // Resolve a model-authored relative file path inside currentFolder, rejecting
@@ -181,12 +212,13 @@ return true;
 // the app shell, use it; otherwise fall back to a plaintext editor.
 if (typeof document !== 'undefined') {
     if (!bootstrapLocalMonaco()) createPlainTextEditor();
+    bindStaticUiEvents();
 }
 
 // Exported for unit tests when loaded under CommonJS (no DOM). In the browser
 // `module` is undefined so this is a no-op.
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { looksDestructive, resolveInFolder };
+    module.exports = { looksDestructive, resolveInFolder, isReadOnlyCommand };
 }
 
 // ─── MODE ─────────────────────────────────────────────────────────────────────
@@ -346,8 +378,8 @@ function addPlan(plan, originalMsg, history) {
             `).join('')}
           </div>
           <div class="plan-actions">
-            <button class="plan-approve-btn" id="${id}-approve" onclick="executeStoredPlan(this)">▶ Approve & Execute</button>
-            <button style="padding:7px 14px;border-radius:8px;background:none;border:1px solid var(--border);color:var(--text2);font-size:12px" onclick="this.closest('.plan-card').querySelector('.plan-actions').innerHTML='<span style=&quot;color:var(--text3);font-size:12px&quot;>Plan cancelled</span>'">Cancel</button>
+            <button class="plan-approve-btn" id="${id}-approve">▶ Approve & Execute</button>
+            <button class="plan-cancel-btn" style="padding:7px 14px;border-radius:8px;background:none;border:1px solid var(--border);color:var(--text2);font-size:12px">Cancel</button>
           </div>
         </div>
       </div>
@@ -356,6 +388,14 @@ function addPlan(plan, originalMsg, history) {
     scrollChat();
 
     wrap._plan = plan; wrap._msg = originalMsg; wrap._history = history;
+    // CSP forbids inline handlers — bind the plan actions here instead.
+    const approveBtn = wrap.querySelector('.plan-approve-btn');
+    if (approveBtn) approveBtn.addEventListener('click', () => executeStoredPlan(approveBtn));
+    const cancelBtn = wrap.querySelector('.plan-cancel-btn');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => {
+        const actions = wrap.querySelector('.plan-actions');
+        if (actions) actions.innerHTML = '<span style="color:var(--text3);font-size:12px">Plan cancelled</span>';
+    });
     return wrap;
 }
 
@@ -388,22 +428,29 @@ async function executePlan(planWrap, plan, originalMsg, history) {
             output = r.ok ? r.reply : `Error: ${r.error}`;
             if (r.ok) stepLogs.push(`Searched the web for: ${step.title}`);
         } else if (step.type === 'terminal') {
-            // LLM-authored plan steps are NOT trusted. Force a hard confirm on
-            // destructive commands even when auto-approve is on; pass confirm
-            // through to the host gate only if the owner accepts.
-            const destructive = looksDestructive(step.desc);
+            // LLM-authored plan steps are NOT trusted. Terminal steps ALWAYS
+            // require a per-step confirmation showing the exact command — even
+            // with auto-approve on — unless the command matches the strict
+            // read-only allowlist. Confirm is forwarded to the host gate only
+            // when the owner explicitly accepted the exact command.
+            const command = step.desc;
+            const destructive = looksDestructive(command);
             let confirmed = false;
-            if (destructive) {
-                confirmed = window.confirm(`This plan step looks DESTRUCTIVE (matched /${destructive}/):\n\n${step.desc}\n\nRun it anyway?`);
-                if (!confirmed) {
-                    output = `(blocked: destructive command, not confirmed)`;
-                    stepLogs.push(`⛔ Blocked destructive step: ${step.desc}`);
-                }
+            let approved = !destructive && isReadOnlyCommand(command);
+            if (!approved) {
+                const warning = destructive
+                    ? `This plan step looks DESTRUCTIVE (matched /${destructive}/):`
+                    : 'This plan step wants to run a terminal command:';
+                confirmed = window.confirm(`${warning}\n\n${command}\n\nRun it?`);
+                approved = confirmed;
             }
-            if (!destructive || confirmed) {
-                const r = await agent.runTerminal({ command: step.desc, cwd: currentFolder, confirm: confirmed });
+            if (!approved) {
+                output = `(blocked: terminal step not confirmed)`;
+                stepLogs.push(`⛔ Blocked terminal step (not confirmed): ${command}`);
+            } else {
+                const r = await agent.runTerminal({ command, cwd: currentFolder, confirm: confirmed });
                 output = r.output || '(done)';
-                stepLogs.push(`Executed: ${step.desc}`);
+                stepLogs.push(`Executed: ${command}`);
             }
         } else {
             // Code/analysis step
@@ -525,14 +572,19 @@ function addIreneMsg(text) {
 
 function addToolCall(icon, label, body, expanded = false) {
     const id = 'tc-' + Date.now();
-    append(`<div class="tool-call${expanded?' open':''}" id="${id}">
-      <div class="tool-call-header" onclick="document.getElementById('${id}').classList.toggle('open')">
+    const wrap = append(`<div class="tool-call${expanded?' open':''}" id="${id}">
+      <div class="tool-call-header">
         <span class="tool-call-icon">${icon}</span>
         <span class="tool-call-label">${esc(label)}</span>
         <span class="tool-call-chevron">›</span>
       </div>
       ${body ? `<div class="tool-call-body">${esc(body)}</div>` : ''}
     </div>`);
+    // CSP forbids inline handlers — bind the expand toggle here instead.
+    const header = wrap.querySelector('.tool-call-header');
+    if (header) header.addEventListener('click', () => {
+        wrap.querySelector('.tool-call')?.classList.toggle('open');
+    });
 }
 
 function addSubagentCard(name, output) {
@@ -586,9 +638,13 @@ function newSession() {
 function renderSessions() {
     const list = document.getElementById('session-list');
     list.innerHTML = sessions.slice().reverse().map(s => `
-        <div class="sb-item${s.id===activeSessionId?' active':''}" onclick="switchSession(${s.id})">
+        <div class="sb-item${s.id===activeSessionId?' active':''}" data-id="${s.id}">
           <span>💬</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(s.name)}</span>
         </div>`).join('');
+    // CSP forbids inline handlers — bind the session switchers here instead.
+    list.querySelectorAll('.sb-item').forEach(el => {
+        el.addEventListener('click', () => switchSession(Number(el.dataset.id)));
+    });
 }
 
 function switchSession(id) {
@@ -796,10 +852,6 @@ async function openFile(filePath, name) {
     setMode('code');
 }
 
-function escPath(s) {
-    return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
-
 function activateTab(p) {
     if (activeTab) { const t = openTabs.find(x=>x.path===activeTab); if(t && editor) t.content = editor.getValue(); }
     activeTab = p;
@@ -826,10 +878,18 @@ function renderTabs() {
     const bar = document.getElementById('tab-bar');
     if (!openTabs.length) { bar.innerHTML = '<div class="no-editor" style="flex:1;flex-direction:row;gap:8px;font-size:12px;color:var(--text3)">Open a file from the explorer</div>'; return; }
     bar.innerHTML = openTabs.map(t => `
-        <div class="etab${t.path===activeTab?' active':''}" onclick="activateTab('${escPath(t.path)}')">
+        <div class="etab${t.path===activeTab?' active':''}" data-path="${esc(t.path)}">
           ${t.dirty ? '<span style="color:var(--red)">●</span> ' : ''}${esc(t.name)}
-          <span class="etab-close" onclick="event.stopPropagation();closeTab('${escPath(t.path)}')">×</span>
+          <span class="etab-close">×</span>
         </div>`).join('');
+    // CSP forbids inline handlers — bind tab activate/close here instead.
+    bar.querySelectorAll('.etab').forEach(el => {
+        el.addEventListener('click', () => activateTab(el.dataset.path));
+        el.querySelector('.etab-close')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            closeTab(el.dataset.path);
+        });
+    });
 }
 
 function closeTab(p) {
@@ -946,6 +1006,35 @@ async function githubCliConnect() {
 }
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
+// Static UI wiring. index.html carries no inline on* attributes (the CSP's
+// script-src 'self' would block them) — every static control is bound here.
+function bindStaticUiEvents() {
+    const on = (id, ev, fn) => { const el = document.getElementById(id); if (el) el.addEventListener(ev, fn); };
+    document.querySelector('.tb-close')?.addEventListener('click', () => agent.closeApp());
+    document.querySelector('.tb-min')?.addEventListener('click', () => agent.minimizeApp());
+    document.querySelector('.tb-max')?.addEventListener('click', () => agent.maximizeApp());
+    document.querySelectorAll('.mtab').forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
+    on('settings-btn', 'click', openSettings);
+    on('conn-btn', 'click', toggleConnect);
+    on('open-folder-btn', 'click', openFolder);
+    on('new-session-btn', 'click', newSession);
+    on('gh-cli-btn', 'click', githubCliConnect);
+    on('gh-token', 'keydown', (e) => { if (e.key === 'Enter') githubConnect(); });
+    on('gh-token-connect-btn', 'click', githubConnect);
+    on('gh-get-token-link', 'click', () => agent.openExternal('https://github.com/settings/tokens'));
+    on('gh-disconnect-btn', 'click', githubDisconnect);
+    on('gh-load-repos-btn', 'click', () => loadRepos());
+    on('repo-search', 'input', (e) => filterRepos(e.target.value));
+    on('chat-in', 'input', (e) => autoResize(e.target));
+    on('chat-in', 'keydown', chatKey);
+    on('send-btn', 'click', sendChat);
+    on('auto-toggle', 'click', toggleAuto);
+    on('term-in', 'keydown', termKey);
+    on('settings-modal', 'click', (e) => { if (e.target === document.getElementById('settings-modal')) closeSettings(); });
+    on('settings-close-btn', 'click', closeSettings);
+    document.querySelectorAll('.save-key-btn').forEach(btn => btn.addEventListener('click', () => saveKey(btn.dataset.key)));
+}
+
 // Browser-only bootstrap (see note above) — skip when there is no `agent`.
 if (typeof agent !== 'undefined') (async () => {
     // Restore GitHub session if saved

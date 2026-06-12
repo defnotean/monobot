@@ -10,10 +10,26 @@ const HANDLED = new Set([
   "music_filter", "start_lyrics_mode", "stop_lyrics_mode", "auto_lyrics_mode",
 ]);
 
+// Playback-control tools that mirror the DJ-protected slash commands
+// (/skip /stop /pause /resume /volume /loop /shuffle). The AI path enforces
+// the same DJ + same-VC gate as the slash commands and panel buttons so the
+// LLM cannot be used to bypass the documented DJ model.
+const DJ_GATED = new Set([
+  "skip_song", "stop_music", "pause_music", "resume_music",
+  "set_volume", "toggle_loop", "shuffle_queue",
+]);
+
 export async function execute(toolName, input, message, ctx) {
   if (!HANDLED.has(toolName)) return undefined;
 
   const { guild } = ctx;
+
+  if (DJ_GATED.has(toolName)) {
+    const { checkDjAndSameVc } = await import("../../utils/musicGuard.js");
+    const member = message.member ?? await guild.members.fetch(message.author.id).catch(() => null);
+    const denial = checkDjAndSameVc(member, guild);
+    if (denial) return denial.text;
+  }
 
   switch (toolName) {
     case "play_music": {

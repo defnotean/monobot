@@ -29,7 +29,7 @@ export function clearCache(): void {
  * - Per-server renaming happens at runtime, not here
  * - Custom personality text from set_server_persona fully overrides this prompt
  */
-export function buildPersonality(ownerId: string, ownerName = "defnotean"): string {
+export function buildPersonality(ownerId: string, ownerName = "the owner"): string {
   const parts = [
     loadPrompt("eris-personality"),
     loadPrompt("eris-tool-guide"),

@@ -3,10 +3,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../../../music/player.js", () => ({
   getQueue: vi.fn(),
 }));
-// skip.js dynamically imports ./dj.js for requireDj — mock it so the DJ gate
-// is controllable without standing up the whole dj store.
+// skip.js now goes through the shared musicGuard (requireDjAndSameVc), which
+// imports getDjRole from ./dj.js — mock both so the DJ gate is controllable
+// without standing up the whole dj store. getDjRole defaults to null (no DJ
+// role configured → only the same-VC check applies).
 vi.mock("../../../commands/music/dj.js", () => ({
   requireDj: vi.fn(async () => true),
+  getDjRole: vi.fn(() => null),
 }));
 
 // @ts-expect-error JS helper without types
@@ -26,10 +29,12 @@ import * as skip from "../../../commands/music/skip.js";
 
 const getQueue = player.getQueue as unknown as ReturnType<typeof vi.fn>;
 const requireDj = dj.requireDj as unknown as ReturnType<typeof vi.fn>;
+const getDjRole = dj.getDjRole as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
   requireDj.mockResolvedValue(true);
+  getDjRole.mockReturnValue(null);
 });
 
 /** Interaction where the bot sits in botVc and the caller in userVc. */
@@ -66,18 +71,20 @@ describe("/skip", () => {
     const interaction = buildVoiceInteraction({ botVc: vc, userVc: vc });
     await skip.execute(interaction);
     expect(repliedText(interaction)).toMatch(/Nothing Playing/i);
-    expect(requireDj).not.toHaveBeenCalled();
   });
 
-  it("stops at the DJ gate when requireDj denies", async () => {
-    requireDj.mockResolvedValue(false);
-    getQueue.mockReturnValue({ playing: true, songs: [{ title: "A", url: "u" }], player: { stopTrack: vi.fn() } });
+  it("stops at the DJ gate when the caller lacks the configured DJ role", async () => {
+    // skip.js now routes through the shared guard (requireDjAndSameVc). With a
+    // DJ role configured and a same-VC non-admin caller who lacks it, the guard
+    // denies with "DJ Role Required" and skip must NOT proceed to stopTrack.
+    getDjRole.mockReturnValue("dj-role-1");
+    const stopTrack = vi.fn();
+    getQueue.mockReturnValue({ playing: true, songs: [{ title: "A", url: "u" }], player: { stopTrack } });
     const vc = makeChannel({ type: 2 });
     const interaction = buildVoiceInteraction({ botVc: vc, userVc: vc });
     await skip.execute(interaction);
-    // requireDj is responsible for its own reply; skip must NOT proceed to stopTrack.
-    expect(requireDj).toHaveBeenCalledWith(interaction);
-    expect(interaction.getReplies()).toHaveLength(0);
+    expect(repliedText(interaction)).toMatch(/DJ Role Required/i);
+    expect(stopTrack).not.toHaveBeenCalled();
   });
 
   it("blocks a non-admin who is not in the bot's voice channel", async () => {
