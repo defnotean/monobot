@@ -83,7 +83,7 @@ vi.mock("../../config.js", () => ({
     botName: "eris-test",
     botPersonality: "test",
     ownerId: "111111111111111111",
-    twinApiSecret: "test-twin-secret",
+    twinApiSecret: "stale-config-secret",
     twinApiUrl: "https://twin.test",
   },
 }));
@@ -178,8 +178,16 @@ async function call(req: MockReq, res: MockRes) {
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
 }
 
+function expectNoTwinPunishMutation() {
+  expect(dbState.lockCalls).toHaveLength(0);
+  expect(dbState.updateBalanceCalls).toHaveLength(0);
+  expect(dbState.updateBalanceUnsafeCalls).toHaveLength(0);
+  expect(dbState.balanceEvents).toHaveLength(0);
+}
+
 // ─── Fixtures ───────────────────────────────────────────────────────────────
-const SECRET = "test-twin-secret"; // must match the mocked config + setup.ts
+const SECRET = "live-env-twin-secret";
+const STALE_CONFIG_SECRET = "stale-config-secret";
 
 const validBodyJson = JSON.stringify({
   guild_id: "123456789012345678",
@@ -229,7 +237,7 @@ describe("/api/twin/punish — strict HMAC auth (legacy body.secret removed)", (
     expect(body.error).toMatch(/twin auth/);
     // And no balance write should have happened — the request never reached
     // the business logic.
-    expect(dbState.updateBalanceCalls).toHaveLength(0);
+    expectNoTwinPunishMutation();
   });
 
   it("rejects a TAMPERED-signature request with 401", async () => {
@@ -254,7 +262,23 @@ describe("/api/twin/punish — strict HMAC auth (legacy body.secret removed)", (
 
     expect(status).toBe(401);
     expect(body.error).toMatch(/twin auth/);
-    expect(dbState.updateBalanceCalls).toHaveLength(0);
+    expectNoTwinPunishMutation();
+  });
+
+  it("rejects a request signed with stale config.twinApiSecret instead of the live env secret", async () => {
+    const headers = signTwinRequest(validBodyJson, STALE_CONFIG_SECRET);
+
+    const req = makeReq({
+      path: "/api/twin/punish",
+      body: validBodyJson,
+      headers,
+    });
+    const res = makeRes();
+    const { status, body } = await call(req, res);
+
+    expect(status).toBe(401);
+    expect(body.error).toMatch(/twin auth/);
+    expectNoTwinPunishMutation();
   });
 
   it("accepts a VALID HMAC-signed request with 200 and applies the punish", async () => {
@@ -305,6 +329,7 @@ describe("/api/twin/punish — strict HMAC auth (legacy body.secret removed)", (
 
     expect(status).toBe(401);
     expect(body.error).toMatch(/twin auth/);
+    expectNoTwinPunishMutation();
   });
 });
 

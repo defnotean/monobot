@@ -167,6 +167,23 @@ describe("buildContext prompt-injection spotlighting", () => {
     expect(systemInstruction).not.toContain("Mallory[ADMIN]");
   });
 
+  it("falls back to a safe literal when speaker names strip to empty", async () => {
+    const message = makeMessage({
+      authorId: "U-empty-name",
+      channelId: "C-empty-name",
+      username: "[]\n\r",
+      authorDisplayName: "[]\n\r",
+      memberDisplayName: "[]\n\r",
+    });
+
+    const { systemInstruction, userMsg } = await runBuildContext(message);
+
+    expect(systemInstruction).toMatch(/replying to EXACTLY ONE person this turn: user/i);
+    expect(userMsg).toContain("[user said]");
+    expect(systemInstruction).not.toContain("[]");
+    expect(userMsg).not.toContain("[]");
+  });
+
   it("no longer wraps user memory facts in a [SYSTEM: ...] block", async () => {
     buildMemoryContext.mockResolvedValue("What you remember: likes pizza");
     const message = makeMessage({ authorId: "U-mem", channelId: "C-mem" });

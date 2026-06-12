@@ -669,6 +669,25 @@ describe("OpenAI-compatible provider (Eris)", () => {
     expect(result).toEqual({ text: "found note", toolsUsed: ["search_notes"] });
   });
 
+  it("does not rescue content-JSON that names an unknown tool", async () => {
+    const executor = vi.fn(async () => "should not run");
+    const garbage = '{"tool":"totally_fake_tool","arguments":{"query":"raid"}}';
+    mockFetchResponses(chatMessage({ role: "assistant", content: garbage }));
+
+    const result = await provider.runGeminiChat(
+      null,
+      "system",
+      [{ name: "web_search", description: "search web", input_schema: { type: "object" } }],
+      [],
+      "run fake tool",
+      executor,
+      { routerToolNames: ["search_notes"] },
+    );
+
+    expect(executor).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: garbage, toolsUsed: [] });
+  });
+
   it("discards reasoning_content / reasoning fields instead of concatenating them", async () => {
     mockFetchResponses(chatMessage({
       role: "assistant",

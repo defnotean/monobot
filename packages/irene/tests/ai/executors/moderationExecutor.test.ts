@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { PermissionFlagsBits } from "discord.js";
+import { Collection, PermissionFlagsBits } from "discord.js";
 // @ts-expect-error - importing JS module without types
 import { execute as executeMod } from "../../../ai/executors/moderationExecutor.js";
 
@@ -46,6 +46,15 @@ function buildNonPermedMember(lackingPerm: bigint) {
         // Other perms — irrelevant for these gate tests.
         return false;
       },
+    },
+  };
+}
+
+function buildPermedMember(perm: bigint) {
+  return {
+    id: "mod-with-perm",
+    permissions: {
+      has: (candidate: bigint) => candidate === perm,
     },
   };
 }
@@ -211,6 +220,52 @@ describe("moderationExecutor — per-tool permission re-check (HIGH audit findin
     expect(String(result)).toMatch(/can't purge/i);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("purge_messages targets grouped channel.id instead of the current channel", async () => {
+    const member = buildPermedMember(PermissionFlagsBits.ManageMessages);
+    const guild = buildFakeGuild();
+    const currentFetch = vi.fn();
+    const targetMessage = {
+      id: "200000000000000001",
+      content: "target",
+      author: { id: "author-1" },
+      attachments: { size: 0 },
+      embeds: [],
+      pinned: false,
+      createdTimestamp: Date.now(),
+      delete: vi.fn(),
+    };
+    const targetChannel = {
+      id: "123456789012345678",
+      name: "rules",
+      messages: {
+        fetch: vi.fn(async () => new Collection([[targetMessage.id, targetMessage]])),
+      },
+      bulkDelete: vi.fn(async () => new Collection([[targetMessage.id, targetMessage]])),
+    };
+    const currentChannel = {
+      id: "current-channel",
+      name: "general",
+      messages: { fetch: currentFetch },
+      bulkDelete: vi.fn(),
+      send: vi.fn(),
+    };
+    const msg = buildMessage(member, guild);
+    msg.channel = currentChannel as any;
+    const ctx = buildCtx(guild);
+    ctx.findChannel = vi.fn((g: any, query: string) => query === targetChannel.id ? targetChannel : null);
+
+    const result = await executeMod("purge_messages", {
+      count: 1,
+      channel: { id: targetChannel.id },
+    }, msg, ctx);
+
+    expect(String(result)).toMatch(/Deleted 1 messages from #rules/);
+    expect(targetChannel.messages.fetch).toHaveBeenCalled();
+    expect(targetChannel.bulkDelete).toHaveBeenCalled();
+    expect(currentFetch).not.toHaveBeenCalled();
+    expect(currentChannel.bulkDelete).not.toHaveBeenCalled();
   });
 });
 

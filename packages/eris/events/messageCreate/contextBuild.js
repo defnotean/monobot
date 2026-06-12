@@ -64,10 +64,11 @@ export function shouldBuildTwinStateContext(text = "") {
 }
 
 function sanitizeSpeakerName(raw, fallback = "user") {
-  return (normalizeUnicode(raw) || fallback)
+  const clean = (value) => (normalizeUnicode(value) || "")
     .replace(/[\[\]\n\r]/g, "")
     .slice(0, 40)
-    || fallback;
+    .trim();
+  return clean(raw) || clean(fallback) || "user";
 }
 
 async function getSelfCanonContextCached() {

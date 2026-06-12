@@ -743,6 +743,25 @@ describe("OpenAI-compatible provider (Irene)", () => {
     expect(result).toEqual({ text: "listed channels", toolsUsed: ["list_channels"] });
   });
 
+  it("does not rescue content-JSON that names an unknown tool", async () => {
+    const executor = vi.fn(async () => "should not run");
+    const garbage = '{"tool":"totally_fake_tool","arguments":{"query":"channels"}}';
+    mockFetchResponses(chatMessage({ role: "assistant", content: garbage }));
+
+    const result = await provider.runGeminiChat({
+      systemInstruction: "system",
+      history: [],
+      tools: [{ name: "web_search", description: "search web", input_schema: { type: "object" } }],
+      message: { userMessage: "run fake tool" },
+      executor,
+      isAdmin: true,
+      routerToolNames: ["list_channels"],
+    });
+
+    expect(executor).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: garbage, toolsUsed: [] });
+  });
+
   it("discards reasoning_content / reasoning fields instead of concatenating them", async () => {
     mockFetchResponses(chatMessage({
       role: "assistant",

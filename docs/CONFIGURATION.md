@@ -135,6 +135,7 @@ at the repo root.
 | `TIMEOUT_TOOL_VERY_SLOW` | Irene | No | `60000` | Tool tier 3 timeout (ms) — long scrapes. `packages/irene/config.js:359`. | n/a |
 | `TIMEOUT_TOOL_IMAGE` | Irene | No | `90000` | Image-generation tool timeout (ms). Kept separate because image providers can take longer than normal network tools. | n/a |
 | `TIMEOUT_FETCH` | Both | No | `5000` | Outbound HTTP fetch timeout (ms). `packages/eris/config.js:365`, `packages/irene/config.js:360`. | n/a |
+| `SAFE_FETCH_EXTRA_PORTS` | Both | No | empty | Comma-separated allowlist of extra non-default destination ports for `safeFetch` user/model-supplied URLs. Defaults allow only omitted/80/443; private, loopback, link-local, and metadata IPs stay blocked. | `8080,11434` |
 
 ---
 
@@ -209,6 +210,38 @@ refactor: when `true`, every write hits both the legacy single-row blob and the
 new per-entity tables in `packages/irene/database/perEntity.js`. Apply the
 migrations first, then flip it on in a deploy to validate the new layer before
 later PRs migrate read paths.
+
+### Applying migration 014 (RLS lockdown)
+
+`packages/eris/migrations/014_enable_rls_all_tables.sql` enables Row Level
+Security and revokes all `anon`/`authenticated`/`PUBLIC` grants on every table
+both bots touch (plus an explicit `CREATE TABLE` for `local_commands`, whose
+rows the agent-ui poller executes on the owner's machine — the app-layer HMAC
+remains as the second factor).
+
+**Before applying, confirm `SUPABASE_KEY` is the service-role key.** This doc
+previously allowed "Service-role or anon key"; after 014, an anon (or
+`sb_publishable_...`) key loses all table access and both bots silently run
+without persistence. The service-role key is a legacy JWT whose payload
+contains `"role":"service_role"` (decode it at the Project Settings -> API
+page or with any JWT inspector) or a new-style `sb_secret_...` key. If you
+currently use the anon key, switch to service_role first, then apply.
+
+Apply with `psql $DATABASE_URL -f
+packages/eris/migrations/014_enable_rls_all_tables.sql` or paste it into the
+Supabase SQL Editor — run it against every Supabase project either bot points
+at (both bots normally share one). It is idempotent and skips tables that
+don't exist yet; re-run it after creating any new table so the lockdown covers
+it. Plain Postgres + PostgREST deployments: the `anon`/`authenticated`/
+`service_role` guards are no-ops if those roles don't exist — make sure the
+role the bots authenticate as either owns the tables or has explicit grants
+plus `BYPASSRLS`.
+
+The Eris **agent-ui Electron poller** holds its own `SUPABASE_KEY`, entered in
+its Settings panel (not the bot `.env`). It reads/updates `local_commands`, so
+after 014 it too must use the **service-role key** — if you only update the bot
+`.env` files, queued host commands will stall in `pending` and the failures
+show only in the poller log.
 
 ## 4. Twin coordination (Eris <-> Irene)
 

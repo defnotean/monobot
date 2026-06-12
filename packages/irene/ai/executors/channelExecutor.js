@@ -229,8 +229,9 @@ export async function execute(toolName, input, message, ctx) {
 
     case "set_channel_permissions": {
       input = normalizeChannelPermissionArgs(input);
-      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
-      if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const targetChannel = input.channel_id || input.channel_name;
+      const ch = targetChannel ? findChannel(guild, targetChannel) : message.channel;
+      if (!ch) return `Couldn't find channel "${targetChannel}"`;
       let target;
       if (input.target_type === "user") {
         target = findMember(guild, input.target);

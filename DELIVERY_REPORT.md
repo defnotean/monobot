@@ -35,7 +35,7 @@ Measurements:
 - Compact schema spot measurement: Irene `setup_ticket` `fullBytes=6498`, `compactBytes=3055`, `savedBytes=3443`, `reductionPct=53.0`.
 
 Deviations / skipped:
-- None recorded for WP1.
+- Follow-up: Eris received the strong/weak keyword scorer; Irene still uses the flat category scorer. Port the Eris scorer to Irene separately if the Eris behavior holds up.
 
 ## WP2 - Persistence Durability and Cache Correctness
 
@@ -57,7 +57,8 @@ Measurements:
 - Synthetic 50-guild Irene-shaped payload size: `363269` bytes.
 - Initial old stringify/parse average `1.205ms`, p95 `1.759ms`; initial structuredClone/stringify-check average `1.562ms`, p95 `2.109ms`.
 - Final cheap-guard comparison: old stringify/parse average `1.114ms`, p95 `1.454ms`; new structuredClone/cheap-guard average `1.261ms`, p95 `2.054ms`.
-- Deviation rationale: JSON parse/full JSON round-trip was removed as requested; the synthetic microbench was slightly slower but avoids lossy JSON serialization and reduces dirty-flush churn.
+- Acceptance-review refresh: 600-iteration synthetic payload `628579` bytes; old JSON round-trip average `4.382ms`, p95 `5.758ms`; new structuredClone + cheap guard average `5.000ms`, p95 `6.284ms`.
+- Deviation rationale: JSON parse/full JSON round-trip was removed as a correctness/safety change; the synthetic microbench did not show a speedup, so this is recorded as a measured tradeoff rather than a performance win.
 
 Deviations / skipped:
 - None beyond the measured performance tradeoff above.
@@ -95,7 +96,7 @@ Deviations / skipped:
 Implemented:
 - Hardened GitHub workflow permissions and pinned checkout/setup-node actions to full SHAs.
 - Set Render `NODE_VERSION` to `22.12.0` for both services.
-- Added root ESLint flat config and lint script.
+- Added root ESLint flat config and lint script with intentionally scoped guardrails.
 - Fixed the known Eris DB silent-swallow logging cluster and gambling empty catches covered by the lint scope.
 - Added a regression test for marriage logging.
 
@@ -115,7 +116,7 @@ Measurements:
 - Initial global `no-empty` scan found 177 pre-existing empty-block violations; the final guardrail was scoped to the WP4 target files.
 
 Deviations / skipped:
-- `no-empty` was scoped rather than enforced globally to avoid turning WP4 into a repo-wide cleanup.
+- `no-empty`/silent-swallow checks are not repo-wide yet; WP4 covers the known Eris gambling/database target files, with remaining empty-block cleanup left as follow-up.
 - Irene audio executor test mock was adjusted for Vitest 4 constructible `GoogleGenAI`; assertions were not weakened.
 
 ## WP5 - Schema Diet and Naming Convergence
@@ -138,7 +139,7 @@ Gate:
 - Live harness name check ran locally: 326 expected tool names, missing `[]`.
 
 Measurements:
-- Post-WP5 prompt footprint: Eris owner casual/admin `16278`; Irene admin casual `10664`; Irene admin moderation `16264`.
+- Post-WP5 prompt footprint after acceptance fixes: Eris owner casual/admin `16296`; Irene admin casual `10664`; Irene admin moderation `16264`.
 
 Deviations / skipped:
 - Live tool execution harness was not run against real providers because no real `OPENROUTER_API_KEY`/live bot token was available; local name validation was run instead.
@@ -166,7 +167,7 @@ Gate:
 - Supplemental `npm run measure:prompt` and `npx eslint .`: passed.
 
 Measurements:
-- Post-WP6 prompt footprint: Eris owner casual/admin `16278`; Irene admin casual `10664`; Irene admin moderation `16264`.
+- Post-WP6 prompt footprint after acceptance fixes: Eris owner casual/admin `16296`; Irene admin casual `10664`; Irene admin moderation `16264`.
 - Dedup measurement, pair-scoped across extracted modules: tier-1-only `common=98`, `max=110`; final extracted-pair pass `common=182`, `max=239`.
 
 Deviations / skipped:

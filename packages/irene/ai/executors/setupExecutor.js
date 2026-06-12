@@ -96,11 +96,25 @@ export function normalizeWelcomeArgs(input = {}) {
     age: ["show_age_field", "age_field_name"],
     joined: ["show_joined_field", "joined_field_name"],
   };
+  const extraFields = [];
   for (const field of Array.isArray(input.fields) ? input.fields : []) {
     const spec = fieldMap[field?.key];
-    if (!spec) continue;
-    if (field.show !== undefined) out[spec[0]] = field.show;
-    if (field.name !== undefined) out[spec[1]] = field.name;
+    if (spec) {
+      if (field.show !== undefined) out[spec[0]] = field.show;
+      if (field.name !== undefined) out[spec[1]] = field.name;
+      continue;
+    }
+    if (field?.name !== undefined && field?.value !== undefined) {
+      extraFields.push({
+        name: field.name,
+        value: field.value,
+        ...(field.inline !== undefined ? { inline: field.inline } : {}),
+      });
+    }
+  }
+  if (extraFields.length) {
+    const existing = Array.isArray(out.extra_fields) ? out.extra_fields : [];
+    out.extra_fields = [...existing, ...extraFields];
   }
 
   delete out.message;

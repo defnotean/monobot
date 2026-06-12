@@ -63,7 +63,10 @@ describe("schema diet adapters", () => {
       media: { thumbnail_url: "none", banner_url: "https://cdn/banner.png", show_banner: true },
       author: { name: "{server}", icon_url: "none", url: "none", show: true },
       footer: { text: "footer", icon_url: "none", show: true, timestamp: true },
-      fields: [{ key: "member", show: true, name: "Member #" }],
+      fields: [
+        { key: "member", show: true, name: "Member #" },
+        { name: "Read the rules", value: "Start in #rules", inline: true },
+      ],
       ping_roles: "Mods",
     })).toMatchObject({
       title: "Welcome {user}",
@@ -86,6 +89,7 @@ describe("schema diet adapters", () => {
       show_timestamp: true,
       show_member_field: true,
       member_field_name: "Member #",
+      extra_fields: [{ name: "Read the rules", value: "Start in #rules", inline: true }],
       ping_roles: "Mods",
     });
   });
@@ -251,8 +255,16 @@ describe("compacted Irene schemas", () => {
     expect(tool("set_role_permissions").input_schema.properties).not.toHaveProperty("manage_roles");
     expect(tool("set_channel_permissions").input_schema.properties).toHaveProperty("inherit");
     expect(tool("customize_welcome").input_schema.properties).toHaveProperty("message");
+    expect(tool("customize_welcome").input_schema.properties.fields.items.properties).toHaveProperty("value");
     expect(tool("setup_ticket").input_schema.properties).toHaveProperty("roles");
     expect(tool("send_message").input_schema.properties).toHaveProperty("embed");
+    const sendComponents = tool("send_message").input_schema.properties.components.properties;
+    expect(sendComponents.buttons.items.required).toEqual(expect.arrayContaining(["label", "style"]));
+    expect(sendComponents.buttons.items.properties.style.enum).toEqual(expect.arrayContaining(["primary", "secondary", "success", "danger", "link"]));
+    expect(sendComponents.buttons.items.properties.action.enum).toContain("open_ticket");
+    expect(sendComponents.buttons.items.properties).toHaveProperty("role_id");
+    expect(sendComponents.buttons.items.properties).toHaveProperty("url");
+    expect(sendComponents.dropdown.properties.options.items.required).toEqual(expect.arrayContaining(["label", "role_id"]));
     expect(tool("create_custom_command").input_schema.properties).toHaveProperty("embed");
     expect(tool("edit_custom_command").input_schema.properties).toHaveProperty("options");
     expect(tool("purge_messages").input_schema.properties).toHaveProperty("filters");

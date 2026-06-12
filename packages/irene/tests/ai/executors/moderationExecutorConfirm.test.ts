@@ -43,8 +43,27 @@ vi.mock("../../../utils/twinPunish.js", () => ({
   firePunishSignal: vi.fn(async () => undefined),
 }));
 
+// lockdown_server's effect helper (dynamically imported by the executor) and
+// the channel/role executors (dynamically imported by commitPendingAction's
+// replay dispatch) — mocked so these tests assert the DISPATCH contract.
+vi.mock("../../../utils/safety.js", () => ({
+  activateLockdown: vi.fn(async () => true),
+  deactivateLockdown: vi.fn(async () => true),
+}));
+vi.mock("../../../ai/executors/channelExecutor.js", () => ({
+  execute: vi.fn(async () => "channel gone"),
+}));
+vi.mock("../../../ai/executors/roleExecutor.js", () => ({
+  execute: vi.fn(async () => "role gone"),
+}));
+
 import { addTempBan, logAudit } from "../../../database.js";
 import { sendModLog } from "../../../utils/logger.js";
+import { activateLockdown } from "../../../utils/safety.js";
+// @ts-expect-error - importing JS module without types
+import { execute as channelExec } from "../../../ai/executors/channelExecutor.js";
+// @ts-expect-error - importing JS module without types
+import { execute as roleExec } from "../../../ai/executors/roleExecutor.js";
 
 // A member that HAS the given perm (mod). id ≠ ownerId so we exercise the real
 // permission check, not the owner short-circuit.
@@ -263,6 +282,103 @@ describe("AI-initiated destructive actions defer to confirm (Task 2)", () => {
     expect(tbPending.action).toBe("tempban");
     expect(tbPending.durationStr).toBe("1d");
   });
+
+  it("AI-initiated lockdown_server defers to confirm — no lockdown fires", async () => {
+    const guild = buildGuild();
+    const member = buildPermedMember(PermissionFlagsBits.ManageChannels);
+    const msg = buildMessage(member, guild);
+    const ctx = buildCtx(guild, buildTarget(), { aiInitiated: true });
+
+    const result = await executeMod("lockdown_server", { reason: "raid" }, msg, ctx);
+
+    expect(activateLockdown).not.toHaveBeenCalled();
+    expect(result).toHaveProperty("_pendingToken");
+    const pending = getPendingAction(result._pendingToken);
+    expect(pending.action).toBe("lockdown_server");
+    expect(pending.requiredPerm).toBe(PermissionFlagsBits.ManageChannels);
+    expect(pending.targetId).toBe(guild.id);
+  });
+
+  it("confirmed lockdown_server replays through the executor and locks down", async () => {
+    const guild = buildGuild();
+    const member = buildPermedMember(PermissionFlagsBits.ManageChannels);
+    const msg = buildMessage(member, guild);
+    const ctx = buildCtx(guild, buildTarget(), { aiInitiated: true });
+
+    const deferred = await executeMod("lockdown_server", { reason: "raid" }, msg, ctx);
+    const pending = consumePendingAction(deferred._pendingToken);
+
+    const ok = await commitPendingAction(pending, {
+      guild,
+      member: buildPermedMember(PermissionFlagsBits.ManageChannels, "clicker-mod"),
+      clickedBy: { id: "clicker-mod", tag: "clicker#0001" },
+      deps: { findMember: () => null, checkHierarchy: () => null, logAudit },
+    });
+
+    expect(ok.ok).toBe(true);
+    expect(activateLockdown).toHaveBeenCalledTimes(1);
+    expect(activateLockdown).toHaveBeenCalledWith(guild, "raid");
+    expect(String(ok.message)).toMatch(/locked down/i);
+    expect(String(ok.message)).not.toMatch(/moderator must confirm/i);
+  });
+
+  it.each(["delete_channel", "nuke_channel"])(
+    "confirmed %s dispatches to channelExecutor with confirmedAction set",
+    async (action) => {
+      const guild = buildGuild();
+      const pending = consumePendingAction(
+        createPendingAction({
+          action,
+          input: { channel_name: "general" },
+          requiredPerm: PermissionFlagsBits.ManageChannels,
+          message: { channel: { id: "channel-1" }, client: guild.client },
+          ctx: { guild, aiInitiated: true },
+        }),
+      );
+      const ok = await commitPendingAction(pending, {
+        guild,
+        member: buildPermedMember(PermissionFlagsBits.ManageChannels, "clicker-mod"),
+        clickedBy: { id: "clicker-mod", tag: "clicker#0001" },
+        deps: { findMember: () => null, checkHierarchy: () => null, logAudit },
+      });
+      expect(ok.ok).toBe(true);
+      expect(channelExec).toHaveBeenCalledTimes(1);
+      const [calledAction, calledInput, replayMsg, replayCtx] = (channelExec as any).mock.calls[0];
+      expect(calledAction).toBe(action);
+      expect(calledInput).toEqual({ channel_name: "general" });
+      expect(replayMsg.author.id).toBe("clicker-mod"); // attribution = clicker
+      expect(replayMsg.member.id).toBe("clicker-mod"); // gates re-run vs clicker
+      expect(replayCtx.confirmedAction).toBe(true);    // no re-defer loop
+    },
+  );
+
+  it.each(["delete_role", "mass_role"])(
+    "confirmed %s dispatches to roleExecutor with confirmedAction set",
+    async (action) => {
+      const guild = buildGuild();
+      const pending = consumePendingAction(
+        createPendingAction({
+          action,
+          input: { role_name: "muted" },
+          requiredPerm: PermissionFlagsBits.ManageRoles,
+          message: { channel: { id: "channel-1" }, client: guild.client },
+          ctx: { guild, aiInitiated: true },
+        }),
+      );
+      const ok = await commitPendingAction(pending, {
+        guild,
+        member: buildPermedMember(PermissionFlagsBits.ManageRoles, "clicker-mod"),
+        clickedBy: { id: "clicker-mod", tag: "clicker#0001" },
+        deps: { findMember: () => null, checkHierarchy: () => null, logAudit },
+      });
+      expect(ok.ok).toBe(true);
+      expect(roleExec).toHaveBeenCalledTimes(1);
+      const [calledAction, , replayMsg, replayCtx] = (roleExec as any).mock.calls[0];
+      expect(calledAction).toBe(action);
+      expect(replayMsg.author.id).toBe("clicker-mod");
+      expect(replayCtx.confirmedAction).toBe(true);
+    },
+  );
 
   it("confirmed ban refuses non-bannable targets and keeps logs/audit silent", async () => {
     const guild = buildGuild();

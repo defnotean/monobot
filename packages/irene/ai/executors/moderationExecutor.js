@@ -944,8 +944,9 @@ export async function execute(toolName, input, message, ctx) {
       // entry could let a non-mod search arbitrary channels via the AI path.
       if (!_memberHasPerm(message.member, PermissionFlagsBits.ManageMessages, guild))
         return "You can't search messages.";
-      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
-      if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const targetChannel = input.channel_id || input.channel_name;
+      const ch = targetChannel ? findChannel(guild, targetChannel) : message.channel;
+      if (!ch) return `Couldn't find channel "${targetChannel}"`;
 
       const maxScan = Math.min(Math.max(input.limit || 200, 1), 500);
       const wantFirst = (input.position ?? "first") === "first";
@@ -1013,8 +1014,9 @@ export async function execute(toolName, input, message, ctx) {
         });
         if (purgeDefer) return purgeDefer;
       }
-      const ch = input.channel_name ? findChannel(guild, input.channel_id || input.channel_name) : message.channel;
-      if (!ch) return `Couldn't find channel "${input.channel_name}"`;
+      const targetChannel = input.channel_id || input.channel_name;
+      const ch = targetChannel ? findChannel(guild, targetChannel) : message.channel;
+      if (!ch) return `Couldn't find channel "${targetChannel}"`;
 
       const maxScan = Math.min(Math.max(input.count || 100, 1), 500);
 

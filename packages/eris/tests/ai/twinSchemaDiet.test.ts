@@ -19,6 +19,14 @@ describe("ask_irene schema diet", () => {
       message: "hello",
       channel_id: "123",
     });
+    expect(normalizeAskIreneArgs({
+      command: "nickname",
+      params: { target_username: "alice", nickname: "Spark" },
+    })).toEqual({
+      command: "nickname",
+      target_username: "alice",
+      nickname: "Spark",
+    });
   });
 
   it("uses one params object instead of per-command flat schema keys", () => {
@@ -26,5 +34,6 @@ describe("ask_irene schema diet", () => {
     expect(askIrene.input_schema.properties).toHaveProperty("params");
     expect(askIrene.input_schema.properties).not.toHaveProperty("target_username");
     expect(askIrene.input_schema.properties.command.enum).toContain("purge");
+    expect(askIrene.input_schema.properties.params.description).toMatch(/nickname\{target_username,nickname/);
   });
 });

@@ -4,7 +4,7 @@ import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { execute as executeChannel } from "../../../ai/executors/channelExecutor.js";
 // @ts-expect-error - importing JS module without types
 import { execute as executeRole } from "../../../ai/executors/roleExecutor.js";
-import { makeChannel, makeGuild, makeMember, makePermissions, makeUser } from "../../_helpers/mockDiscord.js";
+import { makeChannel, makeGuild, makeMember, makePermissions, makeRole, makeUser } from "../../_helpers/mockDiscord.js";
 
 function buildHarness({
   actorPermissions = [PermissionFlagsBits.ManageChannels],
@@ -95,5 +95,34 @@ describe("channel executor permission hardening", () => {
 
     expect(result).toMatch(/created text channel/i);
     expect(guild.channels.create).toHaveBeenCalled();
+  });
+
+  it("targets grouped channel.id for set_channel_permissions instead of the current channel", async () => {
+    const { guild, message, ctx } = buildHarness();
+    const targetChannel = makeChannel({ id: "123456789012345678", name: "rules", guild });
+    const role = makeRole({ id: "role-123", name: "Member" });
+    guild.channels.cache.set(targetChannel.id, targetChannel);
+    guild.roles.cache.set(role.id, role);
+    ctx.findChannel = vi.fn((g: any, query: string) =>
+      g.channels.cache.get(query) ??
+      g.channels.cache.find((c: any) => c.name.toLowerCase() === query.toLowerCase()) ??
+      null
+    );
+    ctx.findRole = vi.fn(() => role);
+
+    const result = await executeChannel("set_channel_permissions", {
+      channel: { id: targetChannel.id },
+      target: "Member",
+      target_type: "role",
+      allow: ["send"],
+    }, message, ctx);
+
+    expect(String(result)).toMatch(/#rules/i);
+    expect(targetChannel.permissionOverwrites.edit).toHaveBeenCalledWith(
+      role.id,
+      { SendMessages: true },
+      expect.any(Object),
+    );
+    expect(message.channel.permissionOverwrites.edit).not.toHaveBeenCalled();
   });
 });

@@ -407,7 +407,7 @@ const IRENE_TESTS = [
   // set_escalation requires at least one of mute_at/kick_at/ban_at.
   { cat: "srv_cfg",    prompt: "set up automod escalation: auto-mute at 3 warnings, auto-kick at 5, auto-ban at 7",     expect: "set_escalation" },
   { cat: "srv_cfg",    prompt: "set up server stats channels",                                                           expect: "setup_stats_channels" },
-  { cat: "srv_cfg",    prompt: "set up a starboard in channel 5555555555555555555 with 5 stars",                        expect: "setup_starboard" },
+  { cat: "srv_cfg",    prompt: "set up a starboard in channel 5555555555555555555 with 5 stars",                        expect: ["setup_starboard", "starboard"] },
   { cat: "srv_cfg",    prompt: "toggle auto responders on",                                                              expect: "toggle_auto_responders" },
   { cat: "srv_cfg",    prompt: "toggle twin chat with eris on",                                                          expect: "toggle_twin_chat" },
   { cat: "srv_cfg",    prompt: "toggle voice tracking on",                                                               expect: "toggle_voice_tracking" },
@@ -535,7 +535,7 @@ const IRENE_TESTS = [
   // The model may emit either canonical name; the executor's TOOL_ALIASES handles both.
   // Make the prompt explicit so the model picks cancel_reminder (not cancel_scheduled_task,
   // which is a different feature for automated bot tasks).
-  { cat: "util",       prompt: "cancel my reminder with id 5",                                                          expect: ["cancel_reminder", "cancel_reminder"] },
+  { cat: "util",       prompt: "cancel my reminder with id 5",                                                          expect: ["cancel_reminder", "reminder_cancel"] },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────

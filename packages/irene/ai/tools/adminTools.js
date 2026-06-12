@@ -32,6 +32,58 @@ const FIELD_SCHEMA = {
   },
 };
 
+const WELCOME_FIELD_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    description: "Built-in field: key+show/name. Custom field: name+value.",
+    properties: {
+      key: { type: "string", enum: ["member", "age", "joined"] },
+      show: { type: "boolean" },
+      name: { type: "string" },
+      value: { type: "string" },
+      inline: { type: "boolean" },
+    },
+  },
+};
+
+const BUTTON_SCHEMA = {
+  type: "object",
+  properties: {
+    label: { type: "string" },
+    style: { type: "string", enum: ["primary", "secondary", "success", "danger", "link"] },
+    emoji: { type: "string" },
+    role_id: { type: "string", description: "Role toggle target. Use one of role_id, url, or action." },
+    url: { type: "string", description: "Link button URL. Use with style=link." },
+    action: { type: "string", enum: ["open_ticket"], description: "Built-in action button." },
+  },
+  required: ["label", "style"],
+};
+
+const DROPDOWN_SCHEMA = {
+  type: "object",
+  properties: {
+    placeholder: { type: "string" },
+    exclusive: { type: "boolean" },
+    min: { type: "number" },
+    max: { type: "number" },
+    options: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          role_id: { type: "string" },
+          description: { type: "string" },
+          emoji: { type: "string" },
+        },
+        required: ["label", "role_id"],
+      },
+    },
+  },
+  required: ["options"],
+};
+
 export const ADMIN_TOOLS = [
   // ─── Channel Management ─────────────────────────────────────────────
   {
@@ -573,7 +625,7 @@ export const ADMIN_TOOLS = [
         media: { type: "object", properties: { thumbnail_url: { type: "string" }, banner_url: { type: "string" }, show_thumbnail: { type: "boolean" }, show_banner: { type: "boolean" } } },
         author: { type: "object", properties: { show: { type: "boolean" }, name: { type: "string" }, icon_url: { type: "string" }, url: { type: "string" } } },
         footer: { type: "object", properties: { show: { type: "boolean" }, text: { type: "string" }, icon_url: { type: "string" }, timestamp: { type: "boolean" } } },
-        fields: { type: "array", items: { type: "object", properties: { key: { type: "string", enum: ["member", "age", "joined"] }, show: { type: "boolean" }, name: { type: "string" } }, required: ["key"] } },
+        fields: WELCOME_FIELD_SCHEMA,
         ping_roles: { type: "string", description: "Role names/IDs to ping, or none to clear." },
       },
     },
@@ -1020,7 +1072,7 @@ export const ADMIN_TOOLS = [
         channel: { type: "object", properties: { name: { type: "string" }, id: { type: "string" } }, description: "Target channel." },
         content: { type: "string", description: "Plain text above the embed." },
         embed: { type: "object", properties: { title: { type: "string" }, description: { type: "string" }, color: { type: "string" }, image: { type: "string" }, thumbnail: { type: "string" }, author: { type: "object", properties: { name: { type: "string" }, icon: { type: "string" } } }, footer: { type: "object", properties: { text: { type: "string" }, icon: { type: "string" } } }, fields: FIELD_SCHEMA, timestamp: { type: "boolean" } } },
-        components: { type: "object", properties: { buttons: { type: "array", items: { type: "object" } }, dropdown: { type: "object" } } },
+        components: { type: "object", properties: { buttons: { type: "array", items: BUTTON_SCHEMA }, dropdown: DROPDOWN_SCHEMA } },
       },
       required: ["channel"],
     },

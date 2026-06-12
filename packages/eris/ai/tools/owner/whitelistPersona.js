@@ -144,7 +144,7 @@ export const WHITELIST_PERSONA_TOOLS = [
         },
         params: {
           type: "object",
-          description: "Command args: purge{count}; slowmode{seconds}; nickname/ban/kick/warn/timeout{target_username,reason,duration}; announce{message}; channel/role commands{name,channel_id,role_name,color,topic,type,private,category}.",
+          description: "Command args: purge{count}; slowmode{seconds}; nickname{target_username,nickname}; ban/kick/warn/timeout{target_username,reason,duration}; announce{message}; channel/role{name,channel_id,role_name,color,topic,type,private,category}.",
         },
       },
       required: ["command"],
