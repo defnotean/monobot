@@ -70,6 +70,14 @@ function appendCatalogLines(catalog, tools) {
   return `${catalog}\n- demoted_core: ${additions.join(", ")}`;
 }
 
+export function demotedCoreNamesForMessage(text) {
+  const demoted = new Set();
+  for (const [name, intentPattern] of Object.entries(DEMOTABLE_CORE_TOOLS)) {
+    if (!intentPattern.test(text || "")) demoted.add(name);
+  }
+  return demoted;
+}
+
 function compactTier1ForTurn(tier1, text) {
   const kept = [];
   const demoted = [];
@@ -100,10 +108,12 @@ function compactTier1ForTurn(tier1, text) {
  *   to the system instruction (empty string when no Tier-2 tools).
  */
 export function pickToolProfile({ isTwinMsg, isOwner, cleanMessage, channelKey = null }) {
+  const demotedCores = isTwinMsg ? new Set() : demotedCoreNamesForMessage(cleanMessage);
   const { tier1, tier2Catalog, tier2Names } = registry.selectByMessage(cleanMessage, {
     isOwner,
     isTwin: isTwinMsg,
     channelKey,
+    demotedCores,
     everyoneTools: EVERYONE_TOOLS,
     ownerTools: OWNER_TOOLS,
   });

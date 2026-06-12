@@ -5,7 +5,27 @@
 
 import { log } from "../utils/logger.js";
 
-export const MAX_TIER1_TOOLS = 32;
+// ─── Tier-1 cap ─────────────────────────────────────────────────────────────
+// Hard ceiling on full schemas sent per turn (the always-include core may
+// exceed it — see the floor in selectByMessage — so core tools are never
+// silently dropped). Override with TOOLS_TIER1_MAX: local 14B deployments
+// want 16–20; hosted defaults to 32 (the previous hardcoded value — no
+// behavior change when unset). Read once at module init.
+const _tier1MaxEnv = parseInt(process.env.TOOLS_TIER1_MAX || "", 10);
+export const MAX_TIER1_TOOLS =
+  Number.isInteger(_tier1MaxEnv) && _tier1MaxEnv > 0 ? _tier1MaxEnv : 32;
+
+/**
+ * Channel key shape consumed by Irene two-tier selection.
+ * Server turns are keyed by guild+user; DMs are per-user.
+ * @param {any} message
+ * @returns {string|null}
+ */
+export function channelKeyFor(message) {
+  if (!message) return null;
+  const userId = message.author?.id || "unknown";
+  return message.guild ? `${message.guild.id}-${userId}` : `dm-${userId}`;
+}
 
 class ToolRegistry {
   constructor() {
@@ -85,16 +105,15 @@ class ToolRegistry {
       .filter((entry) => entry.tool);
     const alwaysAccessible = accessible.filter((entry) => this._alwaysInclude.has(entry.name));
     const tier1Limit = Math.max(MAX_TIER1_TOOLS, alwaysAccessible.length);
-    const tier1NameSet = new Set(
-      accessible
-        .filter((entry) => scores.has(entry.name))
-        .sort((a, b) => {
-          const scoreDelta = (scores.get(b.name) || 0) - (scores.get(a.name) || 0);
-          return scoreDelta || a.index - b.index;
-        })
-        .slice(0, tier1Limit)
-        .map((entry) => entry.name)
-    );
+    const ranked = accessible
+      .filter((entry) => scores.has(entry.name))
+      .sort((a, b) => {
+        const scoreDelta = (scores.get(b.name) || 0) - (scores.get(a.name) || 0);
+        return scoreDelta || a.index - b.index;
+      });
+    const tier1NameSet = new Set(ranked.slice(0, tier1Limit).map((entry) => entry.name));
+
+    this._shadowLogCaps(ranked, alwaysAccessible.length, tier1NameSet);
 
     // Split into tiers. Tier 1 is bounded to keep per-turn schema volume
     // predictable; any relevant tools beyond the cap remain reachable by exact
@@ -126,6 +145,37 @@ class ToolRegistry {
     return { tier1, tier2Catalog, tier2Names };
   }
 
+  // ─── Shadow cap telemetry ───
+
+  /**
+   * When TOOLS_SHADOW_LOG is truthy, log what Tier-1 caps of 16 and 20 WOULD
+   * have dropped from this selection (tool names) — rollout telemetry for
+   * tuning TOOLS_TIER1_MAX. Zero behavior change: the selection itself is
+   * untouched and nothing is logged when the env is unset. The always-include
+   * floor applies to the hypothetical caps too, mirroring the real cap.
+   * @param {Array<{ name: string }>} ranked
+   * @param {number} alwaysCount
+   * @param {Set<string>} tier1NameSet
+   */
+  _shadowLogCaps(ranked, alwaysCount, tier1NameSet) {
+    if (!process.env.TOOLS_SHADOW_LOG) return;
+    const droppedAt = (cap) => {
+      const kept = new Set(
+        ranked.slice(0, Math.max(cap, alwaysCount)).map((entry) => entry.name)
+      );
+      return ranked
+        .filter((entry) => tier1NameSet.has(entry.name) && !kept.has(entry.name))
+        .map((entry) => entry.name);
+    };
+    const drop16 = droppedAt(16);
+    const drop20 = droppedAt(20);
+    log(
+      `[REGISTRY] shadow-cap tier1=${tier1NameSet.size} ` +
+      `cap16-drops(${drop16.length})=[${drop16.join(", ")}] ` +
+      `cap20-drops(${drop20.length})=[${drop20.join(", ")}]`
+    );
+  }
+
   // ─── Usage tracking ───
 
   trackUsage(channelKey, toolName) {
@@ -152,6 +202,10 @@ class ToolRegistry {
 
   getToolByName(name) {
     return this._tools.get(name) || null;
+  }
+
+  getDeclaration(name) {
+    return this.getToolByName(name);
   }
 
   getAllToolNames() {

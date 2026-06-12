@@ -14,7 +14,8 @@ import { log } from "../utils/logger.js";
 import { EVERYONE_TOOLS, OWNER_TOOLS } from "./tools.js";
 import { LRUCache } from "@defnotean/shared/LRUCache";
 import { checkToolRateLimit } from "@defnotean/shared/toolRateLimit";
-import { getEconomyMutatingTools } from "./toolRegistry.js";
+import { createUnknownToolTracker } from "@defnotean/shared/unknownTools";
+import { channelKeyFor, getEconomyMutatingTools, registry as toolRegistry } from "./toolRegistry.js";
 
 // ─── Existing JS sub-executors ──────────────────────────────────────────────
 import { executeEconomyTool } from "./economyExecutor.js";
@@ -262,10 +263,13 @@ if (process.env.ERIS_SKIP_ALIAS_VALIDATION !== "1") {
 }
 
 // Counter for AI-hallucinated tools. Logged on first occurrence and every 10th
-// thereafter so repeated hallucinations are visible without log spam. Declared
-// up here so the executeTool top-of-function unknown-tool path can reference
-// it (the inner sub-executor fallback below uses the same Map).
-const _unknownToolCounts = new Map();
+// thereafter so repeated hallucinations are visible without log spam. Bounded
+// by the shared tracker so one-off hallucinated names cannot grow forever.
+const unknownToolTracker = createUnknownToolTracker();
+export const _unknownToolCounts = unknownToolTracker._unknownToolCounts;
+export const clearUnknownToolCounts = unknownToolTracker.clearUnknownToolCounts;
+export const pruneUnknownToolCounts = unknownToolTracker.pruneUnknownToolCounts;
+const recordUnknownTool = unknownToolTracker.recordUnknownTool;
 
 // ─── Tool Result Cache (LRU, 200 entries, 15s TTL) ────────────────────────
 const _toolCache = new LRUCache(200, 15_000);
@@ -302,6 +306,7 @@ const CACHE_INVALIDATING_TOOLS = new Set([
   ...getEconomyMutatingTools(),
   ...CACHE_INVALIDATING_EXTRAS,
 ]);
+const RECENT_USAGE_SKIP_TOOLS = new Set(getEconomyMutatingTools());
 
 function getCachedResult(toolName, args, userId) {
   if (!CACHEABLE_TOOLS.has(toolName)) return null;
@@ -331,6 +336,12 @@ function invalidateUserCache(userId) {
   return _toolCache.deleteGroup(userId);
 }
 
+function trackSuccessfulUsage(toolName, message, result) {
+  if (RECENT_USAGE_SKIP_TOOLS.has(toolName)) return;
+  if (typeof result === "string" && /^(Error:|unknown tool:)/i.test(result)) return;
+  toolRegistry.trackUsage(channelKeyFor(message), toolName);
+}
+
 // Tools that also mutate a second user's state (transfers, rob, trade, marry).
 // For these we additionally invalidate the target user's cache if we can find
 // their ID in the tool input.
@@ -346,8 +357,7 @@ export async function executeTool(toolName, input, message) {
   // of getting a vague "unknown tool" string that obscures the fix.
   const resolution = resolveToolName(toolName);
   if (!resolution.known) {
-    _unknownToolCounts.set(resolution.originalName, (_unknownToolCounts.get(resolution.originalName) || 0) + 1);
-    const count = _unknownToolCounts.get(resolution.originalName);
+    const count = recordUnknownTool(resolution.originalName);
     if (count === 1 || count % 10 === 0) {
       log(`[EXECUTOR] Unknown tool after alias: original=${resolution.originalName} normalized=${resolution.error.normalized} (hit #${count})`);
     }
@@ -382,6 +392,7 @@ export async function executeTool(toolName, input, message) {
   const cached = getCachedResult(toolName, input, userId);
   if (cached !== null) {
     log(`[EXECUTOR] Cache hit: ${toolName}`);
+    trackSuccessfulUsage(toolName, message, cached);
     return cached;
   }
 
@@ -398,6 +409,7 @@ export async function executeTool(toolName, input, message) {
     }
   }
 
+  trackSuccessfulUsage(toolName, message, result);
   setCachedResult(toolName, input, userId, result);
   return result;
 }
@@ -507,8 +519,7 @@ async function _executeToolInner(toolName, input, message) {
   // Gemini/NVIDIA keeps inventing the same nonexistent tool, we want
   // to know so we can either add it or tighten the prompt.
   const userId = message?.author?.id || "unknown";
-  _unknownToolCounts.set(toolName, (_unknownToolCounts.get(toolName) || 0) + 1);
-  const count = _unknownToolCounts.get(toolName);
+  const count = recordUnknownTool(toolName);
   const argPreview = JSON.stringify(input || {}).slice(0, 120);
   if (count === 1 || count % 10 === 0) {
     log(`[EXECUTOR] Unknown tool: ${toolName} (hit #${count}, user ${userId}, args: ${argPreview})`);

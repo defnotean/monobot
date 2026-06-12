@@ -23,6 +23,8 @@ import {
 } from "../../ai/executor.js";
 // @ts-expect-error - importing JS module without types
 import { ADMIN_TOOLS, EVERYONE_TOOLS } from "../../ai/tools.js";
+// @ts-expect-error - importing JS module without types
+import { channelKeyFor, registry } from "../../ai/toolRegistry.js";
 
 const realToolNames = new Set(
   [...ADMIN_TOOLS, ...EVERYONE_TOOLS].map((t: { name: string }) => t.name)
@@ -73,5 +75,37 @@ describe("executor alias validation", () => {
     // log throttling has a real count to gate on).
     await executeTool(fakeName, { foo: "bar" }, message);
     expect(_unknownToolCounts.get(fakeName)).toBe(2);
+  });
+
+  it("tracks successful dispatches under the same channel key used by selection", async () => {
+    const message: any = {
+      author: { id: "111111111111111114", username: "tester" },
+      guild: { id: "guild-usage-irene" },
+      channel: { id: "channel-usage-irene" },
+      content: "",
+    };
+    const key = channelKeyFor(message);
+    registry._recentUsage.delete(key);
+
+    const result = await executeTool("calculate", { expression: "2 + 3" }, message);
+
+    expect(String(result)).toContain("5");
+    expect(registry._recentUsage.get(key)?.[0]).toBe("calculate");
+    expect(key).toBe("guild-usage-irene-111111111111111114");
+  });
+
+  it("does not track unknown dispatches as recent successful usage", async () => {
+    const fakeName = `__hallucinated_recent_${Math.random().toString(36).slice(2)}`;
+    const message: any = {
+      author: { id: "111111111111111115", username: "tester" },
+      guild: null,
+      content: "",
+    };
+    const key = channelKeyFor(message);
+    registry._recentUsage.delete(key);
+
+    await executeTool(fakeName, {}, message);
+
+    expect(registry._recentUsage.has(key)).toBe(false);
   });
 });

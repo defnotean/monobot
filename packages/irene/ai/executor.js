@@ -95,6 +95,7 @@ import { TOOL_ALIASES } from "./toolAliases.js";
 import { ADMIN_TOOLS } from "./tools.js";
 import { isAdminMember } from "../utils/permissions.js";
 import { recordUnknownTool } from "./unknownTools.js";
+import { channelKeyFor, registry as toolRegistry } from "./toolRegistry.js";
 import {
   findMember,
   findChannel,
@@ -375,6 +376,11 @@ export async function postDeferralIfNeeded(result, channel) {
   }
 }
 
+function trackSuccessfulUsage(toolName, message, result) {
+  if (typeof result === "string" && /^(Error:|Unknown action:)/i.test(result)) return;
+  toolRegistry.trackUsage(channelKeyFor(message), toolName);
+}
+
 export async function executeTool(toolName, input, message, opts = {}) {
   input ||= {};
   // Auto-correct common Gemini tool name mistakes
@@ -403,6 +409,7 @@ export async function executeTool(toolName, input, message, opts = {}) {
   const cached = getCachedResult(toolName, input, guildId);
   if (cached !== null) {
     log(`[EXECUTOR] Cache hit: ${toolName}`);
+    trackSuccessfulUsage(toolName, message, cached);
     return cached;
   }
 
@@ -418,6 +425,7 @@ export async function executeTool(toolName, input, message, opts = {}) {
   // refusal logic stringify it. setCachedResult already no-ops for these
   // (ban/kick/tempban/purge aren't CACHEABLE_TOOLS), but guard explicitly so a
   // future cacheable tool can't accidentally stash one.
+  trackSuccessfulUsage(toolName, message, result);
   if (isDeferralResult(result)) return result;
   setCachedResult(toolName, input, guildId, result);
   return result;

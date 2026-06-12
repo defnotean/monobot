@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickToolProfile } from "../../events/messageCreate/toolProfiles.js";
+import { demotedCoreNamesForMessage, pickToolProfile } from "../../events/messageCreate/toolProfiles.js";
 import { EVERYONE_TOOLS, OWNER_TOOLS } from "../../ai/tools.js";
 
 // Pull tool names out of the provider-formatted Tier-1 schemas.
@@ -65,6 +65,16 @@ describe("pickToolProfile two-tier shape (Eris)", () => {
     expect(catalog).toContain("ask_irene");
     expect(declared).not.toContain("create_meme");
     expect(catalog).toContain("create_meme");
+  });
+
+  it("exposes the demoted core-name set used by registry selection", () => {
+    const casual = demotedCoreNamesForMessage("hey");
+    expect(casual).toContain("ask_irene");
+    expect(casual).toContain("create_meme");
+    expect(casual).not.toContain("remember_fact");
+
+    const intent = demotedCoreNamesForMessage("ask Irene what she thinks");
+    expect(intent).not.toContain("ask_irene");
   });
 
   it("sends materially smaller Tier-1 schemas on ordinary chat turns", () => {

@@ -2,7 +2,12 @@
 
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
+import { stripReasoning } from "@defnotean/shared/stripReasoning";
+import { routeCatalogTool, routeRescuedToolCall, withRouterTool } from "@defnotean/shared/toolRouter";
 import { executeTool, postDeferralIfNeeded } from "../executor.js";
+import { toolCoachingBlock } from "../toolCoaching.js";
+import { TOOL_ALIASES } from "../toolAliases.js";
+import { registry } from "../toolRegistry.js";
 
 const OC = config.openaiCompat || {};
 let _apiKeyCursor = 0;
@@ -52,16 +57,59 @@ function sanitizeForOpenAI(schema) {
   return cleaned;
 }
 
+function trimNoMidWord(text, max) {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+  if (raw.length <= max) return raw;
+  const slice = raw.slice(0, max);
+  const cut = slice.replace(/\s+\S*$/, "");
+  return (cut || slice).trim();
+}
+
+function firstSentence(text) {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+  const match = raw.match(/^.*?(?:[.!?](?:\s|$)|$)/);
+  return (match?.[0] || raw).trim();
+}
+
+function compactToolDescription(text) {
+  return trimNoMidWord(firstSentence(text), 160);
+}
+
+function compactParamDescriptions(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+  if (Array.isArray(schema)) return schema.map(compactParamDescriptions);
+  const out = {};
+  for (const [key, value] of Object.entries(schema)) {
+    out[key] = key === "description" && typeof value === "string"
+      ? trimNoMidWord(value, 80)
+      : compactParamDescriptions(value);
+  }
+  return out;
+}
+
+function compactOpenAITool(tool) {
+  return {
+    ...tool,
+    function: {
+      ...tool.function,
+      description: compactToolDescription(tool.function?.description || ""),
+      parameters: compactParamDescriptions(tool.function?.parameters || { type: "object", properties: {} }),
+    },
+  };
+}
+
 const _toolCache = new WeakMap();
 
 export function toOpenAICompatTools(tools) {
   if (!tools || !tools.length) return undefined;
+  const compactSchemas = Boolean(OC.compactSchemas);
   const cached = _toolCache.get(tools);
-  if (cached) return cached;
+  if (cached?.compactSchemas === compactSchemas) return cached.result;
 
   if (tools[0]?.type === "function" && tools[0]?.function?.name) {
-    _toolCache.set(tools, tools);
-    return tools;
+    const result = compactSchemas ? tools.map(compactOpenAITool) : tools;
+    _toolCache.set(tools, { compactSchemas, result });
+    return result;
   }
 
   let raw = tools;
@@ -69,50 +117,20 @@ export function toOpenAICompatTools(tools) {
 
   const result = raw
     .filter((tool) => tool && tool.name)
-    .map((tool) => ({
-      type: "function",
-      function: {
+    .map((tool) => {
+      const functionDecl = {
         name: tool.name,
         description: tool.description || "",
         parameters: sanitizeForOpenAI(tool.input_schema || tool.parameters) || { type: "object", properties: {} },
-      },
-    }));
-  _toolCache.set(tools, result);
+      };
+      if (compactSchemas) {
+        functionDecl.description = compactToolDescription(functionDecl.description);
+        functionDecl.parameters = compactParamDescriptions(functionDecl.parameters);
+      }
+      return { type: "function", function: functionDecl };
+    });
+  _toolCache.set(tools, { compactSchemas, result });
   return result;
-}
-
-function routerToolDefinition() {
-  return {
-    type: "function",
-    function: {
-      name: "use_tool",
-      description: "Call a catalog-only tool by exact name. Use only for tools listed in OTHER AVAILABLE TOOLS.",
-      parameters: {
-        type: "object",
-        properties: {
-          tool_name: { type: "string", description: "Exact catalog tool name to call." },
-          arguments: { type: "object", description: "Arguments for that tool." },
-        },
-        required: ["tool_name"],
-      },
-    },
-  };
-}
-
-function withRouterTool(openaiTools, routerToolNames = []) {
-  if (!Array.isArray(routerToolNames) || routerToolNames.length === 0) return openaiTools;
-  return [...(openaiTools || []), routerToolDefinition()];
-}
-
-function routeCatalogTool(name, args, routerToolNames = []) {
-  if (name !== "use_tool") return { ok: true, toolName: name, args: args || {} };
-  const allowed = new Set(routerToolNames || []);
-  const raw = args || {};
-  const toolName = String(raw.tool_name || raw.name || raw.tool || "").trim();
-  if (!toolName) return { ok: false, result: "Error: use_tool requires tool_name" };
-  if (!allowed.has(toolName)) return { ok: false, result: `Error: "${toolName}" is not available in this turn's catalog` };
-  const routedArgs = raw.arguments ?? raw.args ?? raw.input ?? raw.parameters ?? {};
-  return { ok: true, toolName, args: routedArgs && typeof routedArgs === "object" ? routedArgs : {} };
 }
 
 function apiKeys() {
@@ -384,6 +402,15 @@ function buildBody({ model, messages, tools }) {
     body.tools = tools;
     if (OC.toolChoice !== "none") body.tool_choice = OC.toolChoice || "auto";
   }
+  // Operator passthrough for provider-specific fields the /v1 schema can't
+  // express (e.g. Ollama options.num_ctx / think:false). Shallow-merged AFTER
+  // the standard fields; messages, tools, and model always win.
+  if (OC.extraBody && typeof OC.extraBody === "object" && !Array.isArray(OC.extraBody)) {
+    for (const [key, value] of Object.entries(OC.extraBody)) {
+      if (key === "messages" || key === "tools" || key === "model") continue;
+      body[key] = value;
+    }
+  }
   return body;
 }
 
@@ -396,7 +423,7 @@ export async function quickReply(_client, systemInstruction, userText, context) 
         { role: "user", content: String(userText || "") },
       ],
     }), config.timeouts?.quickReply ?? 15_000);
-    const text = data.choices?.[0]?.message?.content?.trim() || null;
+    const text = stripReasoning(data.choices?.[0]?.message?.content || "") || null;
     return text;
   } catch (err) {
     log(`[${OC.providerName || "OpenAICompat"}] quickReply failed: ${err.message}`);
@@ -474,14 +501,28 @@ export async function runOpenAICompatChat(arg1, ...rest) {
   if (!executor) executor = (toolName, toolArgs) => executeTool(toolName, toolArgs, msgCtx, { aiInitiated: true });
 
   const model = useFastModel ? (OC.fastModel || OC.model) : OC.model;
-  const openaiTools = withRouterTool(toOpenAICompatTools(tools), routerToolNames);
+  const baseOpenaiTools = toOpenAICompatTools(tools);
+  const tier1ToolNames = (baseOpenaiTools || []).map((tool) => tool.function?.name).filter(Boolean);
+  const openaiTools = withRouterTool(baseOpenaiTools, routerToolNames, { format: "openai" });
+  const routerOptions = {
+    routerToolNames: routerToolNames || [],
+    tier1ToolNames,
+    resolveAlias: (name) => Object.prototype.hasOwnProperty.call(TOOL_ALIASES, name) ? TOOL_ALIASES[name] : name,
+    getDeclaration: (name) => registry.getDeclaration(name),
+  };
   const userMessage = msgCtx?.userMessage || msgCtx?.content || "";
-  const messages = toMessages(systemInstruction, history, userMessage);
+  // Env-gated coaching block — concrete request→tool mappings are the cheapest
+  // quality lever for mid-size local models (see ai/toolCoaching.js).
+  let sysInstruction = systemInstruction;
+  if (OC.toolCoaching && openaiTools?.length) {
+    sysInstruction = `${systemInstruction || ""}${toolCoachingBlock(openaiTools.length)}`;
+  }
+  const messages = toMessages(sysInstruction, history, userMessage);
   const toolsUsed = [];
   let finalText = "";
   const calledSignatures = new Set();
   const webSearchResults = new Map();
-  const maxIterations = Math.max(1, OC.maxIterations || 40);
+  const maxIterations = Math.max(1, OC.maxIterations || 12);
   const shouldPersistHistory = Array.isArray(history) && typeof arg1 === "object" && arg1;
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
@@ -504,6 +545,15 @@ export async function runOpenAICompatChat(arg1, ...rest) {
       recordFailure("empty response");
       return { text: "", toolsUsed };
     }
+
+    // Reasoning models (Qwen3 / DeepSeek-R1 class) leak chain-of-thought as
+    // <think> blocks inside content and/or a separate reasoning_content /
+    // reasoning field. Strip the blocks BEFORE any use — including the
+    // hallucinated-call rescue parse below — and discard the reasoning fields
+    // so CoT never reaches Discord, history, or the next request body.
+    if (typeof msg.content === "string") msg.content = stripReasoning(msg.content) || null;
+    delete msg.reasoning_content;
+    delete msg.reasoning;
 
     if (!msg.tool_calls?.length) {
       finalText = msg.content || "";
@@ -530,13 +580,16 @@ export async function runOpenAICompatChat(arg1, ...rest) {
           }
         }
 
-        if (parsedOk && fnName && openaiTools?.some((t) => t.function.name === fnName)) {
+        const rescued = parsedOk && fnName
+          ? routeRescuedToolCall(fnName, fnArgs, { ...routerOptions, offeredToolNames: tier1ToolNames })
+          : null;
+        if (rescued) {
           msg.tool_calls = [{
             id: `call_hallucinated_${Date.now()}`,
             type: "function",
             function: {
-              name: fnName,
-              arguments: typeof fnArgs === "string" ? fnArgs : JSON.stringify(fnArgs)
+              name: rescued.name,
+              arguments: JSON.stringify(rescued.args)
             }
           }];
           msg.content = null;
@@ -552,7 +605,7 @@ export async function runOpenAICompatChat(arg1, ...rest) {
         if (toolsUsed.length > 0 && OC.chatModel && OC.chatModel !== model) {
           try {
             const wrap = await postChat(buildBody({ model: OC.chatModel, messages, tools: [] }), config.timeouts?.workerSlow ?? 60_000);
-            const wrapText = wrap.choices?.[0]?.message?.content?.trim();
+            const wrapText = stripReasoning(wrap.choices?.[0]?.message?.content || "");
             if (wrapText) finalText = wrapText;
           } catch {}
         }
@@ -582,7 +635,7 @@ export async function runOpenAICompatChat(arg1, ...rest) {
         allDuplicates = false;
         return { call, fnName, fnArgs, duplicate: false, parseError };
       }
-      const routed = routeCatalogTool(fnName, fnArgs, routerToolNames);
+      const routed = routeCatalogTool(fnName, fnArgs, routerOptions);
       if (!routed.ok) {
         allDuplicates = false;
         return { call, fnName, fnArgs, duplicate: false, parseError, routeError: routed.result };
@@ -660,7 +713,7 @@ export async function runOpenAICompatChat(arg1, ...rest) {
         // so the model must respond with text. Uses chatModel for personality.
         try {
           const wrap = await postChat(buildBody({ model: OC.chatModel || model, messages, tools: [] }), config.timeouts?.workerSlow ?? 60_000);
-          finalText = wrap.choices?.[0]?.message?.content?.trim()
+          finalText = stripReasoning(wrap.choices?.[0]?.message?.content || "")
             || "i already checked that, but got stuck finishing the answer. try again in a sec";
         } catch {
           finalText = "i already checked that, but got stuck finishing the answer. try again in a sec";

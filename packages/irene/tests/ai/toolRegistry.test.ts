@@ -1,6 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { log } from "../../utils/logger.js";
 import { ADMIN_TOOLS, EVERYONE_TOOLS } from "../../ai/tools.js";
 import { MAX_TIER1_TOOLS, registry } from "../../ai/toolRegistry.js";
+
+// Capture registry log lines (shadow-cap telemetry assertions below) while
+// keeping the rest of the logger surface intact.
+vi.mock("../../utils/logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/logger.js")>();
+  return { ...actual, log: vi.fn() };
+});
+
+// Keyword-rich message that matches many categories at once — the worst-case
+// selection shape the cap exists to bound.
+const KITCHEN_SINK_MESSAGE =
+  "ban role channel ticket birthday vc music level invite server log youtube " +
+  "twitch github giveaway emoji thread search messages";
 
 // Parse the tool names out of a Tier-2 catalog block. Lines are
 // "- category: tool_one, tool_two".
@@ -157,5 +171,105 @@ describe("two-tier selection (Irene)", () => {
       expect(tier1Names).toContain(name);
       expect(catalog).not.toContain(name);
     }
+  });
+});
+
+describe("tier-1 cap (Irene)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const adminOpts = {
+    isAdmin: true,
+    adminTools: ADMIN_TOOLS,
+    everyoneTools: EVERYONE_TOOLS,
+  };
+
+  it("enforces the default cap of 32 on a kitchen-sink message", () => {
+    const { tier1 } = registry.selectByMessage(KITCHEN_SINK_MESSAGE, adminOpts);
+    expect(MAX_TIER1_TOOLS).toBe(32);
+    expect(tier1.length).toBeLessThanOrEqual(MAX_TIER1_TOOLS);
+  });
+
+  it("capped-out tools land in the Tier-2 catalog and names", () => {
+    const { tier1, tier2Catalog, tier2Names } = registry.selectByMessage(
+      KITCHEN_SINK_MESSAGE,
+      adminOpts
+    );
+    const accessible = new Set([...ADMIN_TOOLS, ...EVERYONE_TOOLS].map((t) => t.name));
+    // Completeness invariant: everything the cap dropped is still reachable
+    // by exact name (the executor dispatches by name regardless of tier, and
+    // the Tier-2 allowlist is built from these names).
+    expect(reachableNames(tier1, tier2Catalog)).toEqual(accessible);
+    expect(new Set([...tier1.map((t) => t.name), ...tier2Names])).toEqual(accessible);
+    expect(tier2Names.length).toBe(accessible.size - tier1.length);
+  });
+
+  it("respects TOOLS_TIER1_MAX from the environment", async () => {
+    vi.stubEnv("TOOLS_TIER1_MAX", "20");
+    vi.resetModules();
+    const { registry: freshRegistry, MAX_TIER1_TOOLS: freshMax } =
+      await import("../../ai/toolRegistry.js");
+    const { ADMIN_TOOLS: freshAdmin, EVERYONE_TOOLS: freshEveryone } =
+      await import("../../ai/tools.js");
+    expect(freshMax).toBe(20);
+    const { tier1 } = freshRegistry.selectByMessage(KITCHEN_SINK_MESSAGE, {
+      isAdmin: true,
+      adminTools: freshAdmin,
+      everyoneTools: freshEveryone,
+    });
+    expect(tier1.length).toBeLessThanOrEqual(
+      Math.max(20, freshRegistry.getStats().alwaysInclude)
+    );
+    expect(tier1.length).toBeLessThan(MAX_TIER1_TOOLS);
+    // Always-include core survives the tighter cap.
+    const tier1Names = new Set(tier1.map((t) => t.name));
+    for (const name of ["remember_fact", "web_search", "ask_eris", "reminder_set"]) {
+      expect(tier1Names).toContain(name);
+    }
+  });
+
+  it("falls back to the default when TOOLS_TIER1_MAX is not a positive integer", async () => {
+    vi.stubEnv("TOOLS_TIER1_MAX", "-3");
+    vi.resetModules();
+    const { MAX_TIER1_TOOLS: freshMax } = await import("../../ai/toolRegistry.js");
+    expect(freshMax).toBe(32);
+  });
+});
+
+describe("shadow cap logging (Irene)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const adminOpts = {
+    isAdmin: true,
+    adminTools: ADMIN_TOOLS,
+    everyoneTools: EVERYONE_TOOLS,
+  };
+  const logMock = vi.mocked(log);
+  const shadowLines = () =>
+    logMock.mock.calls.filter((call) => String(call[0]).includes("shadow-cap"));
+
+  it("emits one shadow-cap line per selection without changing the selection", () => {
+    vi.stubEnv("TOOLS_SHADOW_LOG", "");
+    const baseline = registry.selectByMessage(KITCHEN_SINK_MESSAGE, adminOpts);
+    logMock.mockClear();
+
+    vi.stubEnv("TOOLS_SHADOW_LOG", "1");
+    const shadowed = registry.selectByMessage(KITCHEN_SINK_MESSAGE, adminOpts);
+
+    expect(shadowed.tier1.map((t) => t.name)).toEqual(baseline.tier1.map((t) => t.name));
+    expect(shadowed.tier2Names).toEqual(baseline.tier2Names);
+    expect(shadowed.tier2Catalog).toEqual(baseline.tier2Catalog);
+    expect(shadowLines()).toHaveLength(1);
+    expect(String(shadowLines()[0][0])).toMatch(/cap16-drops.*cap20-drops/);
+  });
+
+  it("logs nothing when TOOLS_SHADOW_LOG is unset", () => {
+    vi.stubEnv("TOOLS_SHADOW_LOG", "");
+    logMock.mockClear();
+    registry.selectByMessage(KITCHEN_SINK_MESSAGE, adminOpts);
+    expect(shadowLines()).toHaveLength(0);
   });
 });

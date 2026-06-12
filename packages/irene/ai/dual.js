@@ -10,10 +10,13 @@
 // Supports full chat (text replies) and multi-turn tool calling loops.
 
 import { executeTool, postDeferralIfNeeded } from "./executor.js";
+import { TOOL_ALIASES } from "./toolAliases.js";
 import { ADMIN_TOOLS } from "./tools.js";
+import { routeCatalogTool, withRouterTool } from "@defnotean/shared/toolRouter";
 import { registry } from "./toolRegistry.js";
 import { log, redact } from "../utils/logger.js";
 import config from "../config.js";
+import { wrapUntrusted } from "@defnotean/shared/safeFetch";
 
 const GEMINI_MODEL = config.geminiModel;               // worker AI — most capable, deep reasoning + tools
 const GEMINI_FALLBACK_MODEL = config.geminiFallbackModel; // fallback on rate limit — still thinking-capable
@@ -49,6 +52,27 @@ export function safeSlice(str, max) {
     end -= 1;
   }
   return str.slice(0, end) + "…(truncated)";
+}
+
+// Tools whose results carry externally-sourced text (the twin's model
+// output). Web/channel-read tools already self-wrap inside their executors;
+// these used to re-enter the model loop bare, letting embedded instructions
+// act as prompt injection. Wrap them in the same untrusted-data envelope
+// before feeding the result back.
+export const UNTRUSTED_RESULT_TOOLS = new Set([
+  "ask_eris",
+]);
+
+// Exported for unit tests. Resolves aliases first — the model can emit an
+// undeclared alias (e.g. `evil_irene`) that executor.js auto-corrects to the
+// canonical tool AFTER this wrap runs, so keying on the raw name would let
+// aliased calls bypass the envelope entirely.
+export function wrapUntrustedToolResult(toolName, result) {
+  const canonical = Object.prototype.hasOwnProperty.call(TOOL_ALIASES, toolName)
+    ? TOOL_ALIASES[toolName]
+    : toolName;
+  if (typeof result !== "string" || !UNTRUSTED_RESULT_TOOLS.has(canonical)) return result;
+  return wrapUntrusted(result);
 }
 
 // Denial messages for admin-tool attempts by non-admins. Kept module-scoped
@@ -206,44 +230,6 @@ function toGeminiTools(tools) {
   return result;
 }
 
-function routerToolDeclaration() {
-  return {
-    name: "use_tool",
-    description: "Call a catalog-only tool by exact name. Use only for tools listed in OTHER AVAILABLE TOOLS.",
-    parameters: {
-      type: "object",
-      properties: {
-        tool_name: { type: "string", description: "Exact catalog tool name to call." },
-        arguments: { type: "object", description: "Arguments for that tool." },
-      },
-      required: ["tool_name"],
-    },
-  };
-}
-
-function withRouterTool(geminiTools, routerToolNames = []) {
-  if (!Array.isArray(routerToolNames) || routerToolNames.length === 0) return geminiTools;
-  const router = routerToolDeclaration();
-  if (!geminiTools?.length) return [{ functionDeclarations: [router] }];
-  return geminiTools.map((group, idx) => ({
-    ...group,
-    functionDeclarations: idx === 0
-      ? [...(group.functionDeclarations || []), router]
-      : group.functionDeclarations,
-  }));
-}
-
-function routeCatalogTool(name, args, routerToolNames = []) {
-  if (name !== "use_tool") return { ok: true, toolName: name, args: args || {}, responseName: name };
-  const allowed = new Set(routerToolNames || []);
-  const raw = args || {};
-  const toolName = String(raw.tool_name || raw.name || raw.tool || "").trim();
-  if (!toolName) return { ok: false, responseName: "use_tool", result: "Error: use_tool requires tool_name" };
-  if (!allowed.has(toolName)) return { ok: false, responseName: "use_tool", result: `Error: "${toolName}" is not available in this turn's catalog` };
-  const routedArgs = raw.arguments ?? raw.args ?? raw.input ?? raw.parameters ?? {};
-  return { ok: true, toolName, args: routedArgs && typeof routedArgs === "object" ? routedArgs : {}, responseName: "use_tool" };
-}
-
 // Convert our internal history (Anthropic format) → Gemini contents format
 async function toGeminiHistory(history) {
   const contents = [];
@@ -319,7 +305,18 @@ export async function runGeminiChat({
   routerToolNames = [],
 }) {
   // ─── GEMINI PROVIDER ──────────────────────────────────────────────
-  const geminiTools = withRouterTool(toGeminiTools(tools), routerToolNames);
+  const baseGeminiTools = toGeminiTools(tools);
+  const tier1ToolNames = (baseGeminiTools || [])
+    .flatMap((group) => group.functionDeclarations || [])
+    .map((decl) => decl.name)
+    .filter(Boolean);
+  const geminiTools = withRouterTool(baseGeminiTools, routerToolNames, { format: "gemini" });
+  const routerOptions = {
+    routerToolNames: routerToolNames || [],
+    tier1ToolNames,
+    resolveAlias: (name) => Object.prototype.hasOwnProperty.call(TOOL_ALIASES, name) ? TOOL_ALIASES[name] : name,
+    getDeclaration: (name) => registry.getDeclaration(name),
+  };
   const contents = await toGeminiHistory(history);
   let toolsUsed = false;
   let iterations = 0;
@@ -548,7 +545,7 @@ export async function runGeminiChat({
     await Promise.all(
       funcCalls.map(async (part, idx) => {
         const { name, args } = part.functionCall;
-        const routed = routeCatalogTool(name, args, routerToolNames);
+        const routed = routeCatalogTool(name, args, routerOptions);
         if (!routed.ok) {
           funcResponses.push({ functionResponse: { name: routed.responseName, response: { result: routed.result } } });
           toolResults.push({ type: "tool_result", tool_use_id: `gemini_${iterations}_use_tool_error`, tool_name: "use_tool", content: routed.result });
@@ -622,10 +619,6 @@ export async function runGeminiChat({
         if (!(typeof result === "string" && result.startsWith("Error:"))) {
           calledSignatures.add(signature);
         }
-        // Track usage for two-tier tool selection
-        const channelKey = message.guild ? `${message.guild.id}-${message.author?.id || "unknown"}` : `dm-${message.author?.id || "unknown"}`;
-        registry.trackUsage(channelKey, routed.toolName);
-
         // Update status
         _completedCount++;
         if (onToolStatus) {
@@ -650,13 +643,15 @@ export async function runGeminiChat({
         const truncResult = typeof result === "string"
           ? safeSlice(result, 1500)
           : result;
+        // Wrap AFTER truncation so the untrusted-data envelope stays intact.
+        const safeResult = wrapUntrustedToolResult(routed.toolName, truncResult);
 
-        funcResponses.push({ functionResponse: { name: routed.responseName, response: { result: truncResult } } });
+        funcResponses.push({ functionResponse: { name: routed.responseName, response: { result: safeResult } } });
         toolResults.push({
           type: "tool_result",
           tool_use_id: `gemini_${iterations}_${routed.toolName}`,
           tool_name: routed.responseName,
-          content: truncResult,
+          content: safeResult,
         });
       })
     );

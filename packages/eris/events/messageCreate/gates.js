@@ -18,6 +18,7 @@ import { isRateLimited } from "../../ai/providers/index.js";
 import { checkInjection } from "../../ai/firewall.js";
 import { channelName } from "../../utils/discord.js";
 import { periodicUpdate } from "../../ai/humanity.js";
+import { channelKeyFor } from "../../ai/toolRegistry.js";
 import { LRUCache } from "@defnotean/shared/LRUCache";
 import { isSleeping, wakeSleep } from "./sleepState.js";
 import { trackMessage, addWarning, jaccardSim } from "./spamTracker.js";
@@ -393,7 +394,8 @@ export async function runGates(message) {
   }
 
   // Per-CHANNEL history for servers (group awareness), per-user for DMs
-  const channelKey = isDM ? `dm:${message.author.id}` : `ch:${message.channel.id}`;
+  const channelKey = channelKeyFor(message)
+    || (isDM ? `dm:${message.author?.id || "unknown"}` : `ch:${message.channel?.id || "unknown"}`);
 
   // This message survived every gate and is about to reach the AI — count it
   // against the daily budget (no-op when no cap is configured). Owner exempt,

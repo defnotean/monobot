@@ -9,7 +9,14 @@
 import { GoogleGenAI } from "@google/genai";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
-import { getEconomyMutatingTools } from "./toolRegistry.js";
+import { wrapUntrusted } from "@defnotean/shared/safeFetch";
+import { routeCatalogTool, withRouterTool } from "@defnotean/shared/toolRouter";
+import { getEconomyMutatingTools, registry } from "./toolRegistry.js";
+// Alias map only — needed so the untrusted-result wrap below keys on the
+// CANONICAL tool name. Nothing in executor.js's static import graph imports
+// dual.js back (only providers/gemini.js and providers/nvidia.js do), so this
+// introduces no module cycle.
+import { TOOL_ALIASES } from "./executor.js";
 // Shared work-pool singleton — read-only, used by isRateLimited() to report real
 // provider exhaustion. geminiPool.js is a module-scope singleton with no
 // dependency back on the ai/ layer, so importing it here introduces no cycle.
@@ -45,6 +52,30 @@ export function safeSlice(str, max) {
     end -= 1;
   }
   return str.slice(0, end) + "…(truncated)";
+}
+
+// Tools whose results carry externally-sourced text (image OCR, GitHub
+// content, email headers/bodies, the twin's model output). Web tools already
+// self-wrap inside webExecutor; these used to re-enter the model loop bare,
+// letting embedded instructions act as prompt injection. Wrap them in the
+// same untrusted-data envelope before feeding the result back.
+export const UNTRUSTED_RESULT_TOOLS = new Set([
+  "analyze_image",
+  "github_repos", "github_issues", "github_prs", "github_repo_stats",
+  "read_emails", "search_emails", "summarize_inbox",
+  "ask_irene",
+]);
+
+// Exported for unit tests. Resolves aliases first — the model can emit an
+// undeclared alias (e.g. `describe_image`) that executor.js auto-corrects to
+// the canonical tool AFTER this wrap runs, so keying on the raw name would
+// let aliased calls bypass the envelope entirely.
+export function wrapUntrustedToolResult(toolName, result) {
+  const canonical = Object.prototype.hasOwnProperty.call(TOOL_ALIASES, toolName)
+    ? TOOL_ALIASES[toolName]
+    : toolName;
+  if (typeof result !== "string" || !UNTRUSTED_RESULT_TOOLS.has(canonical)) return result;
+  return wrapUntrusted(result);
 }
 
 // ─── Schema Sanitization ────────────────────────────────────────────────────
@@ -96,48 +127,6 @@ export function toGeminiTools(tools) {
   const result = [{ functionDeclarations }];
   _toolSchemaCache.set(tools, result);
   return result;
-}
-
-function routerToolDeclaration() {
-  return {
-    name: "use_tool",
-    description: "Call a catalog-only tool by exact name. Use only for tools listed in OTHER AVAILABLE TOOLS.",
-    parameters: {
-      type: "object",
-      properties: {
-        tool_name: { type: "string", description: "Exact catalog tool name to call." },
-        arguments: { type: "object", description: "Arguments for that tool." },
-      },
-      required: ["tool_name"],
-    },
-  };
-}
-
-function withRouterTool(geminiTools, routerToolNames = []) {
-  if (!Array.isArray(routerToolNames) || routerToolNames.length === 0) return geminiTools;
-  const router = routerToolDeclaration();
-  if (!geminiTools?.length) return [{ functionDeclarations: [router] }];
-  return geminiTools.map((group, idx) => ({
-    ...group,
-    functionDeclarations: idx === 0
-      ? [...(group.functionDeclarations || []), router]
-      : group.functionDeclarations,
-  }));
-}
-
-function routeCatalogTool(call, routerToolNames = []) {
-  if (call.name !== "use_tool") return { ok: true, callName: call.name, toolName: call.name, args: call.args || {}, responseName: call.name };
-  const allowed = new Set(routerToolNames || []);
-  const raw = call.args || {};
-  const toolName = String(raw.tool_name || raw.name || raw.tool || "").trim();
-  if (!toolName) {
-    return { ok: false, responseName: "use_tool", result: "Error: use_tool requires tool_name" };
-  }
-  if (!allowed.has(toolName)) {
-    return { ok: false, responseName: "use_tool", result: `Error: "${toolName}" is not available in this turn's catalog` };
-  }
-  const args = raw.arguments ?? raw.args ?? raw.input ?? raw.parameters ?? {};
-  return { ok: true, callName: "use_tool", toolName, args: args && typeof args === "object" ? args : {}, responseName: "use_tool" };
 }
 
 // ─── Quick Reply (fast model, no tools) ─────────────────────────────────────
@@ -336,7 +325,17 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
 
   // tools may already be in Gemini format [{functionDeclarations}] or Anthropic format [{name, input_schema}]
   const baseGeminiTools = Array.isArray(tools) && tools[0]?.functionDeclarations ? tools : toGeminiTools(tools);
-  const geminiTools = withRouterTool(baseGeminiTools, options.routerToolNames);
+  const tier1ToolNames = (baseGeminiTools || [])
+    .flatMap((group) => group.functionDeclarations || [])
+    .map((decl) => decl.name)
+    .filter(Boolean);
+  const geminiTools = withRouterTool(baseGeminiTools, options.routerToolNames, { format: "gemini" });
+  const routerOptions = {
+    routerToolNames: options.routerToolNames || [],
+    tier1ToolNames,
+    resolveAlias: (name) => Object.prototype.hasOwnProperty.call(TOOL_ALIASES, name) ? TOOL_ALIASES[name] : name,
+    getDeclaration: (name) => registry.getDeclaration(name),
+  };
 
   // history may already be in Gemini format [{role, parts}] — pass through if so
   const isGeminiFormat = history.length > 0 && history[0]?.parts;
@@ -519,7 +518,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
       const skippedGameTools = new Set();
       const skippedDuplicates = new Set(); // exact signature already executed
       for (const call of calls) {
-        const routed = routeCatalogTool(call, options.routerToolNames);
+        const routed = routeCatalogTool(call.name, call.args, routerOptions);
         if (!routed.ok) {
           functionCalls.push(call);
           continue;
@@ -546,7 +545,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
       const SLOW_TOOLS = new Set(["web_search", "scrape_url", "search_images", "show_image", "generate_image", "edit_image", "search_meme_templates", "send_gif", "analyze_image", "check_deploy", "read_emails", "github_repos", "github_issues", "github_prs"]);
 
       const responseParts = await Promise.all(calls.map(async (call) => {
-        const routed = routeCatalogTool(call, options.routerToolNames);
+        const routed = routeCatalogTool(call.name, call.args, routerOptions);
         if (!routed.ok) {
           return { functionResponse: { name: routed.responseName, response: { result: routed.result } } };
         }
@@ -600,7 +599,7 @@ export async function runGeminiChat(client, systemInstruction, tools, history, u
         return {
           functionResponse: {
             name: routed.responseName,
-            response: { result },
+            response: { result: wrapUntrustedToolResult(routed.toolName, result) },
           },
         };
       }));

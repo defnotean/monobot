@@ -57,6 +57,34 @@ function envNumber(key, fallback, { min = -Infinity, max = Infinity, integer = f
   return Math.min(max, Math.max(min, value));
 }
 
+/** @param {string} key @param {boolean} fallback */
+function envBool(key, fallback) {
+  const raw = env(key);
+  if (raw === undefined) return fallback;
+  const value = String(raw).toLowerCase();
+  if (value === "1" || value === "true") return true;
+  if (value === "0" || value === "false") return false;
+  return fallback;
+}
+
+// Optional JSON object merged into every /chat/completions request body
+// (e.g. Ollama's {"options":{"num_ctx":32768,"think":false}}). Returns null
+// when unset or unparseable so providers can skip the merge entirely.
+/** @param {string} key */
+function parseExtraBodyEnv(key) {
+  const value = env(key);
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+    console.warn(`[WARN] ${key} must be valid JSON object syntax; ignoring it`);
+    return null;
+  }
+  console.warn(`[WARN] ${key} must be a JSON object; ignoring it`);
+  return null;
+}
+
 const ghToken = env("GITHUB_TOKEN");
 
 function envFirst(keys, fallback = "") {
@@ -195,8 +223,24 @@ const openAICompatApiKeys = unique([
 ]);
 const KIMI_K26_MODEL = "moonshotai/kimi-k2.6";
 const selectedKimiOnNvidia = selectedAIProvider === "kimi";
-const DEFAULT_OWNER_ID = "1365814245739987078";
-const DEFAULT_OWNER_NAME = "defnotean";
+const isLocalOpenAICompatProvider = localOpenAICompatibleProviderAliases.has(selectedAIProvider);
+
+// ─── Owner identity ──────────────────────────────────────────────────────────
+// No hardcoded fallback — shipping a default owner ID in a public repo would
+// grant that Discord account owner authority on every fork that forgets to
+// set BOT_OWNER_ID. An empty ownerId never matches any message.author.id, so
+// every owner gate fails closed (see utils/permissions.js isOwner()).
+const OWNER_ID_PATTERN = /^\d{17,20}$/;
+const rawOwnerId = env("BOT_OWNER_ID", "");
+const resolvedOwnerId = OWNER_ID_PATTERN.test(rawOwnerId) ? rawOwnerId : "";
+if (!resolvedOwnerId) {
+  console.warn(
+    rawOwnerId
+      ? `[SECURITY] BOT_OWNER_ID "${rawOwnerId}" is not a valid Discord user ID (17-20 digits) — owner-only tools are disabled`
+      : "[SECURITY] BOT_OWNER_ID is not set — owner-only tools are disabled",
+  );
+}
+const resolvedOwnerName = env("DISCORD_OWNER_NAME", "the owner");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG OBJECT — every runtime knob lives on this single object. Sections
@@ -209,8 +253,8 @@ const config = {
   // ═══════════════════════════════════════════════════════════════════════════
   token: env("DISCORD_TOKEN"),
   clientId: env("CLIENT_ID"),
-  ownerId: env("BOT_OWNER_ID", DEFAULT_OWNER_ID),
-  ownerName: env("DISCORD_OWNER_NAME", DEFAULT_OWNER_NAME),
+  ownerId: resolvedOwnerId,
+  ownerName: resolvedOwnerName,
   port: parseInt(env("PORT", "3000")),
   dashboardApiKey: env("DASHBOARD_API_KEY"),
 
@@ -274,6 +318,23 @@ const config = {
     appTitle: env("OPENAI_COMPAT_APP_TITLE", "Eris"),
     extraHeaders: parseJsonEnv("OPENAI_COMPAT_EXTRA_HEADERS"),
     toolChoice: parseToolChoice(env("OPENAI_COMPAT_TOOL_CHOICE"), "auto"),
+    // Cap on tool-calling loop iterations per AI turn. Local providers
+    // (lmstudio/ollama) default tighter — a looping 14B at the old implicit
+    // 40-iteration cap holds the per-channel lock for minutes. envNumber
+    // (min 1, integer) so a typo like "abc" or "0" can't silently run the
+    // tool loop zero times and brick the compat lane.
+    maxIterations: envNumber("OPENAI_COMPAT_MAX_ITERATIONS", isLocalOpenAICompatProvider ? 6 : 12, { min: 1, integer: true }),
+    // Extra JSON object merged into every /chat/completions request body —
+    // lets backend-specific knobs through the OpenAI-shaped endpoint, e.g.
+    // Ollama's {"options":{"num_ctx":32768,"think":false}}. null when unset.
+    extraBody: parseExtraBodyEnv("OPENAI_COMPAT_EXTRA_BODY"),
+    // Inject the tool-coaching block into the compat-lane system prompt.
+    // Defaults on for local models (cheapest quality lever for a 14B),
+    // off for hosted ones.
+    toolCoaching: envBool("OPENAI_COMPAT_TOOL_COACHING", isLocalOpenAICompatProvider),
+    // Trim verbose tool/parameter descriptions at wire time for local models.
+    // Hosted providers default off to keep request bodies byte-identical.
+    compactSchemas: envBool("OPENAI_COMPAT_COMPACT_SCHEMAS", isLocalOpenAICompatProvider),
     allowNoApiKey: localOpenAICompatibleProviderAliases.has(selectedAIProvider) || env("OPENAI_COMPAT_ALLOW_NO_API_KEY", "0") === "1",
   },
 
@@ -348,8 +409,8 @@ const config = {
   botPersonality: (() => {
     const promptDir = join(__dirname, "prompts");
     const load = (name) => readFileSync(join(promptDir, `${name}.md`), "utf8");
-    const ownerId = env("BOT_OWNER_ID", DEFAULT_OWNER_ID);
-    const ownerName = env("DISCORD_OWNER_NAME", DEFAULT_OWNER_NAME);
+    const ownerId = resolvedOwnerId;
+    const ownerName = resolvedOwnerName;
     const twinBotId = env("TWIN_BOT_ID");
     // Tool guide is omitted — each tool has its own description in the schema
     // which Gemini already sees. Including a 10k tool guide in the system
@@ -404,6 +465,11 @@ const config = {
     // Generic worker timeout still consumed by the NVIDIA / OpenAI-compat
     // providers (which don't split fast/slow). Kept for backward compat.
     worker:     parseInt(env("TIMEOUT_WORKER", "60000")),
+    // Outer wall-clock deadline for one full AI turn (all model iterations
+    // plus tool executions). Backstop so a looping model can't wedge a
+    // channel by holding the per-channel lock indefinitely. envNumber so a
+    // typo can't produce NaN/0 and make every turn "time out" instantly.
+    turnDeadline: envNumber("TIMEOUT_TURN_DEADLINE", 180000, { min: 1000, integer: true }),
     fetch:      parseInt(env("TIMEOUT_FETCH", "5000")),
   },
 };

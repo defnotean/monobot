@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error JS module without types
-import { TOOL_ALIASES, executeTool, resolveToolName, validateToolAliases } from "../../ai/executor.js";
+import { _unknownToolCounts, clearUnknownToolCounts, TOOL_ALIASES, executeTool, resolveToolName, validateToolAliases } from "../../ai/executor.js";
 // @ts-expect-error JS module without types
 import { EVERYONE_TOOLS, OWNER_TOOLS } from "../../ai/tools.js";
+// @ts-expect-error JS module without types
+import { channelKeyFor, registry } from "../../ai/toolRegistry.js";
 
 // Covers the three pieces of the alias-vs-registry contract added so the model
 // gets a structured signal when its emitted tool name is not real (rather than
@@ -93,5 +95,42 @@ describe("executor alias resolution + registry validation", () => {
     } as any);
 
     expect(String(result)).toMatch(/owner-only/i);
+  });
+
+  it("tracks successful dispatches under the same channel key used by selection", async () => {
+    const message: any = {
+      author: { id: "111111111111111112" },
+      guild: { id: "guild-usage-eris" },
+      channel: { id: "channel-usage-eris" },
+      content: "",
+    };
+    const key = channelKeyFor(message);
+    registry._recentUsage.delete(key);
+
+    const result = await executeTool("list_features", {}, message);
+
+    expect(String(result)).toContain("server feature config");
+    expect(registry._recentUsage.get(key)?.[0]).toBe("list_features");
+    expect(key).toBe("ch:channel-usage-eris");
+  });
+
+  it("does not track unknown or economy-mutating tool dispatches", async () => {
+    const message: any = {
+      author: { id: "111111111111111113" },
+      guild: { id: "guild-usage-skip" },
+      channel: { id: "channel-usage-skip", send: async () => ({}) },
+      content: "",
+    };
+    const key = channelKeyFor(message);
+    const fakeTool = "__definitely_not_real_usage_tool";
+    registry._recentUsage.delete(key);
+    clearUnknownToolCounts();
+
+    await executeTool(fakeTool, {}, message);
+    expect(registry._recentUsage.has(key)).toBe(false);
+    expect(_unknownToolCounts.get(fakeTool)).toBe(1);
+
+    await executeTool("shop_browse", {}, message);
+    expect(registry._recentUsage.has(key)).toBe(false);
   });
 });

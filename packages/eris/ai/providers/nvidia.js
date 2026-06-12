@@ -7,6 +7,9 @@
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
 import { stableSig } from "../dual.js";
+import { routeCatalogTool, withRouterTool } from "@defnotean/shared/toolRouter";
+import { TOOL_ALIASES } from "../executor.js";
+import { registry } from "../toolRegistry.js";
 
 const NV = config.nvidia;
 
@@ -63,40 +66,6 @@ export function toNvidiaTools(tools) {
     }));
   _toolCache.set(tools, result);
   return result;
-}
-
-function routerToolDefinition() {
-  return {
-    type: "function",
-    function: {
-      name: "use_tool",
-      description: "Call a catalog-only tool by exact name. Use only for tools listed in OTHER AVAILABLE TOOLS.",
-      parameters: {
-        type: "object",
-        properties: {
-          tool_name: { type: "string", description: "Exact catalog tool name to call." },
-          arguments: { type: "object", description: "Arguments for that tool." },
-        },
-        required: ["tool_name"],
-      },
-    },
-  };
-}
-
-function withRouterTool(nvidiaTools, routerToolNames = []) {
-  if (!Array.isArray(routerToolNames) || routerToolNames.length === 0) return nvidiaTools;
-  return [...(nvidiaTools || []), routerToolDefinition()];
-}
-
-function routeCatalogTool(name, args, routerToolNames = []) {
-  if (name !== "use_tool") return { ok: true, toolName: name, args: args || {} };
-  const allowed = new Set(routerToolNames || []);
-  const raw = args || {};
-  const toolName = String(raw.tool_name || raw.name || raw.tool || "").trim();
-  if (!toolName) return { ok: false, result: "Error: use_tool requires tool_name" };
-  if (!allowed.has(toolName)) return { ok: false, result: `Error: "${toolName}" is not available in this turn's catalog` };
-  const routedArgs = raw.arguments ?? raw.args ?? raw.input ?? raw.parameters ?? {};
-  return { ok: true, toolName, args: routedArgs && typeof routedArgs === "object" ? routedArgs : {} };
 }
 
 // ─── Quick reply (no tools, fast acknowledgment) ────────────────────────────
@@ -208,7 +177,15 @@ export function _providerHealth() {
  */
 export async function runNvidiaChat(_client, systemInstruction, tools, history, userMessage, executor, options = {}) {
   const model = options.useFastModel ? NV.fastModel : NV.model;
-  const nvidiaTools = withRouterTool(toNvidiaTools(tools), options.routerToolNames);
+  const baseNvidiaTools = toNvidiaTools(tools);
+  const tier1ToolNames = (baseNvidiaTools || []).map((tool) => tool.function?.name).filter(Boolean);
+  const nvidiaTools = withRouterTool(baseNvidiaTools, options.routerToolNames, { format: "openai" });
+  const routerOptions = {
+    routerToolNames: options.routerToolNames || [],
+    tier1ToolNames,
+    resolveAlias: (name) => Object.prototype.hasOwnProperty.call(TOOL_ALIASES, name) ? TOOL_ALIASES[name] : name,
+    getDeclaration: (name) => registry.getDeclaration(name),
+  };
 
   // Append tool-use directive to system prompt with explicit examples.
   // Qwen needs concrete mappings between user requests and tool names, not
@@ -378,7 +355,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
         allDuplicates = false;
         return { call, fnName, fnArgs, duplicate: false, parseError };
       }
-      const routed = routeCatalogTool(fnName, fnArgs, options.routerToolNames);
+      const routed = routeCatalogTool(fnName, fnArgs, routerOptions);
       if (!routed.ok) {
         allDuplicates = false;
         return { call, fnName, fnArgs, duplicate: false, routeError: routed.result };
