@@ -15,6 +15,9 @@ const memory = createLongMemory({
   getGeminiModel: async () => "gemini-2.5-flash",
   moodCache: { strategy: "fifo", limit: 50 },
   capMoodOnInfer: false,
+  // Irene's pre-extraction eviction used `> 15` / `> 10` — one slot more than
+  // Eris's `>= 15` / `>= 10`. Keep her historical buffer sizes.
+  episodeCaps: { user: 16, channel: 11 },
   thoughtDedupeMode: "prefix",
   thoughtExtractionMode: "anywhere",
   semanticLogging: "log",

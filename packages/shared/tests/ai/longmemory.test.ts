@@ -83,6 +83,26 @@ describe("createLongMemory", () => {
     expect(context).toContain("[RELEVANT MEMORIES: \"remembered context\"]");
   });
 
+  test("episodeCaps preserves each bot's historical eviction thresholds", () => {
+    const fill = (memory: ReturnType<typeof createLongMemory>) => {
+      for (let i = 0; i < 25; i++) {
+        memory.recordEpisode("user-1", "channel-1", { type: "bond", content: `episode ${i}` });
+      }
+    };
+
+    // Default matches Eris's original `length >= 15` / `>= 10` pre-push checks.
+    const erisLike = createLongMemory({ now: () => 1 });
+    fill(erisLike);
+    expect(erisLike.getEpisodes().get("user-1")).toHaveLength(15);
+    expect(erisLike.getChannelEpisodes().get("channel-1")).toHaveLength(10);
+
+    // Irene's original `length > 15` / `> 10` checks held one extra slot.
+    const ireneLike = createLongMemory({ episodeCaps: { user: 16, channel: 11 }, now: () => 1 });
+    fill(ireneLike);
+    expect(ireneLike.getEpisodes().get("user-1")).toHaveLength(16);
+    expect(ireneLike.getChannelEpisodes().get("channel-1")).toHaveLength(11);
+  });
+
   test("keeps Eris-style LRU mood cache distinct from Irene-style FIFO mood cache", () => {
     const erisMemory = createLongMemory({
       moodCache: { strategy: "lru", limit: 2 },

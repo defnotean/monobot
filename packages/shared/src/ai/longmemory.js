@@ -86,6 +86,10 @@ export function createLongMemory({
   capMoodOnInfer = moodCache?.strategy === "lru",
   thoughtDedupeMode = "prefix",
   thoughtExtractionMode = "anywhere",
+  // Pre-push eviction thresholds. Eris's originals checked `length >= cap`
+  // (effective caps 15/10); Irene's checked `length > cap` (16/11) — pass
+  // { user: 16, channel: 11 } to keep Irene's historical buffer sizes.
+  episodeCaps = { user: 15, channel: 10 },
   semanticLogging = "silent",
   log = noop,
   saveDelayMs = 30_000,
@@ -217,13 +221,13 @@ export function createLongMemory({
 
     if (!_episodes.has(userId)) _episodes.set(userId, []);
     const userEps = _episodes.get(userId);
-    if (userEps.length >= 15) userEps.shift();
+    if (userEps.length >= (episodeCaps?.user ?? 15)) userEps.shift();
     userEps.push(episode);
 
     if (channelId) {
       if (!_channelEpisodes.has(channelId)) _channelEpisodes.set(channelId, []);
       const chEps = _channelEpisodes.get(channelId);
-      if (chEps.length >= 10) chEps.shift();
+      if (chEps.length >= (episodeCaps?.channel ?? 10)) chEps.shift();
       chEps.push(episode);
     }
 
