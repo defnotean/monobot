@@ -16,6 +16,7 @@
     "test": "npm test --workspaces --if-present",
     "test:eris": "npm test --workspace=@defnotean/eris",
     "test:irene": "npm test --workspace=@defnotean/irene",
+    "lint": "eslint .",
     "lint:version-sync": "node scripts/verify-version-sync.js",
     "measure:prompt": "node scripts/measure-prompt-footprint.mjs",
     "provision:gemini-keys": "node scripts/provision-google-gemini-keys.mjs",
@@ -36,6 +37,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.8"
+    "@vitest/coverage-v8": "^4.1.8",
+    "eslint": "^9.39.4"
   }
 }

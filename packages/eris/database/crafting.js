@@ -16,7 +16,10 @@ export async function getDiscoveredRecipes(userId) {
   try {
     const { data } = await supabase.from("eris_recipes").select("*").eq("user_id", userId);
     return data || [];
-  } catch { return []; }
+  } catch (e) {
+    log(`[DB] getDiscoveredRecipes failed: ${e.message}`);
+    return [];
+  }
 }
 
 export async function addDiscoveredRecipe(userId, recipeName) {

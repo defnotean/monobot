@@ -86,7 +86,10 @@ export async function getDashboardStats() {
     const uniqueChannels = new Set((channels || []).map(c => c.channel_id)).size;
     const { count: cmdCount } = await supabase.from("eris_analytics").select("*", { count: "exact", head: true });
     return { messages: msgCount || 0, users: uniqueUsers, commands: cmdCount || 0, channels: uniqueChannels };
-  } catch { return { messages: 0, users: 0, commands: 0, channels: 0 }; }
+  } catch (e) {
+    log(`[DB] getDashboardStats failed: ${e.message}`);
+    return { messages: 0, users: 0, commands: 0, channels: 0 };
+  }
 }
 
 // ─── PRICE WATCHES ───

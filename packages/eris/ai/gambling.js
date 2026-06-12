@@ -1,6 +1,8 @@
 // ─── Gambling Helpers, Quips, and Game Logic ────────────────────────────────
 // Shared by executor.js for all gambling and mini-game tools.
 
+import { log } from "../utils/logger.js";
+
 // ─── Gambling Quips ─────────────────────────────────────────────────────────
 
 export const GAMBLING_QUIPS = [
@@ -328,7 +330,9 @@ async function _saveSlotsConfig() {
     const { getSupabase } = await import("../database.js");
     const sb = getSupabase();
     if (sb) await sb.from("bot_data").upsert({ id: "eris_slots_config", data: { symbols: SLOT_SYMBOLS } });
-  } catch {}
+  } catch (e) {
+    log(`[GAMBLING] save slots config failed: ${e.message}`);
+  }
 }
 
 // Load custom config on startup
@@ -343,7 +347,9 @@ async function _saveSlotsConfig() {
       SLOT_SYMBOLS.length = 0;
       SLOT_SYMBOLS.push(...symbols);
     }
-  } catch {}
+  } catch (e) {
+    log(`[GAMBLING] load slots config failed: ${e.message}`);
+  }
 })();
 
 // ─── Universal Game Configuration ──────────────────────────────────────────
@@ -404,7 +410,9 @@ async function _saveGameConfig() {
     const { getSupabase } = await import("../database.js");
     const sb = getSupabase();
     if (sb) await sb.from("bot_data").upsert({ id: "eris_game_config", data: _gameConfig });
-  } catch {}
+  } catch (e) {
+    log(`[GAMBLING] save game config failed: ${e.message}`);
+  }
 }
 
 // Load custom config on startup
@@ -419,7 +427,9 @@ async function _saveGameConfig() {
         if (_gameConfig[game]) Object.assign(_gameConfig[game], settings);
       }
     }
-  } catch {}
+  } catch (e) {
+    log(`[GAMBLING] load game config failed: ${e.message}`);
+  }
 })();
 
 // ─── Fortune Telling ────────────────────────────────────────────────────────

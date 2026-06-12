@@ -162,7 +162,10 @@ export async function unlockAchievement(userId, key) {
   try {
     const { error } = await supabase.from("eris_achievements").insert({ user_id: userId, achievement_key: key });
     return !error; // returns false if already unlocked (unique constraint)
-  } catch { return false; }
+  } catch (e) {
+    log(`[DB] unlockAchievement failed: ${e.message}`);
+    return false;
+  }
 }
 
 export async function getUnlockedAchievements(userId) {

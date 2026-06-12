@@ -21,11 +21,16 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 vi.mock("@google/genai", () => ({
-  GoogleGenAI: vi.fn().mockImplementation(({ apiKey }) => ({
+  GoogleGenAI: vi.fn(function GoogleGenAIMock(
+    this: unknown,
+    { apiKey }: { apiKey: string },
+  ) {
+    return {
     models: {
       generateImages: (args: unknown) => h.generateImages(apiKey, args),
     },
-  })),
+    };
+  }),
 }));
 
 const guild = {

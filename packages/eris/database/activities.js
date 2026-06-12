@@ -135,7 +135,10 @@ export async function createBossBattle(guildId, bossName, hp, expiresAt) {
   try {
     const { data } = await supabase.from("eris_boss_battles").insert({ guild_id: guildId, boss_name: bossName, boss_hp: hp, max_hp: hp, expires_at: expiresAt }).select().single();
     return data;
-  } catch { return null; }
+  } catch (e) {
+    log(`[DB] createBossBattle failed: ${e.message}`);
+    return null;
+  }
 }
 
 export async function getActiveBoss(guildId) {
@@ -162,7 +165,10 @@ export async function spawnBoss(guildId, bossName, bossEmoji, hp, phases, lootMu
       created_at: new Date().toISOString(),
     }).select().single();
     return data;
-  } catch { return null; }
+  } catch (e) {
+    log(`[DB] spawnBoss failed: ${e.message}`);
+    return null;
+  }
 }
 
 const _bossLocks = new Map();
@@ -201,7 +207,10 @@ export async function damageBoss(bossId, userId, damage) {
     const phase = newHp <= 0 ? 0 : newHp <= boss.max_hp * 0.25 ? 3 : newHp <= boss.max_hp * 0.5 ? 2 : 1;
     await supabase.from("eris_boss_battles").update({ boss_hp: newHp, participants, phase }).eq("id", bossId);
     return { ...boss, boss_hp: newHp, participants, phase, defeated: newHp <= 0 };
-    } catch { return null; }
+    } catch (e) {
+      log(`[DB] damageBoss failed: ${e.message}`);
+      return null;
+    }
   });
 }
 
@@ -269,7 +278,10 @@ export async function createPet(userId, name, species) {
       .select()
       .single();
     return data;
-  } catch { return null; }
+  } catch (e) {
+    log(`[DB] createPet failed: ${e.message}`);
+    return null;
+  }
 }
 
 export async function updatePet(userId, updates) {
@@ -337,7 +349,10 @@ export async function createHeist(guildId, channelId, organizerId, targetId) {
   try {
     const { data } = await supabase.from("eris_heists").insert({ guild_id: guildId, channel_id: channelId, organizer_id: organizerId, target_user_id: targetId, participants: [organizerId] }).select().single();
     return data;
-  } catch { return null; }
+  } catch (e) {
+    log(`[DB] createHeist failed: ${e.message}`);
+    return null;
+  }
 }
 
 export async function getActiveHeist(guildId) {
@@ -439,7 +454,10 @@ export async function createAuction(sellerId, itemName, startingPrice, guildId, 
       return null;
     }
     return data;
-  } catch { return null; }
+  } catch (e) {
+    log(`[DB] createAuction failed: ${e.message}`);
+    return null;
+  }
 }
 
 export async function getActiveAuctions(guildId) {
@@ -512,7 +530,10 @@ export async function bidOnAuction(auctionId, bidderId, amount) {
         // Optimistic check failed — refund our escrow and loop to retry once.
         try { await updateBalance(bidderId, amount, "auction_refund", `bid race lost on ${auctionId}`); }
         catch (e) { log(`[DB] bidOnAuction escrow refund failed for ${bidderId}: ${e.message} — manual reconciliation needed`); }
-      } catch { return false; }
+      } catch (e) {
+        log(`[DB] bidOnAuction failed for ${auctionId}: ${e.message}`);
+        return false;
+      }
     }
     return false;
   });
@@ -564,7 +585,10 @@ export async function createRoastBattle(guildId, channelId, player1Id, player2Id
   try {
     const { data } = await supabase.from("eris_roast_battles").insert({ guild_id: guildId, channel_id: channelId, player1_id: player1Id, player2_id: player2Id }).select().single();
     return data;
-  } catch { return null; }
+  } catch (e) {
+    log(`[DB] createRoastBattle failed: ${e.message}`);
+    return null;
+  }
 }
 
 export async function getPendingRoast(channelId, userId) {

@@ -339,6 +339,9 @@ export async function transferBalance(fromId, toId, amount, tax = 0, type = "tra
       try {
         newSenderBalance = await _updateBalanceUnsafe(fromId, -total, type, details || `transfer to ${toId}`);
       } catch (err) {
+        if (err?.code !== "insufficient_balance") {
+          log(`[DB] transferBalance debit failed for ${fromId}: ${err?.message || "unknown error"}`);
+        }
         return { ok: false, reason: err?.code === "insufficient_balance" ? "insufficient" : err?.message || "debit_failed" };
       }
       try {
@@ -782,7 +785,10 @@ export async function createMarriage(user1Id, user2Id) {
     _marriageCache.set(user1Id, data);
     _marriageCache.set(user2Id, data);
     return data;
-  } catch { return null; }
+  } catch (e) {
+    log(`[DB] createMarriage failed: ${e.message}`);
+    return null;
+  }
 }
 
 export async function deleteMarriage(userId) {
@@ -799,7 +805,10 @@ export async function deleteMarriage(userId) {
     _marriageCache.set(marriage.user1_id, null);
     _marriageCache.set(marriage.user2_id, null);
     return true;
-  } catch { return false; }
+  } catch (e) {
+    log(`[DB] deleteMarriage failed: ${e.message}`);
+    return false;
+  }
 }
 
 // ─── WEEKLY / MONTHLY REWARDS ──────────────────────────────────────────────

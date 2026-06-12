@@ -176,7 +176,8 @@ export async function pruneExpiredFacts() {
       return { deleted: 0 };
     }
     return { deleted: result?.count ?? 0 };
-  } catch {
+  } catch (e) {
+    log(`[DB] purgeExpiredFacts failed: ${e.message}`);
     return { deleted: 0 };
   }
 }
