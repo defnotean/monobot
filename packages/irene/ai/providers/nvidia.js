@@ -111,10 +111,52 @@ export function looksLikeTask(text) {
   return TASK_KEYWORDS.test(text);
 }
 
-// ─── Rate limit hooks ──────────────────────────────────────────────────────
+// ─── Circuit breaker ───────────────────────────────────────────────────────
+// Track consecutive failures so upstream can fall back or degrade gracefully
+// instead of silently returning generic error strings every time.
 
-export function setRateLimitCallbacks() { /* TODO if needed */ }
-export function isRateLimited() { return false; }
+let _consecutiveFailures = 0;
+let _lastFailureAt = 0;
+const FAILURE_THRESHOLD = 3;
+const CIRCUIT_COOLDOWN_MS = 30_000;
+
+let _onRateLimit = null;
+let _onSuccess = null;
+
+function recordFailure(reason) {
+  _consecutiveFailures++;
+  _lastFailureAt = Date.now();
+  if (_consecutiveFailures === FAILURE_THRESHOLD) {
+    log(`[NVIDIA] CIRCUIT OPEN — ${_consecutiveFailures} consecutive failures (last: ${reason})`);
+    _onRateLimit?.();
+  } else if (_consecutiveFailures > FAILURE_THRESHOLD && _consecutiveFailures % 5 === 0) {
+    log(`[NVIDIA] still failing — ${_consecutiveFailures} consecutive failures (last: ${reason})`);
+  }
+}
+
+function recordSuccess() {
+  if (_consecutiveFailures >= FAILURE_THRESHOLD) {
+    log(`[NVIDIA] CIRCUIT CLOSED — recovered after ${_consecutiveFailures} failures`);
+    _onSuccess?.();
+  }
+  _consecutiveFailures = 0;
+}
+
+export function setRateLimitCallbacks(onLimit, onSuccess) {
+  _onRateLimit = onLimit;
+  _onSuccess = onSuccess;
+}
+
+export function isRateLimited() {
+  if (_consecutiveFailures < FAILURE_THRESHOLD) return false;
+  // Half-open: let a request through after the cooldown to test recovery
+  if (Date.now() - _lastFailureAt > CIRCUIT_COOLDOWN_MS) return false;
+  return true;
+}
+
+export function _providerHealth() {
+  return { consecutiveFailures: _consecutiveFailures, lastFailureAt: _lastFailureAt, open: isRateLimited() };
+}
 
 // ─── Main chat call with tool calling loop ──────────────────────────────────
 // Irene's runGeminiChat takes an options OBJECT, not positional args, because
@@ -242,7 +284,9 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
         throw httpErr;
       }
       data = await res.json();
+      recordSuccess();
     } catch (e) {
+      recordFailure(e.message);
       log(`[NVIDIA] chat call failed: ${e.message}`);
       const cls = _classifyError(e);
       if (cls.shouldFallback) {
@@ -258,6 +302,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
     const choice = data.choices?.[0];
     const msg = choice?.message;
     if (!msg) {
+      recordFailure("empty response");
       log(`[NVIDIA] No message in response`);
       return { text: "", toolsUsed };
     }

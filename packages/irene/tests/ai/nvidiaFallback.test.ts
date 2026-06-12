@@ -35,13 +35,42 @@ function mockNvidiaResponse(status: number, body: any = "") {
   })) as any;
 }
 
-beforeEach(() => {
+function successBody(text = "ok") {
+  return {
+    choices: [{ message: { role: "assistant", content: text }, finish_reason: "stop" }],
+  };
+}
+
+async function runBasicNvidiaChat(overrides: Record<string, any> = {}) {
+  return await nvidia.runGeminiChat({
+    geminiClient: null,
+    systemInstruction: "you are a test bot",
+    history: [{ role: "user", parts: [{ text: "hi" }] }],
+    tools: [],
+    message: { userMessage: "hi" },
+    isAdmin: false,
+    useFastModel: true,
+    ...overrides,
+  });
+}
+
+async function resetNvidiaBreaker() {
+  nvidia.setRateLimitCallbacks(null, null);
+  mockNvidiaResponse(200, successBody("breaker reset"));
+  await runBasicNvidiaChat();
+  nvidia.setRateLimitCallbacks(null, null);
+}
+
+beforeEach(async () => {
   (dual.runGeminiChat as any).mockReset();
   // Ensure at least one Gemini key is present (test setup defines GEMINI_API_KEY)
   if (!config.geminiKeys?.length) (config as any).geminiKeys = ["test-fallback-key"];
+  await resetNvidiaBreaker();
 });
 
 afterEach(() => {
+  nvidia.setRateLimitCallbacks(null, null);
+  vi.useRealTimers();
   globalThis.fetch = realFetch;
 });
 
@@ -223,5 +252,58 @@ describe("NVIDIA → Gemini fallback (Irene)", () => {
     expect(dual.runGeminiChat).not.toHaveBeenCalled();
     expect(result.text).toContain("having trouble thinking");
     (config as any).geminiKeys = savedKeys;
+  });
+
+  it("fires the rate-limit callback and opens after three main chat failures", async () => {
+    const onLimit = vi.fn();
+    const onSuccess = vi.fn();
+    nvidia.setRateLimitCallbacks(onLimit, onSuccess);
+    mockNvidiaResponse(503, "Service Unavailable");
+
+    await runBasicNvidiaChat();
+    await runBasicNvidiaChat();
+    expect(nvidia.isRateLimited()).toBe(false);
+
+    await runBasicNvidiaChat();
+
+    expect(onLimit).toHaveBeenCalledOnce();
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(nvidia.isRateLimited()).toBe(true);
+  });
+
+  it("half-opens after the circuit cooldown", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-11T12:00:00.000Z"));
+    mockNvidiaResponse(503, "Service Unavailable");
+
+    await runBasicNvidiaChat();
+    await runBasicNvidiaChat();
+    await runBasicNvidiaChat();
+
+    expect(nvidia.isRateLimited()).toBe(true);
+
+    vi.advanceTimersByTime(30_001);
+
+    expect(nvidia.isRateLimited()).toBe(false);
+  });
+
+  it("fires the recovery callback on success after the circuit was open", async () => {
+    const onLimit = vi.fn();
+    const onSuccess = vi.fn();
+    nvidia.setRateLimitCallbacks(onLimit, onSuccess);
+    mockNvidiaResponse(503, "Service Unavailable");
+
+    await runBasicNvidiaChat();
+    await runBasicNvidiaChat();
+    await runBasicNvidiaChat();
+    expect(nvidia.isRateLimited()).toBe(true);
+
+    mockNvidiaResponse(200, successBody("recovered"));
+    const result = await runBasicNvidiaChat();
+
+    expect(result.text).toBe("recovered");
+    expect(onLimit).toHaveBeenCalledOnce();
+    expect(onSuccess).toHaveBeenCalledOnce();
+    expect(nvidia.isRateLimited()).toBe(false);
   });
 });
