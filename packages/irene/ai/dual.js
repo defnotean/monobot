@@ -16,7 +16,7 @@ import { routeCatalogTool, withRouterTool } from "@defnotean/shared/toolRouter";
 import { registry } from "./toolRegistry.js";
 import { log, redact } from "../utils/logger.js";
 import config from "../config.js";
-import { wrapUntrusted } from "@defnotean/shared/safeFetch";
+import { spotlight } from "./firewall.js";
 
 const GEMINI_MODEL = config.geminiModel;               // worker AI — most capable, deep reasoning + tools
 const GEMINI_FALLBACK_MODEL = config.geminiFallbackModel; // fallback on rate limit — still thinking-capable
@@ -72,7 +72,7 @@ export function wrapUntrustedToolResult(toolName, result) {
     ? TOOL_ALIASES[toolName]
     : toolName;
   if (typeof result !== "string" || !UNTRUSTED_RESULT_TOOLS.has(canonical)) return result;
-  return wrapUntrusted(result);
+  return spotlight(result, canonical);
 }
 
 // Denial messages for admin-tool attempts by non-admins. Kept module-scoped

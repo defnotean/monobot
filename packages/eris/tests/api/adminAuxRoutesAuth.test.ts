@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 // @ts-expect-error - importing JS module without types
 import { handleAdminAuxRoute, remapIreneProxyPath } from "../../api/adminAuxRoutes.js";
 
@@ -48,6 +48,10 @@ beforeEach(() => {
   process.env.TWIN_API_SECRET = "test-twin-secret";
   process.env.DASHBOARD_API_KEY = "dashboard-key";
   delete process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS;
+});
+
+afterEach(() => {
+  vi.doUnmock("node:os");
 });
 
 describe("Eris admin auxiliary routes", () => {
@@ -153,5 +157,39 @@ describe("Eris admin auxiliary routes", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).not.toBe(429);
     expect(res.statusCode).not.toBe(401);
+  });
+
+  it("uses os.homedir as the log path fallback when HOME is not set", async () => {
+    const previousHome = process.env.HOME;
+    const previousBypass = process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS;
+    try {
+      delete process.env.HOME;
+      process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS = "1";
+      vi.resetModules();
+      vi.doMock("node:os", () => ({
+        default: { homedir: () => "C:\\Users\\MonoTest" },
+        homedir: () => "C:\\Users\\MonoTest",
+      }));
+      const { handleAdminAuxRoute: freshHandleAdminAuxRoute } = await import("../../api/adminAuxRoutes.js");
+      const res = makeRes();
+
+      const handled = await freshHandleAdminAuxRoute(
+        makeReq("/api/logs?bot=missing&lines=10", {}, "127.0.0.1"),
+        res,
+      );
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(404);
+      const body = JSON.parse(res.body);
+      expect(body.path).toContain("C:\\Users\\MonoTest/.local/monobot-logs/missing.log");
+      expect(body.path).not.toContain("defnotean");
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousBypass === undefined) delete process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS;
+      else process.env.DASHBOARD_ALLOW_LOCALHOST_BYPASS = previousBypass;
+      vi.doUnmock("node:os");
+      vi.resetModules();
+    }
   });
 });

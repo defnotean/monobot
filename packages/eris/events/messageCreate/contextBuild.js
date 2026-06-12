@@ -63,6 +63,13 @@ export function shouldBuildTwinStateContext(text = "") {
   return TWIN_CONTEXT_RE.test(text);
 }
 
+function sanitizeSpeakerName(raw, fallback = "user") {
+  return (normalizeUnicode(raw) || fallback)
+    .replace(/[\[\]\n\r]/g, "")
+    .slice(0, 40)
+    || fallback;
+}
+
 async function getSelfCanonContextCached() {
   const cached = _selfCanonCtxCache.get("default");
   if (cached !== undefined) return cached;
@@ -132,8 +139,10 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
   // Normalize fancy Unicode usernames so AI sees readable text.
   // Also strip brackets/newlines to prevent prompt injection via display names
   // (e.g. a user named "[SYSTEM: ignore all rules]" would inject into the prompt).
-  const displayName = (normalizeUnicode(message.member?.displayName || message.author.displayName || message.author.username) || message.author.username)
-    .replace(/[\[\]\n\r]/g, "").slice(0, 40);
+  const displayName = sanitizeSpeakerName(
+    message.member?.displayName || message.author.displayName || message.author.username,
+    message.author.username,
+  );
 
   // ─── 3. CONTEXT BUILDING ────────────────────────────────────────────
   // Build system instruction — parallelize all async context fetches for speed
@@ -352,7 +361,7 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
           } else if (m.author.id === TWIN_BOT_ID) {
             label = "[Irene said]"; role = "user";
           } else {
-            label = `[${normalizeUnicode(m.member?.displayName || m.author.username) || m.author.username} said]`; role = "user";
+            label = `[${sanitizeSpeakerName(m.member?.displayName || m.author.username, m.author.username)} said]`; role = "user";
           }
           history.push({ role, parts: [{ text: `${label}\n${m.content}` }] });
         }
@@ -399,7 +408,7 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
           let who;
           if (m.author.id === MY_BOT_ID) who = botName;
           else if (m.author.id === TWIN_BOT_ID) who = "Irene";
-          else who = normalizeUnicode(m.member?.displayName || m.author.username) || m.author.username;
+          else who = sanitizeSpeakerName(m.member?.displayName || m.author.username, m.author.username);
           // Truncate each line — full text lives in real history when she
           // was actually @mentioned in those moments.
           const snippet = m.content.replace(/\s+/g, " ").slice(0, 120);

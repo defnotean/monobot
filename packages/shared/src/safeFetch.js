@@ -28,11 +28,13 @@
  *
  * @section IP / hostname blocklist
  *   IPv4: loopback (127/8), RFC1918 (10/8, 172.16/12, 192.168/16), link-local
- *     incl. cloud metadata (169.254/16), "this network" (0/8), and CGNAT
- *     (100.64/10). The full 127/8 range is blocked, not just 127.0.0.1.
- *   IPv6: loopback (::1), unspecified (::), ULA (fc00::/7), link-local
- *     (fe80::/10), plus IPv4-mapped forms in both dotted (`::ffff:127.0.0.1`)
- *     and hex (`::ffff:7f00:1`) canonicalizations.
+ *     incl. cloud metadata (169.254/16), "this network" (0/8), CGNAT
+ *     (100.64/10), documentation/benchmark ranges, multicast (224/4), and
+ *     reserved/broadcast (240/4).
+ *   IPv6: loopback (::1), unspecified (::), ULA (fc00::/7), link/site-local
+ *     (fe80::/9), multicast (ff00::/8), documentation (2001:db8::/32),
+ *     Teredo (2001::/32), plus IPv4-mapped/NAT64/6to4 forms that embed
+ *     unsafe IPv4 addresses.
  *   Hostname tricks blocked pre-DNS: `localhost`, `*.localhost`, `*.internal`,
  *     `*.local`. Non-HTTP(S) protocols (`file:`, `javascript:`, `data:`,
  *     `gopher:`, …) are rejected before any network I/O.
@@ -66,9 +68,6 @@
  *   - Content-based attacks (XSS / SQLi in the fetched body) — that's the
  *     caller's job. We DO wrap content with `wrapUntrusted*` for the LLM,
  *     which is a prompt-injection mitigation, not a generic sanitizer.
- *   - IPv4-broadcast (255.255.255.255) and multicast (224/4) ranges — they
- *     don't typically route to anything useful from a userspace fetch, but
- *     are not explicitly listed; add to `isPrivateIPv4` if needed.
  *   - Non-A/AAAA DNS records (CNAME chains are followed by the resolver; we
  *     only see the final address).
  *
@@ -99,7 +98,34 @@ import { Agent } from "undici";
 const MAX_REDIRECTS = 3;
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_PINNED_DISPATCHERS = 64;
 const PINNED_DISPATCHERS = new Map();
+const SAFE_FETCH_EXTRA_PORTS = parseExtraPorts(process.env.SAFE_FETCH_EXTRA_PORTS);
+const SENSITIVE_REDIRECT_HEADERS = new Set([
+  "authorization",
+  "cookie",
+  "proxy-authorization",
+  "x-api-key",
+]);
+
+/** @param {string | undefined} value @returns {Set<string>} */
+function parseExtraPorts(value) {
+  const ports = new Set();
+  for (const part of String(value || "").split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const n = Number(trimmed);
+    if (Number.isInteger(n) && n > 0 && n <= 65535) ports.add(String(n));
+  }
+  return ports;
+}
+
+/** @param {URL} parsed */
+function isAllowedPort(parsed) {
+  if (!parsed.port) return true;
+  if (parsed.port === "80" || parsed.port === "443") return true;
+  return SAFE_FETCH_EXTRA_PORTS.has(parsed.port);
+}
 
 // IPv4 ranges that must never be reachable from a user-supplied URL.
 // Loopback, RFC1918 private, link-local + cloud metadata, and the 0.0.0.0/8
@@ -108,7 +134,7 @@ const PINNED_DISPATCHERS = new Map();
 function isPrivateIPv4(ip) {
   const m = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
+  const [a, b, c] = [Number(m[1]), Number(m[2]), Number(m[3])];
   if (a === 127) return true;                              // loopback
   if (a === 10) return true;                               // 10.0.0.0/8
   if (a === 172 && b >= 16 && b <= 31) return true;        // 172.16.0.0/12
@@ -116,7 +142,43 @@ function isPrivateIPv4(ip) {
   if (a === 169 && b === 254) return true;                 // link-local + 169.254.169.254 metadata
   if (a === 0) return true;                                // 0.0.0.0/8
   if (a === 100 && b >= 64 && b <= 127) return true;       // CGNAT 100.64.0.0/10
+  if (a === 192 && b === 0 && c === 0) return true;         // 192.0.0.0/24 IETF protocol assignments
+  if (a === 192 && b === 0 && c === 2) return true;         // TEST-NET-1
+  if (a === 198 && (b === 18 || b === 19)) return true;     // benchmarking 198.18.0.0/15
+  if (a === 198 && b === 51 && c === 100) return true;      // TEST-NET-2
+  if (a === 203 && b === 0 && c === 113) return true;       // TEST-NET-3
+  if (a >= 224 && a <= 239) return true;                   // multicast 224.0.0.0/4
+  if (a >= 240) return true;                               // reserved 240.0.0.0/4 + broadcast
   return false;
+}
+
+/** @param {number} hi @param {number} lo */
+function ipv4From16BitGroups(hi, lo) {
+  const a = (hi >> 8) & 0xff;
+  const b = hi & 0xff;
+  const c = (lo >> 8) & 0xff;
+  const d = lo & 0xff;
+  return `${a}.${b}.${c}.${d}`;
+}
+
+/** @param {string} ip */
+function expandIPv6Groups(ip) {
+  const norm = ip.toLowerCase();
+  if (norm.includes(".")) return null;
+  const halves = norm.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const parts = [...head, ...tail];
+  if (parts.some((p) => !/^[0-9a-f]{1,4}$/.test(p))) return null;
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 && missing !== 0) return null;
+  if (halves.length === 2 && missing < 0) return null;
+  return [
+    ...head,
+    ...Array(halves.length === 2 ? missing : 0).fill("0"),
+    ...tail,
+  ].map((p) => parseInt(p || "0", 16));
 }
 
 // IPv6 equivalents — loopback, ULA (fc00::/7), link-local (fe80::/10),
@@ -134,13 +196,25 @@ function isPrivateIPv6(ip) {
   if (mappedHex) {
     const hi = parseInt(mappedHex[1], 16);
     const lo = parseInt(mappedHex[2], 16);
-    const a = (hi >> 8) & 0xff, b = hi & 0xff, c = (lo >> 8) & 0xff, d = lo & 0xff;
-    return isPrivateIPv4(`${a}.${b}.${c}.${d}`);
+    return isPrivateIPv4(ipv4From16BitGroups(hi, lo));
   }
-  // ULA fc00::/7 — first byte 0xfc or 0xfd
-  if (/^fc[0-9a-f]{2}:/.test(norm) || /^fd[0-9a-f]{2}:/.test(norm)) return true;
-  // Link-local fe80::/10
-  if (/^fe[89ab][0-9a-f]:/.test(norm)) return true;
+  const groups = expandIPv6Groups(norm);
+  if (!groups) return true;
+  const [g0, g1, , , , , g6, g7] = groups;
+  // ULA fc00::/7, link/site-local fe80::/9, and multicast ff00::/8.
+  if (g0 >= 0xfc00 && g0 <= 0xfdff) return true;
+  if (g0 >= 0xfe80 && g0 <= 0xfeff) return true;
+  if (g0 >= 0xff00 && g0 <= 0xffff) return true;
+  if (g0 === 0x2001 && g1 === 0x0000) return true;         // Teredo
+  if (g0 === 0x2001 && g1 === 0x0db8) return true;         // documentation
+  // NAT64 64:ff9b::/96 embeds IPv4 in the final 32 bits.
+  if (g0 === 0x0064 && g1 === 0xff9b && groups.slice(2, 6).every((g) => g === 0)) {
+    return isPrivateIPv4(ipv4From16BitGroups(g6, g7));
+  }
+  // 6to4 2002::/16 embeds IPv4 in groups 1-2.
+  if (g0 === 0x2002) {
+    return isPrivateIPv4(ipv4From16BitGroups(groups[1], groups[2]));
+  }
   return false;
 }
 
@@ -165,6 +239,9 @@ export function validateUrl(rawUrl) {
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`protocol not allowed: ${parsed.protocol}`);
+  }
+  if (!isAllowedPort(parsed)) {
+    throw new Error(`port not allowed: ${parsed.port}`);
   }
 
   const host = parsed.hostname.toLowerCase();
@@ -233,8 +310,45 @@ function dispatcherForIp(ip) {
       },
     }));
     PINNED_DISPATCHERS.set(key, dispatcher);
+    if (PINNED_DISPATCHERS.size > MAX_PINNED_DISPATCHERS) {
+      const oldestKey = PINNED_DISPATCHERS.keys().next().value;
+      const oldest = PINNED_DISPATCHERS.get(oldestKey);
+      PINNED_DISPATCHERS.delete(oldestKey);
+      Promise.resolve()
+        .then(() => oldest?.close?.())
+        .catch(() => {});
+    }
+  } else {
+    PINNED_DISPATCHERS.delete(key);
+    PINNED_DISPATCHERS.set(key, dispatcher);
   }
   return dispatcher;
+}
+
+/** @param {Headers | Record<string, string> | Array<[string, string]> | undefined} [headers] @returns {Record<string, string>} */
+function cloneHeaders(headers) {
+  if (!headers) return {};
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    return Object.fromEntries(headers.entries());
+  }
+  if (Array.isArray(headers)) return Object.fromEntries(headers);
+  return { .../** @type {Record<string, string>} */ (headers) };
+}
+
+/** @param {Record<string, string>} headers @returns {Record<string, string>} */
+function stripSensitiveRedirectHeaders(headers) {
+  const out = /** @type {Record<string, string>} */ ({});
+  for (const [key, value] of Object.entries(headers || {})) {
+    if (!SENSITIVE_REDIRECT_HEADERS.has(key.toLowerCase())) out[key] = value;
+  }
+  return out;
+}
+
+/** @param {number} status @param {string} method */
+function shouldRewriteRedirectMethod(status, method) {
+  const upper = String(method || "GET").toUpperCase();
+  if (status === 303) return true;
+  return (status === 301 || status === 302) && upper !== "GET" && upper !== "HEAD";
 }
 
 /**
@@ -262,6 +376,9 @@ export async function safeFetch(rawUrl, opts = {}) {
     maxRedirects = MAX_REDIRECTS,
     binary = false,
   } = opts;
+  let currentMethod = opts.method || "GET";
+  let currentBody = opts.body;
+  let currentHeaders = cloneHeaders(headers);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -271,14 +388,15 @@ export async function safeFetch(rawUrl, opts = {}) {
     let hops = 0;
     while (true) {
       const { ip } = await validateUrlAsync(currentUrl);
-      const res = await fetch(currentUrl, /** @type {any} */ ({
-        method: opts.method || "GET",
-        headers,
-        body: opts.body,
+      const fetchInit = /** @type {any} */ ({
+        method: currentMethod,
+        headers: currentHeaders,
         redirect: "manual",
         signal: controller.signal,
         dispatcher: dispatcherForIp(ip),
-      }));
+      });
+      if (currentBody !== undefined) fetchInit.body = currentBody;
+      const res = await fetch(currentUrl, fetchInit);
 
       // Follow 3xx manually so we can re-validate the Location target.
       if (res.status >= 300 && res.status < 400) {
@@ -291,7 +409,16 @@ export async function safeFetch(rawUrl, opts = {}) {
           return { status: res.status, headers: res.headers, text: "", url: currentUrl };
         }
         if (++hops > maxRedirects) throw new Error("too many redirects");
-        currentUrl = new URL(loc, currentUrl).toString();
+        const previousUrl = new URL(currentUrl);
+        const nextUrl = new URL(loc, previousUrl);
+        if (previousUrl.origin !== nextUrl.origin) {
+          currentHeaders = stripSensitiveRedirectHeaders(currentHeaders);
+        }
+        if (shouldRewriteRedirectMethod(res.status, currentMethod)) {
+          currentMethod = "GET";
+          currentBody = undefined;
+        }
+        currentUrl = nextUrl.toString();
         continue;
       }
 

@@ -2,14 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   lookups: [] as Array<(host: string, opts: any, cb: (...args: any[]) => void) => void>,
+  agents: [] as Array<{ close: ReturnType<typeof vi.fn> }>,
 }));
 
 vi.mock("undici", () => ({
   Agent: class {
     dispatch = vi.fn();
+    close = vi.fn(async () => {});
 
     constructor(opts: any) {
       h.lookups.push(opts.connect.lookup);
+      h.agents.push(this);
     }
   },
 }));
@@ -18,6 +21,7 @@ describe("safeFetch dispatcher DNS pinning", () => {
   beforeEach(() => {
     vi.resetModules();
     h.lookups.length = 0;
+    h.agents.length = 0;
     globalThis.fetch = vi.fn(async () => new Response("ok", { status: 200 })) as any;
   });
 
@@ -55,5 +59,17 @@ describe("safeFetch dispatcher DNS pinning", () => {
     });
 
     expect(result).toEqual({ address: "8.8.8.8", family: 4 });
+  });
+
+  it("evicts and closes the oldest pinned dispatcher after the LRU cap", async () => {
+    const { safeFetch } = await import("../src/safeFetch.js");
+
+    for (let i = 1; i <= 65; i++) {
+      await safeFetch(`https://1.1.1.${i}/ok`);
+    }
+
+    expect(h.agents).toHaveLength(65);
+    expect(h.agents[0].close).toHaveBeenCalledTimes(1);
+    expect(h.agents[64].close).not.toHaveBeenCalled();
   });
 });

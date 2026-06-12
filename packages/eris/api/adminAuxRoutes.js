@@ -1,10 +1,11 @@
 import http from "http";
+import os from "node:os";
 import { existsSync, readFileSync } from "fs";
 import config from "../config.js";
 import { requireDashboardAuth, enforceDashboardRateLimit } from "./dashboard.js";
 import { normalizeRequestPathname, parseRequestUrl } from "@defnotean/shared/httpRequest";
 
-const HOME_DIR = process.env.HOME || `/home/${process.env.USER || "defnotean"}`;
+const HOME_DIR = process.env.HOME || os.homedir();
 const LOG_DIR = `${HOME_DIR}/.local/monobot-logs`;
 const MAX_PROXY_BODY_BYTES = 1_048_576;
 

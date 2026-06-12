@@ -68,12 +68,52 @@ describe("validateUrl — protocol + hostname-trick + literal-IP guards", () => 
     expect(() => validateUrl("http://172.32.0.1/")).not.toThrow();
   });
 
+  it("rejects non-default ports unless explicitly allowed", () => {
+    expect(() => validateUrl("https://1.1.1.1:6379/")).toThrow(/port not allowed/);
+    expect(() => validateUrl("http://1.1.1.1:80/")).not.toThrow();
+    expect(() => validateUrl("https://1.1.1.1:443/")).not.toThrow();
+  });
+
+  it("allows extra ports listed in SAFE_FETCH_EXTRA_PORTS", async () => {
+    const previous = process.env.SAFE_FETCH_EXTRA_PORTS;
+    try {
+      process.env.SAFE_FETCH_EXTRA_PORTS = "8080, 11434";
+      vi.resetModules();
+      const { validateUrl: validateUrlWithExtraPorts } = await import("../src/safeFetch.js");
+
+      expect(() => validateUrlWithExtraPorts("https://1.1.1.1:8080/")).not.toThrow();
+      expect(() => validateUrlWithExtraPorts("https://1.1.1.1:11434/")).not.toThrow();
+      expect(() => validateUrlWithExtraPorts("https://1.1.1.1:6379/")).toThrow(/port not allowed/);
+    } finally {
+      if (previous === undefined) delete process.env.SAFE_FETCH_EXTRA_PORTS;
+      else process.env.SAFE_FETCH_EXTRA_PORTS = previous;
+      vi.resetModules();
+    }
+  });
+
+  it.each([
+    "192.0.0.1",
+    "192.0.0.255",
+    "192.0.2.1",
+    "198.18.0.1",
+    "198.19.255.255",
+    "198.51.100.10",
+    "203.0.113.20",
+    "224.0.0.1",
+    "239.255.255.255",
+    "240.0.0.1",
+    "255.255.255.255",
+  ])("blocks reserved IPv4 literal %s", (ip) => {
+    expect(() => validateUrl(`http://${ip}/`)).toThrow(/private/);
+  });
+
   it("blocks IPv6 loopback / unspecified / ULA / link-local literals", () => {
     expect(() => validateUrl("http://[::1]/")).toThrow(/private/);
     expect(() => validateUrl("http://[::]/")).toThrow(/private/);
     expect(() => validateUrl("http://[fc00::1]/")).toThrow(/private/);
     expect(() => validateUrl("http://[fd12:3456::1]/")).toThrow(/private/);
     expect(() => validateUrl("http://[fe80::1]/")).toThrow(/private/);
+    expect(() => validateUrl("http://[fec0::1]/")).toThrow(/private/);
   });
 
   it("blocks IPv4-mapped IPv6 forms of loopback (dotted and hex canonicalizations)", () => {
@@ -81,6 +121,17 @@ describe("validateUrl — protocol + hostname-trick + literal-IP guards", () => 
     // hex canonical form ::ffff:7f00:1; both must resolve to the embedded v4.
     expect(() => validateUrl("http://[::ffff:127.0.0.1]/")).toThrow(/private/);
     expect(() => validateUrl("http://[::ffff:7f00:1]/")).toThrow(/private/);
+  });
+
+  it.each([
+    "64:ff9b::7f00:1",
+    "64:ff9b::c000:0201",
+    "2002:7f00:1::",
+    "2001:0000:4136:e378:8000:63bf:3fff:fdd2",
+    "2001:db8::1",
+    "ff02::1",
+  ])("blocks IPv6 reserved or IPv4-embedding literal %s", (ip) => {
+    expect(() => validateUrl(`http://[${ip}]/`)).toThrow(/private/);
   });
 
   it("allows a public IPv6 literal", () => {
@@ -188,6 +239,77 @@ describe("safeFetch — request issuance + redirect re-validation + size cap", (
     }) as any;
     await safeFetch("https://1.1.1.1/start");
     expect(seen[1]).toBe("https://1.1.1.1/next");
+  });
+
+  it("strips credential-like headers on cross-origin redirects and rewrites unsafe 302 to GET", async () => {
+    const spy = vi.fn(async (url: any) => {
+      if (String(url).endsWith("/start")) {
+        return new Response(null, { status: 302, headers: new Headers({ location: "https://8.8.8.8/final" }) });
+      }
+      return new Response("ok", { status: 200 });
+    });
+    globalThis.fetch = spy as any;
+
+    await safeFetch("https://1.1.1.1/start", {
+      method: "POST",
+      body: "payload",
+      headers: {
+        Authorization: "Bearer secret",
+        Cookie: "sid=secret",
+        "Proxy-Authorization": "Basic secret",
+        "X-Api-Key": "secret",
+        "X-Keep": "1",
+      },
+    });
+
+    const secondInit = spy.mock.calls[1][1] as RequestInit;
+    const secondHeaders = secondInit.headers as Record<string, string>;
+    expect(secondInit.method).toBe("GET");
+    expect(secondInit.body).toBeUndefined();
+    expect(secondHeaders.Authorization).toBeUndefined();
+    expect(secondHeaders.Cookie).toBeUndefined();
+    expect(secondHeaders["Proxy-Authorization"]).toBeUndefined();
+    expect(secondHeaders["X-Api-Key"]).toBeUndefined();
+    expect(secondHeaders["X-Keep"]).toBe("1");
+  });
+
+  it("keeps credential-like headers on same-origin redirects", async () => {
+    const spy = vi.fn(async (url: any) => {
+      if (String(url).endsWith("/start")) {
+        return new Response(null, { status: 302, headers: new Headers({ location: "/final" }) });
+      }
+      return new Response("ok", { status: 200 });
+    });
+    globalThis.fetch = spy as any;
+
+    await safeFetch("https://1.1.1.1/start", {
+      headers: {
+        Authorization: "Bearer secret",
+        Cookie: "sid=secret",
+        "X-Api-Key": "secret",
+      },
+    });
+
+    const secondHeaders = spy.mock.calls[1][1].headers as Record<string, string>;
+    expect(secondHeaders.Authorization).toBe("Bearer secret");
+    expect(secondHeaders.Cookie).toBe("sid=secret");
+    expect(secondHeaders["X-Api-Key"]).toBe("secret");
+  });
+
+  it("rewrites 303 redirects to GET and drops the request body", async () => {
+    const spy = vi.fn(async (url: any) => {
+      if (String(url).endsWith("/start")) {
+        return new Response(null, { status: 303, headers: new Headers({ location: "/final" }) });
+      }
+      return new Response("ok", { status: 200 });
+    });
+    globalThis.fetch = spy as any;
+
+    await safeFetch("https://1.1.1.1/start", { method: "POST", body: "payload" });
+
+    const secondInit = spy.mock.calls[1][1] as RequestInit;
+    expect(secondInit.method).toBe("GET");
+    expect(secondInit.body).toBeUndefined();
   });
 
   it("treats a 3xx without a Location header as a terminal response (text mode)", async () => {

@@ -109,11 +109,16 @@ Every URL that originates from a user or model is routed through `safeFetch`,
 which:
 
 - Rejects non-`http(s)` protocols and bracketed-IP tricks.
+- Allows only default HTTP(S) ports (`80`, `443`, or an omitted scheme default)
+  unless a deployment explicitly lists extras in `SAFE_FETCH_EXTRA_PORTS`.
 - DNS-resolves the host and checks the resolved IP against private,
-  loopback, link-local, CGNAT, and cloud-metadata ranges (IPv4 and IPv6,
-  including IPv4-mapped IPv6 forms).
+  loopback, link-local, CGNAT, cloud-metadata, documentation, benchmarking,
+  multicast, and reserved ranges (IPv4 and IPv6, including IPv4-mapped,
+  NAT64, and 6to4 embedded IPv4 forms).
 - Follows up to 3 redirects manually, re-validating each hop (defeats
-  DNS-rebinding via redirect).
+  DNS-rebinding via redirect), stripping credential-like headers on
+  cross-origin hops, and rewriting unsafe 301/302 plus all 303 redirects to
+  `GET` with no body.
 - Caps body size (5 MB default) and request time (10s default).
 
 ### HMAC twin signing (`packages/shared/src/twinSign.js`)
@@ -132,12 +137,48 @@ can also set a process-wide `globalLimit`, so high-cardinality churn cannot
 turn forged keys into unlimited accepted throughput. State is still per
 process; multi-replica deployments should use a shared limiter.
 
-### Owner gating (`BOT_OWNER_ID` env)
+### Owner gating (`BOT_OWNER_ID` / `DISCORD_USER_ID` env)
 
 Sensitive tools (`shell`, deploy controls, eval-shaped helpers, audit
-exports) check the invoking Discord user ID against `BOT_OWNER_ID` and refuse
-otherwise. This is a single-tenant trust model — there is no admin/sub-owner
-distinction.
+exports) check the invoking Discord user ID against `BOT_OWNER_ID` (Eris) /
+`DISCORD_USER_ID` (Irene) and refuse otherwise. This is a single-tenant trust
+model — there is no admin/sub-owner distinction.
+
+These variables have **no default**. Earlier revisions shipped a hardcoded
+fallback owner ID, which meant a fork that forgot to set the variable
+silently granted owner authority to a Discord account outside the operator's
+control; that fallback has been removed. When the variable is unset, no user
+ID can match the owner check and every owner-only tool refuses — the gate
+fails closed, not open.
+
+### Database posture (Supabase RLS, `packages/eris/migrations/014_enable_rls_all_tables.sql`)
+
+The RLS hardening migration ([packages/eris/migrations/014_enable_rls_all_tables.sql](packages/eris/migrations/014_enable_rls_all_tables.sql)) enables row-level security on every bot table
+(`eris_*`, `irene_*`, `bot_data`, `music_settings`, `dual_write_sagas`) and
+revokes all grants from the `anon` and `authenticated` roles, so the data
+layer is reachable only via `service_role`. A leaked anon/publishable key no
+longer grants read/write access to balances, memory facts, whitelists, or
+moderation audit rows.
+
+Two operational consequences:
+
+- The bots must connect with the **service-role key** as `SUPABASE_KEY` —
+  the service role bypasses RLS, which is what keeps the bots working. An
+  anon key will no longer reach any table.
+- Because the service-role key bypasses every policy, it must never be
+  exposed client-side: not in a dashboard bundle, not in a browser, not in
+  anything an untrusted party can reach. Server-side `.env` only.
+
+### Voice capture (Irene wake-word STT, `packages/irene/voice/listener.js`)
+
+Voice listening is opt-in per session. When a session starts, the bot posts
+a recording/transcription notice in the channel so participants know audio
+is being captured and transcribed — people who never address the bot are
+not recorded silently. Transcripts are treated as untrusted input like any
+other user text: they pass through the prompt-injection firewall before
+reaching the model, and the voice reply path is tool-free by construction
+(a plain text generation with no tool dispatch), so a spoken injection
+cannot trigger tools even if it slips past detection.
 
 ### Dashboard / aux-route auth (`packages/eris/api/dashboard.js`, `packages/eris/api/adminAuxRoutes.js`)
 
@@ -221,8 +262,10 @@ list, in no particular order:
   credentials in the repo; the `.env.example` files only list variable
   names.
 - `.env` files are gitignored and must never be committed.
-- The `BOT_OWNER_ID` env var is the sole authorization root for owner-only
-  tools — treat it with the same care as the token.
+- The `BOT_OWNER_ID` (Eris) / `DISCORD_USER_ID` (Irene) env var is the sole
+  authorization root for owner-only tools — treat it with the same care as
+  the token. It has no fallback default; leaving it unset disables every
+  owner-only tool (fail closed).
 
 ### HMAC twin secret rotation procedure
 

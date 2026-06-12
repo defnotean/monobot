@@ -9,7 +9,7 @@
 import { GoogleGenAI } from "@google/genai";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
-import { wrapUntrusted } from "@defnotean/shared/safeFetch";
+import { spotlight } from "./firewall.js";
 import { routeCatalogTool, withRouterTool } from "@defnotean/shared/toolRouter";
 import { getEconomyMutatingTools, registry } from "./toolRegistry.js";
 // Alias map only — needed so the untrusted-result wrap below keys on the
@@ -75,7 +75,7 @@ export function wrapUntrustedToolResult(toolName, result) {
     ? TOOL_ALIASES[toolName]
     : toolName;
   if (typeof result !== "string" || !UNTRUSTED_RESULT_TOOLS.has(canonical)) return result;
-  return wrapUntrusted(result);
+  return spotlight(result, canonical);
 }
 
 // ─── Schema Sanitization ────────────────────────────────────────────────────
