@@ -277,6 +277,14 @@ function _requeueDirty(dirty, dirtyEntities) {
   }
 }
 
+function hasNonEmptyJsonPayload(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return JSON.stringify(value).length >= 5;
+  if (typeof value !== "object") return String(value).length >= 5;
+  if (Array.isArray(value)) return value.length > 0;
+  return Object.keys(value).length > 0;
+}
+
 function save(bucket) {
   if (!supabase) { log("[DB] Write discarded — Supabase not connected (data is in-memory only)"); return; }
   // Mark the changed slice dirty. A known bucket name keys the slice; anything
@@ -446,14 +454,14 @@ async function _flushSave() {
         }
       }
     }
-    const json = JSON.stringify(data);
-    if (!json || json === "null" || json === "undefined" || json.length < 5) {
-      log(`[DB] Save aborted — data serialized to empty/invalid (${json?.length ?? 0} chars)`);
+    const snapshot = structuredClone(data);
+    if (!hasNonEmptyJsonPayload(snapshot)) {
+      log("[DB] Save aborted - data snapshot was empty/invalid");
       // Re-mark so the changes aren't silently lost on the next flush.
       _requeueDirty(dirty, dirtyEntities);
       return;
     }
-    saveData = JSON.parse(json); // round-trip to strip non-serializable values
+    saveData = snapshot;
   } catch (serErr) {
     log(`[DB] Save aborted — serialization failed: ${serErr.message}`);
     _requeueDirty(dirty, dirtyEntities);

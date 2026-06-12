@@ -21,7 +21,7 @@ function fakeSupabase() {
         async upsert(payload: Upsert) {
           // Deep-clone so later in-memory mutations can't retroactively change
           // what the test thinks was written.
-          upserts.push({ id: payload.id, data: JSON.parse(JSON.stringify(payload.data)) });
+          upserts.push({ id: payload.id, data: structuredClone(payload.data) });
           return { error: upsertError };
         },
       };
@@ -151,6 +151,21 @@ describe("dirty-set partial flush", () => {
     await db._internal.flushSave();
     // After 3 failed attempts the slice is re-queued for the next debounce.
     expect([...db._internal.dirty]).toEqual(["guild_settings"]);
+  });
+
+  it("snapshots the whole blob without a JSON.parse round-trip", async () => {
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      db.setGuildSetting("g1", "log_channel", "c1");
+      await db._internal.flushSave();
+
+      expect(parseSpy).not.toHaveBeenCalled();
+      expect(upserts).toHaveLength(1);
+      expect(upserts[0].data).not.toBe(db._internal.data);
+      expect(upserts[0].data.guild_settings.g1.log_channel).toBe("c1");
+    } finally {
+      parseSpy.mockRestore();
+    }
   });
 });
 

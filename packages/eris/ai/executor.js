@@ -293,6 +293,8 @@ const CACHE_INVALIDATING_EXTRAS = [
   // banking + stocks + loans
   "bank_deposit", "bank_withdraw", "stock_buy", "stock_sell",
   "loan_request", "loan_repay",
+  // casino/event writes outside the canonical game list
+  "buy_lottery_ticket", "start_poker", "join_poker", "daily_challenge_complete",
   // transfers + relationship state
   "give_coins", "trade_offer", "marry", "divorce", "prestige",
   // pets that mutate inventory/state but aren't gambling/activity
@@ -331,7 +333,7 @@ function setCachedResult(toolName, args, userId, result) {
  * performs a write (gamble, buy, transfer) so their next read is fresh.
  * O(k) via the LRUCache group index instead of the previous O(n) full scan.
  */
-function invalidateUserCache(userId) {
+export function invalidateUserCache(userId) {
   if (!userId) return 0;
   return _toolCache.deleteGroup(userId);
 }

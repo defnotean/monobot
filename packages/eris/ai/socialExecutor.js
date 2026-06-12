@@ -7,6 +7,7 @@ import { randomInt } from "crypto";
 import * as db from "../database.js";
 import { log } from "../utils/logger.js";
 import { resolveMember } from "../utils/discord.js";
+import { invalidateUserCache } from "./executor.js";
 
 // Resolve a target user from any of (user_id, target_id, username) so the model
 // can pass whichever is most natural for the request. user_id wins if present
@@ -490,6 +491,7 @@ export async function executeSocialTool(toolName, input, message) {
 
         await db.updateBalance(userId, -1000, "divorce", "alimony");
         await db.updateBalance(partnerId, 500, "alimony", "divorce settlement");
+        invalidateUserCache(partnerId);
         await db.deleteMarriage(userId);
 
         if (!await db.hasAchievement(userId, "divorced")) await db.unlockAchievement(userId, "divorced");

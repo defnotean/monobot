@@ -14,6 +14,10 @@ const dbState = {
   guildSettings: { cross_bot_punish: true } as Record<string, unknown>,
   balance: { balance: 0 } as { balance: number },
   updateBalanceCalls: [] as Array<{ userId: string; delta: number; type: string; details: string }>,
+  updateBalanceUnsafeCalls: [] as Array<{ userId: string; delta: number; type: string; details: string }>,
+  lockCalls: [] as string[],
+  balanceEvents: [] as Array<{ op: string; locked: boolean }>,
+  lockDepth: 0,
   saveReminderCalls: [] as Array<{ userId: string; channelId: string; text: string; remindAt: string }>,
   saveNoteCalls: [] as Array<{ userId: string; title: string; content: string }>,
   saveFactCalls: [] as Array<{ userId: string; fact: string }>,
@@ -48,10 +52,28 @@ vi.mock("../../database.js", () => ({
   updatePersonality: async () => true,
   getAnalytics: async () => [],
   getGuildSettings: (gid: string) => ({ guild_id: gid, ...dbState.guildSettings }),
-  getBalance: async () => dbState.balance,
+  getBalance: async () => {
+    dbState.balanceEvents.push({ op: "getBalance", locked: dbState.lockDepth > 0 });
+    return dbState.balance;
+  },
   updateBalance: async (userId: string, delta: number, type: string, details: string) => {
+    dbState.balanceEvents.push({ op: "updateBalance", locked: dbState.lockDepth > 0 });
     dbState.updateBalanceCalls.push({ userId, delta, type, details });
     return true;
+  },
+  updateBalanceUnsafe: async (userId: string, delta: number, type: string, details: string) => {
+    dbState.balanceEvents.push({ op: "updateBalanceUnsafe", locked: dbState.lockDepth > 0 });
+    dbState.updateBalanceUnsafeCalls.push({ userId, delta, type, details });
+    return true;
+  },
+  withUserLock: async (userId: string, fn: () => Promise<unknown>) => {
+    dbState.lockCalls.push(userId);
+    dbState.lockDepth++;
+    try {
+      return await fn();
+    } finally {
+      dbState.lockDepth--;
+    }
   },
 }));
 
@@ -175,6 +197,10 @@ beforeEach(() => {
   dbState.guildSettings = { cross_bot_punish: true };
   dbState.balance = { balance: 0 };
   dbState.updateBalanceCalls.length = 0;
+  dbState.updateBalanceUnsafeCalls.length = 0;
+  dbState.lockCalls.length = 0;
+  dbState.balanceEvents.length = 0;
+  dbState.lockDepth = 0;
   dbState.saveReminderCalls.length = 0;
   dbState.saveNoteCalls.length = 0;
   dbState.saveFactCalls.length = 0;
@@ -247,12 +273,18 @@ describe("/api/twin/punish — strict HMAC auth (legacy body.secret removed)", (
     expect(body.applied).toBe(true);
     expect(body.action).toBe("ban");
     expect(body.confiscated).toBe(500);
-    expect(dbState.updateBalanceCalls).toHaveLength(1);
-    expect(dbState.updateBalanceCalls[0]).toMatchObject({
+    expect(dbState.lockCalls).toEqual(["234567890123456789"]);
+    expect(dbState.updateBalanceCalls).toHaveLength(0);
+    expect(dbState.updateBalanceUnsafeCalls).toHaveLength(1);
+    expect(dbState.updateBalanceUnsafeCalls[0]).toMatchObject({
       userId: "234567890123456789",
       delta: -500,
       type: "irene_ban",
     });
+    expect(dbState.balanceEvents).toEqual([
+      { op: "getBalance", locked: true },
+      { op: "updateBalanceUnsafe", locked: true },
+    ]);
   });
 
   it("rejects a request whose body.secret matches TWIN_API_SECRET but lacks HMAC headers (regression for the legacy fallback)", async () => {

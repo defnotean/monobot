@@ -159,6 +159,8 @@ export function getSupabase() { return supabase; }
 // while keeping the data-loss window small. On graceful shutdown the
 // `beforeExit` / SIGINT / SIGTERM hooks call `flushAll()` to drain immediately.
 const _DEBOUNCE_MS = 200;
+const _RETRY_BASE_MS = 30_000;
+const _RETRY_MAX_MS = 5 * 60_000;
 export function save(bucket) {
   if (bucket) _dirty.add(bucket);
   if (_saveTimer) return;
@@ -205,6 +207,13 @@ export function _assertPersistenceHealthy() {
   }
 }
 
+function _scheduleRetryFlush() {
+  if (_saveTimer || !_dirty.size) return;
+  const failures = Math.max(1, _consecutiveFlushFailures);
+  const delayMs = Math.min(_RETRY_MAX_MS, _RETRY_BASE_MS * failures);
+  _saveTimer = setTimeout(() => _flushSave(), delayMs);
+}
+
 async function _flushSave() {
   _saveTimer = null;
   if (!supabase) return;
@@ -243,6 +252,7 @@ async function _flushSave() {
     if (_consecutiveFlushFailures === _FLUSH_FAILURE_THRESHOLD) {
       log(`[DB] ${_FLUSH_FAILURE_THRESHOLD} consecutive flush failures — refusing economy-mutating writes until a flush succeeds (reads still served from cache)`);
     }
+    _scheduleRetryFlush();
   } else {
     if (_consecutiveFlushFailures >= _FLUSH_FAILURE_THRESHOLD) {
       log(`[DB] Flush recovered — re-enabling economy-mutating writes`);

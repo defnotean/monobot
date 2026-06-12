@@ -14,6 +14,13 @@ import { normalizeRequestPathname, parseRequestUrl } from "@defnotean/shared/htt
 // awareness sync runs on much longer intervals.
 const _twinStateLimiter = createRateLimiter({ limit: 10, windowMs: 60_000, maxKeys: 128, globalLimit: 60 });
 const _dashboardLimiter = createRateLimiter({ limit: 180, windowMs: 60_000, maxKeys: 500, globalLimit: 2000 });
+// Dedicated per-IP limiter for the signed twin endpoints (/api/twin/*). These
+// deliberately do NOT share _dashboardLimiter: that bucket is consumed by
+// unauthenticated traffic before auth runs, so a public /api/health flood
+// could exhaust the shared global budget and silently 429 Irene's signed
+// cross-bot moderation/confiscation calls. No global cap here — per-IP only —
+// so flooded public buckets can never starve the twin channel.
+const _twinLimiter = createRateLimiter({ limit: 60, windowMs: 60_000, maxKeys: 256 });
 
 function moodLabel(score) {
   if (score >= 60) return "ecstatic";
@@ -205,14 +212,23 @@ export async function handleApiRequest(req, res) {
 
   res.setHeader("Content-Type", "application/json");
 
-  // ── Rate limiting (per-IP, dashboard-safe) ───────────────────────────────
-  // Shared helper (also used by the admin auxiliary routes) — same bucket,
-  // X-Forwarded-For aware so Render's single shared socket peer doesn't
-  // collapse all visitors into one key.
-  if (enforceDashboardRateLimit(req, res)) return;
-
   const url0 = parseRequestUrl(req.url, `http://localhost:${config.port}`);
   const isTwinPath = normalizeRequestPathname(url0.pathname).startsWith("/api/twin/");
+
+  // ── Rate limiting (per-IP, dashboard-safe) ───────────────────────────────
+  // Twin endpoints use a DEDICATED bucket so an unauthenticated dashboard
+  // flood can't starve signed twin calls. Everything else goes through the
+  // shared helper (also used by the admin auxiliary routes) — same bucket,
+  // X-Forwarded-For aware so Render's single shared socket peer doesn't
+  // collapse all visitors into one key.
+  if (isTwinPath) {
+    if (!_twinLimiter.allow(getClientIp(req))) {
+      json(res, 429, { error: "rate limited" });
+      return;
+    }
+  } else if (enforceDashboardRateLimit(req, res)) {
+    return;
+  }
 
   // Twin API — require TWIN_API_SECRET (same as Irene)
   if (isTwinPath) {
@@ -541,17 +557,20 @@ export async function handleApiRequest(req, res) {
           json(res, 200, { applied: false, reason: "action not punishable" });
           return;
         }
-        const before = await db.getBalance(body.user_id);
-        const confiscated = Number.isFinite(before?.balance) && before.balance > 0 ? Math.floor(before.balance) : 0;
-        if (confiscated > 0) {
-          try {
-            // Standard locking updateBalance — no outer user lock held.
-            await db.updateBalance(body.user_id, -confiscated, `irene_${action}`, (body.reason || "cross-bot punishment").slice(0, 200));
-          } catch (err) {
-            log(`[Twin] punish updateBalance failed for ${body.user_id}: ${err.message}`);
-            json(res, 500, { error: "confiscation failed", message: err.message });
-            return;
-          }
+        let confiscated = 0;
+        try {
+          confiscated = await db.withUserLock(body.user_id, async () => {
+            const before = await db.getBalance(body.user_id);
+            const amount = Number.isFinite(before?.balance) && before.balance > 0 ? Math.floor(before.balance) : 0;
+            if (amount > 0) {
+              await db.updateBalanceUnsafe(body.user_id, -amount, `irene_${action}`, (body.reason || "cross-bot punishment").slice(0, 200));
+            }
+            return amount;
+          });
+        } catch (err) {
+          log(`[Twin] punish updateBalance failed for ${body.user_id}: ${err.message}`);
+          json(res, 500, { error: "confiscation failed" }); // Never expose internals
+          return;
         }
         json(res, 200, {
           applied: true,
@@ -562,7 +581,8 @@ export async function handleApiRequest(req, res) {
           from: "eris",
         });
       } catch (err) {
-        json(res, 500, { error: err.message });
+        log(`[Twin] punish error: ${err.message}`);
+        json(res, 500, { error: "internal server error" }); // Never expose internals
       }
       return;
     }
@@ -780,7 +800,7 @@ export async function handleApiRequest(req, res) {
         .select("user_id, balance, daily_streak, total_earned, total_lost, total_gambled, prestige_level, updated_at")
         .order("balance", { ascending: false })
         .limit(limit);
-      if (error) { json(res, 500, { error: error.message }); return; }
+      if (error) { log(`[API] economy top query failed: ${error.message}`); json(res, 500, { error: "query failed" }); return; }
       // Loose row type: we enrich each row with a resolved `username` below,
       // which the typed economy-select shape doesn't include.
       const rows = /** @type {Array<Record<string, any>>} */ (data || []);
@@ -822,7 +842,7 @@ export async function handleApiRequest(req, res) {
           const newBal = (existing?.balance ?? 0) + body.delta;
           await sb.from("eris_economy").upsert({ user_id: body.user_id, balance: newBal, updated_at: new Date().toISOString() });
         }
-      } catch (e) { json(res, 500, { error: e.message }); return; }
+      } catch (e) { log(`[API] economy adjust failed: ${e.message}`); json(res, 500, { error: "adjust failed" }); return; }
       const { data: row } = await sb.from("eris_economy").select("user_id, balance").eq("user_id", body.user_id).maybeSingle();
       log(`[API] economy adjust: ${body.user_id} ${body.delta >= 0 ? "+" : ""}${body.delta} (${reason})`);
       json(res, 200, { ok: true, user_id: body.user_id, new_balance: row?.balance ?? null });
@@ -836,7 +856,7 @@ export async function handleApiRequest(req, res) {
       const uid = url.searchParams.get("user_id");
       if (uid) q = q.eq("user_id", uid);
       const { data, error } = await q;
-      if (error) { json(res, 500, { error: error.message }); return; }
+      if (error) { log(`[API] transactions query failed: ${error.message}`); json(res, 500, { error: "query failed" }); return; }
       const rows = /** @type {Array<Record<string, any>>} */ (data || []);
       await enrichRowsWithUsernames(rows, sb);
       json(res, 200, { rows, limit });
@@ -850,7 +870,7 @@ export async function handleApiRequest(req, res) {
       const uid = url.searchParams.get("user_id");
       if (uid) q = q.eq("user_id", uid);
       const { data, error } = await q;
-      if (error) { json(res, 500, { error: error.message }); return; }
+      if (error) { log(`[API] inventory query failed: ${error.message}`); json(res, 500, { error: "query failed" }); return; }
       json(res, 200, { rows: data || [], limit });
       return;
     }
