@@ -33,6 +33,7 @@ vi.mock("../../../ai/firewall.js", () => ({
 }));
 const describeImageAttachments = vi.hoisted(() => vi.fn());
 vi.mock("@defnotean/shared/localVision", () => ({ describeImageAttachments }));
+vi.mock("../../../ai/visionFallback.js", () => ({ describeImageWithGemini: vi.fn() }));
 // Partial database mock — keep the real in-memory implementations, but pin
 // getDirectives so the buildSystemPrompt directives test can inject rows.
 const getDirectives = vi.hoisted(() => vi.fn(() => []));
@@ -295,6 +296,8 @@ describe("contextBuild / collectImages", () => {
       visionUrl: "http://127.0.0.1:11434",
       model: "qwen2.5vl:3b",
       fallbackModel: "moondream",
+      cloudFallback: expect.any(Function),
+      cloudFallbackMode: "weak",
       maxImages: 4,
       maxBytes: 1234,
       visionTimeoutMs: 30_000,

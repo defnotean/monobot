@@ -7,6 +7,7 @@ import {
   formatImageDescriptions,
   getImageAttachments,
   isImageAttachment,
+  isWeakVisionDescription,
   readImageDimensions,
   shouldCreateImageTiles,
 } from "../src/ai/localVision.js";
@@ -167,6 +168,68 @@ describe("localVision", () => {
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body).model).toBe("qwen2.5vl:7b");
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body).model).toBe("moondream");
     expect(description).toContain("fallback saw the image");
+  });
+
+  it("detects weak local vision descriptions without flagging useful evidence", () => {
+    expect(isWeakVisionDescription("it still looks super blurry or didn't load right for me")).toBe(true);
+    expect(isWeakVisionDescription("Visible: cannot tell\nText: none visible\nUnclear: whole image")).toBe(true);
+    expect(isWeakVisionDescription("Visible: a red square on a plain background\nText: none visible\nUnclear: none")).toBe(false);
+  });
+
+  it("uses cloud fallback when local vision returns weak evidence", async () => {
+    const safeFetch = vi.fn()
+      .mockResolvedValueOnce({ status: 200, bytes: Buffer.from("image"), headers: new Headers({ "content-type": "image/png" }) });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ message: { content: "Visible: cannot tell, it is too blurry\nText: none visible\nUnclear: whole image" } }) });
+    const cloudFallback = vi.fn()
+      .mockResolvedValueOnce("Visible: a crisp screenshot of a settings page\nText: Settings\nUnclear: none");
+    const message = {
+      attachments: new Collection([
+        ["1", { url: "https://cdn.test/weak.png", contentType: "image/png", name: "weak.png" }],
+      ]),
+    };
+
+    const result = await describeImageAttachments(message, {
+      visionUrl: "http://127.0.0.1:11434",
+      model: "moondream",
+      cloudFallback,
+      cloudFallbackMode: "weak",
+      safeFetch,
+      fetchImpl,
+    });
+
+    expect(cloudFallback).toHaveBeenCalledWith(expect.objectContaining({
+      mimeType: "image/png",
+      name: "weak.png",
+      source: "local_weak",
+      localDescription: expect.stringContaining("too blurry"),
+    }));
+    expect(result.imageDescriptions[0].description).toContain("settings page");
+  });
+
+  it("uses cloud fallback when local vision fails", async () => {
+    const safeFetch = vi.fn()
+      .mockResolvedValueOnce({ status: 200, bytes: Buffer.from("image"), headers: new Headers({ "content-type": "image/png" }) });
+    const fetchImpl = vi.fn().mockRejectedValueOnce(new Error("local vision timed out"));
+    const cloudFallback = vi.fn()
+      .mockResolvedValueOnce("Visible: a detailed phone screenshot\nText: hello\nUnclear: none");
+    const message = {
+      attachments: new Collection([
+        ["1", { url: "https://cdn.test/failed.png", contentType: "image/png", name: "failed.png" }],
+      ]),
+    };
+
+    const result = await describeImageAttachments(message, {
+      visionUrl: "http://127.0.0.1:11434",
+      model: "moondream",
+      cloudFallback,
+      cloudFallbackMode: "failed",
+      safeFetch,
+      fetchImpl,
+    });
+
+    expect(cloudFallback).toHaveBeenCalledWith(expect.objectContaining({ source: "local_failed" }));
+    expect(result.imageDescriptions[0].description).toContain("phone screenshot");
   });
 
   it("tries Discord proxy URLs when the primary attachment URL fails", async () => {

@@ -77,6 +77,7 @@ vi.mock("@defnotean/shared/localVision", () => ({
     omittedCount: 0,
   })),
 }));
+vi.mock("../../../ai/visionFallback.js", () => ({ describeImageWithGemini: vi.fn() }));
 
 // @ts-expect-error - importing JS module without types
 import { buildContext, buildImageTurnSuffix, shouldBuildTwinStateContext } from "../../../events/messageCreate/contextBuild.js";

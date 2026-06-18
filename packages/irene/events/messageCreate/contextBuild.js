@@ -47,6 +47,7 @@ import { spotlight } from "../../ai/firewall.js";
 import { getMentionRegex } from "./gates.js";
 import { channelTypeLabel } from "../../utils/channelTypes.js";
 import { describeImageAttachments } from "@defnotean/shared/localVision";
+import { describeImageWithGemini } from "../../ai/visionFallback.js";
 
 // Sanitize and normalize a Discord display name before injecting it into the
 // system prompt or history. Matches Eris's pattern (eris/events/messageCreate.js
@@ -327,6 +328,8 @@ export async function collectImages(message) {
     visionUrl: config.local?.ollamaVisionUrl,
     model: config.local?.ollamaVisionModel || "moondream",
     fallbackModel: config.local?.ollamaVisionFallbackModel || "moondream",
+    cloudFallback: describeImageWithGemini,
+    cloudFallbackMode: config.local?.visionCloudFallbackMode || "weak",
     maxImages: config.local?.visionMaxImages || 4,
     maxBytes: config.local?.visionImageMaxBytes || 12 * 1024 * 1024,
     visionTimeoutMs: config.local?.visionTimeoutMs ?? 30_000,

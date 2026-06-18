@@ -15,6 +15,7 @@ import config from "../../config.js";
 import { safeFetch } from "@defnotean/shared/safeFetch";
 import { isExplicitGifRequest, recordNaturalGif, shouldAllowNaturalGif } from "@defnotean/shared/gifCadence";
 import { describeImageAttachment, describeImageAttachments, formatImageDescriptions } from "@defnotean/shared/localVision";
+import { describeImageWithGemini } from "../visionFallback.js";
 
 // Caps for image fetches. Discord's attachment limit is 25 MB but most memes
 // and avatar URLs are < 2 MB; we pick 8 MB as the upper bound an attacker
@@ -278,6 +279,8 @@ export async function execute(toolName, input, message, _context) {
           visionUrl: config.local?.ollamaVisionUrl,
           model: config.local?.ollamaVisionModel || "moondream",
           fallbackModel: config.local?.ollamaVisionFallbackModel || "moondream",
+          cloudFallback: describeImageWithGemini,
+          cloudFallbackMode: config.local?.visionCloudFallbackMode || "weak",
           maxImages: config.local?.visionMaxImages || 4,
           maxBytes: config.local?.visionImageMaxBytes || IMAGE_MAX_BYTES,
           visionTimeoutMs: config.local?.visionTimeoutMs ?? 30_000,

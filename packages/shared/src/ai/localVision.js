@@ -25,6 +25,8 @@ import { safeFetch as defaultSafeFetch } from "../safeFetch.js";
  * @property {string} [visionUrl]
  * @property {string} [model]
  * @property {string} [fallbackModel]
+ * @property {(args: { buffer: Buffer, mimeType: string, prompt: string, name: string, source: "local_failed" | "local_weak" | "cloud_first", localDescription?: string, error?: unknown }) => Promise<string | null | undefined>} [cloudFallback]
+ * @property {"off" | "failed" | "weak" | "always" | boolean} [cloudFallbackMode]
  * @property {typeof defaultSafeFetch} [safeFetch]
  * @property {typeof globalThis.fetch} [fetchImpl]
  * @property {number} [maxImages]
@@ -142,6 +144,19 @@ function uniqueStrings(values) {
   return [...new Set(values.map((v) => String(v || "").trim()).filter(Boolean))];
 }
 
+/** @param {unknown} value */
+function normalizeCloudFallbackMode(value) {
+  if (value === true) return "weak";
+  if (value === false) return "off";
+  const mode = String(value || "off").trim().toLowerCase();
+  if (mode === "1" || mode === "true" || mode === "on") return "weak";
+  if (mode === "0" || mode === "false" || mode === "none") return "off";
+  if (mode === "failed" || mode === "fail") return "failed";
+  if (mode === "weak" || mode === "vague") return "weak";
+  if (mode === "always" || mode === "cloud" || mode === "prefer_cloud") return "always";
+  return "off";
+}
+
 /** @param {unknown} value @param {number} [max] */
 function truncate(value, max = 1200) {
   const text = String(value || "")
@@ -151,6 +166,22 @@ function truncate(value, max = 1200) {
     .trim();
   if (!text) return "";
   return text.length > max ? `${text.slice(0, max - 15)} ...(truncated)` : text;
+}
+
+/** @param {unknown} description */
+export function isWeakVisionDescription(description) {
+  const text = String(description || "").trim();
+  if (!text) return true;
+  const lower = text.toLowerCase();
+  if (/\[image (?:failed|skipped)|failed local description|local vision timed out|empty local vision response/.test(lower)) return true;
+  if (/\b(?:can't|cannot|could not|unable to|not able to)\s+(?:see|tell|make out|determine|identify|read|load)\b/.test(lower)) return true;
+  if (/\b(?:failed|didn't|did not)\s+load\b/.test(lower)) return true;
+  if (/\b(?:too|super|very)?\s*(?:blurry|blurred|pixelated|low[- ]resolution)\b/.test(lower)) return true;
+  if (/\bhard to\s+(?:see|tell|make out|read|identify)\b/.test(lower)) return true;
+  if (/\b(?:no|not enough)\s+(?:visible\s+)?(?:detail|image|visual information)\b/.test(lower)) return true;
+  const visible = text.match(/(?:^|\n)\s*Visible:\s*([^\n]+)/i)?.[1]?.trim().toLowerCase();
+  if (visible && /^(?:none|nothing|unknown|uncertain|unclear|n\/a|not visible|cannot tell|can't tell)\b/.test(visible)) return true;
+  return false;
 }
 
 /** @param {Buffer} buffer @param {number} offset @param {number} bytes */
@@ -618,6 +649,8 @@ export async function describeImageAttachment(attachment, {
   visionUrl,
   model = DEFAULT_MODEL,
   fallbackModel = DEFAULT_FALLBACK_MODEL,
+  cloudFallback,
+  cloudFallbackMode = "off",
   safeFetch = defaultSafeFetch,
   fetchImpl = globalThis.fetch,
   maxBytes = DEFAULT_IMAGE_MAX_BYTES,
@@ -635,7 +668,9 @@ export async function describeImageAttachment(attachment, {
   const name = imageAttachmentName(attachment, index);
   const url = attachment?.url || attachment?.proxyURL;
   if (!url) return { ok: false, name, url, error: "missing image URL", description: "[image failed to load: missing URL]" };
-  if (!normalizeOllamaUrl(visionUrl)) {
+  const cloudMode = normalizeCloudFallbackMode(cloudFallbackMode);
+  const canUseCloudFallback = typeof cloudFallback === "function" && cloudMode !== "off";
+  if (!normalizeOllamaUrl(visionUrl) && !canUseCloudFallback) {
     return {
       ok: false,
       name,
@@ -659,21 +694,61 @@ export async function describeImageAttachment(attachment, {
         const bytes = res.bytes;
         if (!bytes?.length) throw new Error("empty image response");
         const mimeType = headerValue(res.headers, "content-type") || attachment.contentType || "image/png";
-        const description = await describeImageBuffer(bytes, {
-          prompt,
-          visionUrl,
-          model,
-          fallbackModel,
-          timeoutMs: visionTimeoutMs,
-          keepAlive,
-          fetchImpl,
-          maxTiles,
-          tileMinLongEdge,
-          tileMinAspect,
-          tileOverlapRatio,
-          detailMaxChars,
-          makeImageTiles,
-        });
+
+        if (cloudMode === "always" && canUseCloudFallback) {
+          const cloudDescription = await cloudFallback({
+            buffer: Buffer.from(bytes),
+            mimeType,
+            prompt,
+            name,
+            source: "cloud_first",
+          });
+          if (cloudDescription) return { ok: true, name, url: fetchUrl, mimeType, description: truncate(cloudDescription, detailMaxChars) };
+        }
+
+        let description;
+        try {
+          description = await describeImageBuffer(bytes, {
+            prompt,
+            visionUrl,
+            model,
+            fallbackModel,
+            timeoutMs: visionTimeoutMs,
+            keepAlive,
+            fetchImpl,
+            maxTiles,
+            tileMinLongEdge,
+            tileMinAspect,
+            tileOverlapRatio,
+            detailMaxChars,
+            makeImageTiles,
+          });
+        } catch (localErr) {
+          if ((cloudMode === "failed" || cloudMode === "weak" || cloudMode === "always") && canUseCloudFallback) {
+            const cloudDescription = await cloudFallback({
+              buffer: Buffer.from(bytes),
+              mimeType,
+              prompt,
+              name,
+              source: "local_failed",
+              error: localErr,
+            });
+            if (cloudDescription) return { ok: true, name, url: fetchUrl, mimeType, description: truncate(cloudDescription, detailMaxChars) };
+          }
+          throw localErr;
+        }
+
+        if (cloudMode === "weak" && canUseCloudFallback && isWeakVisionDescription(description)) {
+          const cloudDescription = await cloudFallback({
+            buffer: Buffer.from(bytes),
+            mimeType,
+            prompt,
+            name,
+            source: "local_weak",
+            localDescription: description,
+          });
+          if (cloudDescription) description = truncate(cloudDescription, detailMaxChars);
+        }
         return { ok: true, name, url: fetchUrl, mimeType, description };
       } catch (err) {
         lastFetchError = err;

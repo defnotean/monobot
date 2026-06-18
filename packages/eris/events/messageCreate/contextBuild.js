@@ -23,6 +23,7 @@ import { pickResponseStyle, shouldLaze, getImperfectionHint } from "@defnotean/s
 import { applyPromptBudget, resolvePromptCharBudget } from "@defnotean/shared/promptBudget";
 import { buildInnerStateContext } from "@defnotean/shared/innerState";
 import { describeImageAttachments } from "@defnotean/shared/localVision";
+import { describeImageWithGemini } from "../../ai/visionFallback.js";
 import { compressHistory } from "../../ai/contextCompressor.js";
 import { registry as toolRegistry } from "../../ai/toolRegistry.js";
 import { buildHumanityContext, buildTwinContext } from "../../ai/humanity.js";
@@ -129,6 +130,8 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
     visionUrl: config.local?.ollamaVisionUrl,
     model: config.local?.ollamaVisionModel || "moondream",
     fallbackModel: config.local?.ollamaVisionFallbackModel || "moondream",
+    cloudFallback: describeImageWithGemini,
+    cloudFallbackMode: config.local?.visionCloudFallbackMode || "weak",
     maxImages: config.local?.visionMaxImages || 4,
     maxBytes: config.local?.visionImageMaxBytes || 12 * 1024 * 1024,
     visionTimeoutMs: config.local?.visionTimeoutMs ?? 30_000,

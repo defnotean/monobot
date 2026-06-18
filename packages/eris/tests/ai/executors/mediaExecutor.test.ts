@@ -19,6 +19,7 @@ vi.mock("@defnotean/shared/localVision", () => ({
     "-- end local image evidence --]",
   ].filter(Boolean).join("\n")),
 }));
+vi.mock("../../../ai/visionFallback.js", () => ({ describeImageWithGemini: vi.fn() }));
 
 vi.mock("../../../config.js", () => ({
   default: {
@@ -97,6 +98,8 @@ describe("mediaExecutor", () => {
         visionUrl: "http://127.0.0.1:11434",
         model: "qwen2.5vl:3b",
         fallbackModel: "moondream",
+        cloudFallback: expect.any(Function),
+        cloudFallbackMode: "weak",
         maxImages: 4,
         maxBytes: 1234,
         visionTimeoutMs: 30_000,
@@ -129,6 +132,8 @@ describe("mediaExecutor", () => {
           visionUrl: "http://127.0.0.1:11434",
           model: "qwen2.5vl:3b",
           fallbackModel: "moondream",
+          cloudFallback: expect.any(Function),
+          cloudFallbackMode: "weak",
           maxImages: 4,
           maxBytes: 1234,
           visionTimeoutMs: 30_000,
