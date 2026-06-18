@@ -30,6 +30,7 @@ function pngHeader(width: number, height: number) {
 describe("localVision", () => {
   it("detects typed and extension-based image attachments", () => {
     expect(isImageAttachment({ url: "https://cdn.test/a", contentType: "image/png" })).toBe(true);
+    expect(isImageAttachment({ proxyURL: "https://media.test/a.png", contentType: "application/octet-stream" })).toBe(true);
     expect(isImageAttachment({ url: "https://cdn.test/a", contentType: "application/octet-stream", name: "photo.webp" })).toBe(true);
     expect(isImageAttachment({ url: "https://cdn.test/a", contentType: "text/plain", name: "note.txt" })).toBe(false);
     expect(isImageAttachment({ contentType: "image/png", name: "missing-url.png" })).toBe(false);
@@ -147,6 +148,58 @@ describe("localVision", () => {
     expect(result.imageDescriptionBlock).toContain("1 (cat.png): a cat on a chair");
     expect(result.imageDescriptionBlock).toContain("2 (owl.jpg): an owl in a tree");
     expect(result.imageDescriptionBlock).not.toContain(Buffer.from("image-one").toString("base64"));
+  });
+
+  it("falls back to the faster local vision model when the primary model fails", async () => {
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new Error("local vision timed out"))
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ message: { content: "Visible: fallback saw the image\nText: none visible\nUnclear: none" } }) });
+
+    const description = await describeImageBuffer(Buffer.from("full-image"), {
+      visionUrl: "http://127.0.0.1:11434",
+      model: "qwen2.5vl:7b",
+      fallbackModel: "moondream",
+      fetchImpl,
+      maxTiles: 0,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).model).toBe("qwen2.5vl:7b");
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body).model).toBe("moondream");
+    expect(description).toContain("fallback saw the image");
+  });
+
+  it("tries Discord proxy URLs when the primary attachment URL fails", async () => {
+    const safeFetch = vi.fn()
+      .mockRejectedValueOnce(new Error("fetch HTTP 403"))
+      .mockResolvedValueOnce({ status: 200, bytes: Buffer.from("image-proxy"), headers: new Headers({ "content-type": "image/png" }) });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ message: { content: "proxy image loaded" } }) });
+    const message = {
+      attachments: new Collection([
+        ["1", {
+          url: "https://cdn.test/expired.png",
+          proxyURL: "https://media.test/proxy.png",
+          contentType: "image/png",
+          name: "proxy.png",
+        }],
+      ]),
+    };
+
+    const result = await describeImageAttachments(message, {
+      visionUrl: "http://127.0.0.1:11434",
+      model: "qwen2.5vl:3b",
+      safeFetch,
+      fetchImpl,
+    });
+
+    expect(safeFetch).toHaveBeenNthCalledWith(1, "https://cdn.test/expired.png", expect.any(Object));
+    expect(safeFetch).toHaveBeenNthCalledWith(2, "https://media.test/proxy.png", expect.any(Object));
+    expect(result.imageDescriptions[0]).toMatchObject({
+      ok: true,
+      url: "https://media.test/proxy.png",
+      description: "proxy image loaded",
+    });
   });
 
   it("records omitted images when the limit is lower than the attachment count", async () => {

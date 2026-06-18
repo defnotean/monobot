@@ -127,10 +127,12 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
   let cleanMessage = normalizeUnicode(message.content.replace(`<@${client.user.id}>`, "").trim());
   const imageContextPromise = describeImageAttachments(message, {
     visionUrl: config.local?.ollamaVisionUrl,
-    model: config.local?.ollamaVisionModel || "qwen2.5vl:7b",
+    model: config.local?.ollamaVisionModel || "moondream",
+    fallbackModel: config.local?.ollamaVisionFallbackModel || "moondream",
     maxImages: config.local?.visionMaxImages || 4,
     maxBytes: config.local?.visionImageMaxBytes || 12 * 1024 * 1024,
-    maxTiles: config.local?.visionMaxTiles ?? 4,
+    visionTimeoutMs: config.local?.visionTimeoutMs ?? 30_000,
+    maxTiles: config.local?.visionMaxTiles ?? 2,
     tileMinLongEdge: config.local?.visionTileMinLongEdge ?? 1600,
     tileMinAspect: config.local?.visionTileMinAspect ?? 1.45,
     tileOverlapRatio: config.local?.visionTileOverlapRatio ?? 0.12,

@@ -294,8 +294,10 @@ describe("contextBuild / collectImages", () => {
     expect(describeImageAttachments).toHaveBeenCalledWith(message, {
       visionUrl: "http://127.0.0.1:11434",
       model: "qwen2.5vl:3b",
+      fallbackModel: "moondream",
       maxImages: 4,
       maxBytes: 1234,
+      visionTimeoutMs: 30_000,
       maxTiles: 4,
       tileMinLongEdge: 1600,
       tileMinAspect: 1.45,

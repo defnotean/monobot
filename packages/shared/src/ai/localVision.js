@@ -3,6 +3,7 @@ import { safeFetch as defaultSafeFetch } from "../safeFetch.js";
 /**
  * @typedef {object} ImageAttachment
  * @property {string} [url]
+ * @property {string} [proxyURL]
  * @property {string} [name]
  * @property {string} [filename]
  * @property {string} [contentType]
@@ -23,6 +24,7 @@ import { safeFetch as defaultSafeFetch } from "../safeFetch.js";
  * @property {string} [prompt]
  * @property {string} [visionUrl]
  * @property {string} [model]
+ * @property {string} [fallbackModel]
  * @property {typeof defaultSafeFetch} [safeFetch]
  * @property {typeof globalThis.fetch} [fetchImpl]
  * @property {number} [maxImages]
@@ -84,9 +86,10 @@ const DEFAULT_MAX_IMAGES = 4;
 const DEFAULT_IMAGE_MAX_BYTES = 12 * 1024 * 1024;
 const DEFAULT_IMAGE_FETCH_TIMEOUT_MS = 8_000;
 const DEFAULT_VISION_TIMEOUT_MS = 90_000;
-const DEFAULT_MODEL = "qwen2.5vl:7b";
+const DEFAULT_MODEL = "moondream";
+const DEFAULT_FALLBACK_MODEL = "moondream";
 const DEFAULT_KEEP_ALIVE = "30m";
-const DEFAULT_MAX_TILES = 4;
+const DEFAULT_MAX_TILES = 2;
 const DEFAULT_TILE_MIN_LONG_EDGE = 1600;
 const DEFAULT_TILE_MIN_ASPECT = 1.45;
 const DEFAULT_TILE_OVERLAP_RATIO = 0.12;
@@ -132,6 +135,11 @@ function normalizeOllamaUrl(rawUrl) {
   const base = String(rawUrl || "").trim().replace(/\/+$/, "");
   if (!base) return "";
   return base.endsWith("/api/chat") ? base : `${base}/api/chat`;
+}
+
+/** @param {unknown[]} values */
+function uniqueStrings(values) {
+  return [...new Set(values.map((v) => String(v || "").trim()).filter(Boolean))];
 }
 
 /** @param {unknown} value @param {number} [max] */
@@ -274,11 +282,12 @@ function extensionFromName(rawName) {
 
 /** @param {ImageAttachment} attachment */
 export function isImageAttachment(attachment) {
-  if (!attachment?.url) return false;
+  const url = attachment?.url || attachment?.proxyURL;
+  if (!url) return false;
   const contentType = attachment.contentType || "";
   if (contentType && SUPPORTED_IMAGE_TYPES.some((t) => contentType.startsWith(t))) return true;
   const ext = extensionFromName(attachment.name || attachment.filename)
-    || extensionFromUrl(attachment.url);
+    || extensionFromUrl(url);
   return SUPPORTED_IMAGE_EXTENSIONS.includes(ext || "");
 }
 
@@ -295,11 +304,13 @@ export function getImageAttachments(message, { maxImages = Infinity } = {}) {
         const rows = [];
         if (embed?.image?.url) rows.push({
           url: embed.image.url,
+          proxyURL: embed.image.proxyURL,
           name: embed.image.proxyURL ? `embed-image-${index + 1}` : `embed-image-${index + 1}.${extensionFromUrl(embed.image.url) || "png"}`,
           contentType: embed.image.contentType || "",
         });
         if (embed?.thumbnail?.url) rows.push({
           url: embed.thumbnail.url,
+          proxyURL: embed.thumbnail.proxyURL,
           name: `embed-thumbnail-${index + 1}.${extensionFromUrl(embed.thumbnail.url) || "png"}`,
           contentType: embed.thumbnail.contentType || "",
         });
@@ -317,7 +328,7 @@ export function getImageAttachments(message, { maxImages = Infinity } = {}) {
   return [...attachmentValues, ...embeddedImages, ...stickerValues]
     .filter(isImageAttachment)
     .filter((item) => {
-      const key = item.url;
+      const key = item.url || item.proxyURL;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -488,6 +499,23 @@ async function describeImageBufferOnce(buffer, {
   }
 }
 
+/** @param {Buffer | Uint8Array | string} buffer @param {LocalVisionOptions & { responseMaxChars?: number }} [options] */
+async function describeImageBufferWithFallback(buffer, options = {}) {
+  const models = uniqueStrings([
+    options.model || DEFAULT_MODEL,
+    options.fallbackModel || DEFAULT_FALLBACK_MODEL,
+  ]);
+  let lastError;
+  for (const model of models) {
+    try {
+      return await describeImageBufferOnce(buffer, { ...options, model });
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error("local vision failed");
+}
+
 /** @param {Buffer} sourceBuffer @param {ImageTileOptions & { makeImageTiles?: LocalVisionOptions["makeImageTiles"] }} options */
 async function resolveImageTiles(sourceBuffer, {
   makeImageTiles = createImageTiles,
@@ -528,6 +556,7 @@ export async function describeImageBuffer(buffer, {
   prompt = DEFAULT_PROMPT,
   visionUrl,
   model = DEFAULT_MODEL,
+  fallbackModel = DEFAULT_FALLBACK_MODEL,
   timeoutMs = DEFAULT_VISION_TIMEOUT_MS,
   keepAlive = DEFAULT_KEEP_ALIVE,
   fetchImpl = globalThis.fetch,
@@ -539,10 +568,11 @@ export async function describeImageBuffer(buffer, {
   makeImageTiles = createImageTiles,
 } = {}) {
   const sourceBuffer = Buffer.from(buffer);
-  const fullDescription = await describeImageBufferOnce(sourceBuffer, {
+  const fullDescription = await describeImageBufferWithFallback(sourceBuffer, {
     prompt,
     visionUrl,
     model,
+    fallbackModel,
     timeoutMs,
     keepAlive,
     fetchImpl,
@@ -563,10 +593,11 @@ export async function describeImageBuffer(buffer, {
     const tile = tiles[i];
     if (!tile?.buffer?.length) continue;
     try {
-      const description = await describeImageBufferOnce(tile.buffer, {
+      const description = await describeImageBufferWithFallback(tile.buffer, {
         prompt: tilePrompt(tile, i, tiles.length),
         visionUrl,
         model,
+        fallbackModel,
         timeoutMs,
         keepAlive,
         fetchImpl,
@@ -586,6 +617,7 @@ export async function describeImageAttachment(attachment, {
   prompt = DEFAULT_PROMPT,
   visionUrl,
   model = DEFAULT_MODEL,
+  fallbackModel = DEFAULT_FALLBACK_MODEL,
   safeFetch = defaultSafeFetch,
   fetchImpl = globalThis.fetch,
   maxBytes = DEFAULT_IMAGE_MAX_BYTES,
@@ -601,7 +633,7 @@ export async function describeImageAttachment(attachment, {
   index = 0,
 } = {}) {
   const name = imageAttachmentName(attachment, index);
-  const url = attachment?.url;
+  const url = attachment?.url || attachment?.proxyURL;
   if (!url) return { ok: false, name, url, error: "missing image URL", description: "[image failed to load: missing URL]" };
   if (!normalizeOllamaUrl(visionUrl)) {
     return {
@@ -614,30 +646,40 @@ export async function describeImageAttachment(attachment, {
   }
 
   try {
-    const res = await safeFetch(url, {
-      binary: true,
-      maxBytes,
-      timeoutMs: imageFetchTimeoutMs,
-    });
-    if (res.status < 200 || res.status >= 300) throw new Error(`fetch HTTP ${res.status}`);
-    const bytes = res.bytes;
-    if (!bytes?.length) throw new Error("empty image response");
-    const mimeType = headerValue(res.headers, "content-type") || attachment.contentType || "image/png";
-    const description = await describeImageBuffer(bytes, {
-      prompt,
-      visionUrl,
-      model,
-      timeoutMs: visionTimeoutMs,
-      keepAlive,
-      fetchImpl,
-      maxTiles,
-      tileMinLongEdge,
-      tileMinAspect,
-      tileOverlapRatio,
-      detailMaxChars,
-      makeImageTiles,
-    });
-    return { ok: true, name, url, mimeType, description };
+    const urls = uniqueStrings([attachment?.url, attachment?.proxyURL]);
+    let lastFetchError;
+    for (const fetchUrl of urls) {
+      try {
+        const res = await safeFetch(fetchUrl, {
+          binary: true,
+          maxBytes,
+          timeoutMs: imageFetchTimeoutMs,
+        });
+        if (res.status < 200 || res.status >= 300) throw new Error(`fetch HTTP ${res.status}`);
+        const bytes = res.bytes;
+        if (!bytes?.length) throw new Error("empty image response");
+        const mimeType = headerValue(res.headers, "content-type") || attachment.contentType || "image/png";
+        const description = await describeImageBuffer(bytes, {
+          prompt,
+          visionUrl,
+          model,
+          fallbackModel,
+          timeoutMs: visionTimeoutMs,
+          keepAlive,
+          fetchImpl,
+          maxTiles,
+          tileMinLongEdge,
+          tileMinAspect,
+          tileOverlapRatio,
+          detailMaxChars,
+          makeImageTiles,
+        });
+        return { ok: true, name, url: fetchUrl, mimeType, description };
+      } catch (err) {
+        lastFetchError = err;
+      }
+    }
+    throw lastFetchError || new Error("image fetch failed");
   } catch (err) {
     const e = /** @type {any} */ (err);
     const reason = truncate(e?.message || String(e), 180);

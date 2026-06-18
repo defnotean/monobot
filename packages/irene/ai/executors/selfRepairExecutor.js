@@ -7,13 +7,14 @@
 
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import config from "../../config.js";
 import { log } from "../../utils/logger.js";
 
 const HANDLED = new Set(["self_repair"]);
-const REPO_ROOT = resolve(process.cwd());
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const MAX_PATCH_CHARS = 80_000;
 const MAX_COMMANDS = 6;
 const MAX_DIAGNOSTIC_CHARS = 7_000;

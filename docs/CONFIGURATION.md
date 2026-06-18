@@ -73,16 +73,18 @@ at the repo root.
 | `OLLAMA_EMBED_URL` | Both | No | — | Local Ollama base URL for semantic embeddings. When set, Voyage embeddings are bypassed. `packages/eris/config.js`, `packages/irene/config.js`. | Your Ollama host, e.g. `http://127.0.0.1:11434` |
 | `OLLAMA_EMBED_MODEL` | Both | No | `nomic-embed-text` | Ollama embedding model. `packages/eris/config.js`, `packages/irene/config.js`. | `ollama pull nomic-embed-text` |
 | `OLLAMA_VISION_URL` | Both | No | — | Local Ollama base URL for Discord image descriptions. Raw image bytes are sent only to this local service; external chat providers receive text evidence. `packages/eris/config.js`, `packages/irene/config.js`. | Your Ollama host, e.g. `http://127.0.0.1:11434` |
-| `OLLAMA_VISION_MODEL` | Both | No | `qwen2.5vl:7b` | Local vision model used for conservative image evidence. `qwen2.5vl:3b` is faster; `7b` is more accurate. | `ollama pull qwen2.5vl:7b` |
+| `OLLAMA_VISION_MODEL` | Both | No | `moondream` | Local vision model used for conservative image evidence. `moondream` is the fast self-host default for this 8 GB box; use `qwen2.5vl:7b` only when it stays on GPU and the extra latency is acceptable. | `ollama pull moondream` |
+| `OLLAMA_VISION_FALLBACK_MODEL` | Both | No | `moondream` | Local vision fallback when the primary model times out or fails. Keep this small so image replies do not wait on a CPU-only model and then answer blind. | `ollama pull moondream` |
 | `OLLAMA_VISION_KEEP_ALIVE` | Both | No | `30m` (`2m` when `LOCAL_TTS=1` and `LOCAL_TTS_BACKEND` is not `piper`) | How long Ollama keeps the vision model loaded after image analysis. Keep the default for repeated image reads; lower it when testing GPU-heavy local TTS on 8 GB VRAM. | `2m`, `30m`, or Ollama-supported duration |
 | `LOCAL_VISION_MAX_IMAGES` | Both | No | `4` | Max image attachments described per Discord message. Extra images are noted as omitted. | n/a |
 | `LOCAL_VISION_IMAGE_MAX_BYTES` | Both | No | `12582912` | Per-image fetch cap before local vision analysis. | n/a |
-| `LOCAL_VISION_MAX_TILES` | Both | No | `4` | Max high-resolution crop passes per large/tall image. Set `0` to disable screenshot tiling. | n/a |
+| `LOCAL_VISION_TIMEOUT_MS` | Both | No | `30000` | Per-pass timeout for each local vision model call before fallback or failure. | n/a |
+| `LOCAL_VISION_MAX_TILES` | Both | No | `2` | Max high-resolution crop passes per large/tall image. Set `0` to disable screenshot tiling; raise only if slower replies are acceptable. | n/a |
 | `LOCAL_VISION_TILE_MIN_LONG_EDGE` | Both | No | `1600` | Long-edge pixel threshold before local vision adds crop passes. | n/a |
 | `LOCAL_VISION_TILE_MIN_ASPECT` | Both | No | `1.45` | Aspect-ratio threshold for tall/wide screenshots when deciding whether to crop. | n/a |
 | `LOCAL_VISION_TILE_OVERLAP_RATIO` | Both | No | `0.12` | Overlap between adjacent crop passes so text near crop boundaries is still visible. | n/a |
 | `LOCAL_VISION_DETAIL_MAX_CHARS` | Both | No | `3600` | Max combined local-vision evidence characters per image after full-image and crop-pass summaries. | n/a |
-| `LOCAL_TTS` | Irene | No | `0` | Enables local TTS for `/say_tts`/voice-listener replies instead of Gemini TTS. `piper` stays CPU/lightweight and is safest beside `qwen2.5vl:7b`; `external` calls a local script. | `1` |
+| `LOCAL_TTS` | Irene | No | `0` | Enables local TTS for `/say_tts`/voice-listener replies instead of Gemini TTS. `piper` stays CPU/lightweight and is safest beside local vision; `external` calls a local script. | `1` |
 | `LOCAL_TTS_BACKEND` | Irene | No | `piper` | Local TTS backend. `piper` runs the configured Piper binary; `external` runs `LOCAL_TTS_COMMAND --text-file <tmp> --output-file <tmp.wav> --voice <voice>`. Use `external` for a local Kokoro/Chatterbox wrapper. | `piper` or `external` |
 | `LOCAL_TTS_COMMAND` | Irene | Conditional | — | Executable script used when `LOCAL_TTS_BACKEND=external`. It receives `IRENE_TTS_TEXT`, `IRENE_TTS_TEXT_FILE`, `IRENE_TTS_OUTPUT`, and `IRENE_TTS_VOICE` env vars and must write a WAV to the output path. | Local script path |
 | `LOCAL_TTS_TIMEOUT_MS` | Irene | No | `120000` | Kill timeout for the external local TTS command. | n/a |
