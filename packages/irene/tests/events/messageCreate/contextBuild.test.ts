@@ -9,6 +9,7 @@ vi.mock("../../../config.js", () => ({
     local: {
       ollamaVisionUrl: "http://127.0.0.1:11434",
       ollamaVisionModel: "qwen2.5vl:3b",
+      ollamaVisionKeepAlive: "30m",
       visionMaxImages: 4,
       visionImageMaxBytes: 1234,
       visionMaxTiles: 4,
@@ -300,6 +301,7 @@ describe("contextBuild / collectImages", () => {
       tileMinAspect: 1.45,
       tileOverlapRatio: 0.12,
       detailMaxChars: 3600,
+      keepAlive: "30m",
     });
     expect(result.allImageAttachments).toEqual([attachment]);
     expect(result.imageDescriptions[0].description).toBe("a small image");

@@ -148,9 +148,9 @@ If this is just a casual conversation (greeting, question, chitchat) and NOT a t
 // Word-boundary matched action verbs — no false positives from substrings
 // ("procreate" won't match "create", "change my mind" will match "change" intentionally
 // since change/add/set could still be a task, but we down-weight those).
-const STRONG_TASK = /\b(ban|kick|warn|timeout|untimeout|unban|unmute|mute|purge|lockdown|unlock|whitelist|giveaway|raffle|starboard|leveling|tempvc|ticket|schedule[_-]?task|cancel[_-]?scheduled|reaction\s*role|button\s*role|color\s*role|welcome\s*embed|autorole|modlog)\b/i;
+const STRONG_TASK = /\b(ban|kick|warn|timeout|untimeout|unban|unmute|mute|purge|lockdown|unlock|whitelist|giveaway|raffle|starboard|leveling|tempvc|ticket|schedule[_-]?task|cancel[_-]?scheduled|reaction\s*role|button\s*role|color\s*role|welcome\s*embed|autorole|modlog|self.?repair|auto.?fix|fix yourself|diagnose yourself)\b/i;
 
-const ACTION_VERB = /\b(create|make|build|delete|remove|rename|move|setup|set\s+up|configure|customize|assign|enable|disable|change|add|play|skip|stop|pause|resume|queue|shuffle|loop|join|leave|pin|unpin|announce|promote|demote|grant|revoke)\b/i;
+const ACTION_VERB = /\b(create|make|build|delete|remove|rename|move|setup|set\s+up|configure|customize|assign|enable|disable|change|fix|repair|diagnose|patch|add|play|skip|stop|pause|resume|queue|shuffle|loop|join|leave|pin|unpin|announce|promote|demote|grant|revoke)\b/i;
 
 const OBJECT_WORD = /\b(role|roles|channel|channels|category|embed|emoji|button|dropdown|reaction|poll|reminder|persona|avatar|nickname|twitch|youtube|github|stream|feed|tts|voice|vc)\b/i;
 
@@ -537,7 +537,7 @@ export async function runGeminiChat({
     // Most network tools get 30s, but image generation can legitimately run
     // longer before the provider returns an image or a transient upstream error.
     const IMAGE_TOOLS = new Set(["generate_image"]);
-    const VERY_SLOW_TOOLS = new Set(["play_music", "summarize_channel", "setup_reaction_roles", "setup_autorole", "setup_starboard", "set_leveling", "mass_role", "purge_messages"]);
+    const VERY_SLOW_TOOLS = new Set(["play_music", "summarize_channel", "setup_reaction_roles", "setup_autorole", "setup_starboard", "set_leveling", "mass_role", "purge_messages", "self_repair"]);
     const SLOW_TOOLS = new Set(["web_search", "scrape_url", "search_images", "show_image", "edit_image", "send_gif", "configure_patch_news", "test_patch_news", "configure_twitch", "configure_youtube", "configure_github", "stop_music", "skip_track", "queue_info", "set_volume", "music_filter", "create_channel", "delete_channel", "nuke_channel"]);
     const funcResponses = [];
     const toolResults = [];
@@ -640,8 +640,9 @@ export async function runGeminiChat({
         // safeSlice prevents an unpaired surrogate at the cut point — a
         // 4-byte emoji crossing offset 1487 would otherwise produce invalid
         // UTF-8 when serialized to Gemini's functionResponse.
+        const resultLimit = routed.toolName === "self_repair" ? 7000 : 1500;
         const truncResult = typeof result === "string"
-          ? safeSlice(result, 1500)
+          ? safeSlice(result, resultLimit)
           : result;
         // Wrap AFTER truncation so the untrusted-data envelope stays intact.
         const safeResult = wrapUntrustedToolResult(routed.toolName, truncResult);

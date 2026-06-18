@@ -938,6 +938,93 @@ function getTtsClient() {
   return _ttsClients[_ttsKeyIdx++ % _ttsClients.length];
 }
 
+function normalizeLocalTtsBackend(value) {
+  const backend = String(value || "piper").trim().toLowerCase();
+  return backend || "piper";
+}
+
+function tmpTtsPath(ext) {
+  return `/tmp/irene-tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+}
+
+async function generatePiperTTS(text) {
+  const { spawn } = await import("node:child_process");
+  const { accessSync, constants, readFileSync, unlinkSync } = await import("node:fs");
+  const piperBin = config.local?.piperBin || `${process.env.HOME}/.local/piper/piper/piper`;
+  const voicePath = config.local?.piperVoice || `${process.env.HOME}/.local/piper/voice.onnx`;
+  accessSync(piperBin, constants.X_OK);
+  accessSync(voicePath, constants.R_OK);
+  const tmpPath = tmpTtsPath("wav");
+  try {
+    await new Promise(/** @param {(value?: any) => void} resolve @param {(reason?: any) => void} reject */ (resolve, reject) => {
+      const proc = spawn(piperBin, ["--model", voicePath, "--output_file", tmpPath]);
+      proc.stderr?.on("data", (c) => log(`[TTS] piper: ${c.toString().trim()}`));
+      proc.on("error", reject);
+      proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`piper exit ${code}`)));
+      proc.stdin.write(text.slice(0, 500));
+      proc.stdin.end();
+    });
+    const audioBuffer = readFileSync(tmpPath);
+    log(`[TTS] piper produced ${audioBuffer.length} bytes`);
+    return audioBuffer;
+  } finally {
+    safeDiscordSync(`tts.unlinkTmp path=${tmpPath}`, () => unlinkSync(tmpPath));
+  }
+}
+
+async function generateExternalLocalTTS(text, voice) {
+  const { spawn } = await import("node:child_process");
+  const { accessSync, constants, readFileSync, writeFileSync, unlinkSync } = await import("node:fs");
+  const command = String(config.local?.ttsCommand || "").trim();
+  if (!command) throw new Error("LOCAL_TTS_COMMAND is required when LOCAL_TTS_BACKEND=external");
+  accessSync(command, constants.X_OK);
+
+  const textPath = tmpTtsPath("txt");
+  const outPath = tmpTtsPath("wav");
+  const timeoutMs = Number(config.local?.ttsTimeoutMs) || 120_000;
+  try {
+    writeFileSync(textPath, text.slice(0, 500), "utf8");
+    await new Promise(/** @param {(value?: any) => void} resolve @param {(reason?: any) => void} reject */ (resolve, reject) => {
+      const proc = spawn(command, ["--text-file", textPath, "--output-file", outPath, "--voice", String(voice || "")], {
+        env: {
+          ...process.env,
+          IRENE_TTS_TEXT: text.slice(0, 500),
+          IRENE_TTS_TEXT_FILE: textPath,
+          IRENE_TTS_OUTPUT: outPath,
+          IRENE_TTS_VOICE: String(voice || ""),
+        },
+      });
+      const timer = setTimeout(() => {
+        proc.kill("SIGTERM");
+        reject(new Error(`external local TTS timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      if (typeof timer.unref === "function") timer.unref();
+      proc.stderr?.on("data", (c) => log(`[TTS] external: ${c.toString().trim()}`));
+      proc.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      proc.on("close", (code) => {
+        clearTimeout(timer);
+        code === 0 ? resolve() : reject(new Error(`external local TTS exit ${code}`));
+      });
+    });
+    const audioBuffer = readFileSync(outPath);
+    log(`[TTS] external local backend produced ${audioBuffer.length} bytes`);
+    return audioBuffer;
+  } finally {
+    safeDiscordSync(`tts.unlinkTmp path=${textPath}`, () => unlinkSync(textPath));
+    safeDiscordSync(`tts.unlinkTmp path=${outPath}`, () => unlinkSync(outPath));
+  }
+}
+
+async function generateLocalTTS(text, voice) {
+  const backend = normalizeLocalTtsBackend(config.local?.ttsBackend);
+  if (backend === "piper") return generatePiperTTS(text);
+  if (backend === "external") return generateExternalLocalTTS(text, voice);
+  throw new Error(`unsupported LOCAL_TTS_BACKEND="${backend}"`);
+}
+
 // PCM → WAV header helper (Gemini returns raw PCM 24kHz 16-bit mono)
 function pcmToWav(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16) {
   const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
@@ -987,25 +1074,7 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
     let contentType = "audio/wav";
 
     if (localTts) {
-      // Local TTS via piper. Reads text on stdin, writes WAV to the temp path.
-      const { spawn } = await import("node:child_process");
-      const { accessSync, constants, readFileSync, unlinkSync } = await import("node:fs");
-      const piperBin = config.local?.piperBin || `${process.env.HOME}/.local/piper/piper/piper`;
-      const voicePath = config.local?.piperVoice || `${process.env.HOME}/.local/piper/voice.onnx`;
-      accessSync(piperBin, constants.X_OK);
-      accessSync(voicePath, constants.R_OK);
-      const tmpPath = `/tmp/irene-tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`;
-      await new Promise(/** @param {(value?: any) => void} resolve @param {(reason?: any) => void} reject */ (resolve, reject) => {
-        const proc = spawn(piperBin, ["--model", voicePath, "--output_file", tmpPath]);
-        proc.stderr?.on("data", (c) => log(`[TTS] piper: ${c.toString().trim()}`));
-        proc.on("error", reject);
-        proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`piper exit ${code}`)));
-        proc.stdin.write(text.slice(0, 500));
-        proc.stdin.end();
-      });
-      audioBuffer = readFileSync(tmpPath);
-      safeDiscordSync(`tts.unlinkTmp path=${tmpPath}`, () => unlinkSync(tmpPath));
-      log(`[TTS] piper produced ${audioBuffer.length} bytes`);
+      audioBuffer = await generateLocalTTS(text, voice);
     } else {
       // Use exact format from Google's TTS docs. `client` is guaranteed
       // non-null in this branch (localTts is false → getTtsClient() ran, and

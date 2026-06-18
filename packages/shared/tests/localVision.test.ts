@@ -47,6 +47,25 @@ describe("localVision", () => {
     expect(getImageAttachments(message).map((a: any) => a.name)).toEqual(["1.png", "3.jpg"]);
   });
 
+  it("collects embed and sticker images when Discord does not expose a normal attachment", () => {
+    const message = {
+      attachments: new Collection([]),
+      embeds: [
+        { image: { url: "https://cdn.test/full-dress.webp?ex=1" } },
+        { thumbnail: { url: "https://cdn.test/thumb.jpg" } },
+      ],
+      stickers: new Collection([
+        ["s1", { url: "https://cdn.test/sticker.png", name: "sparkle sticker" }],
+      ]),
+    };
+
+    expect(getImageAttachments(message).map((a: any) => a.url)).toEqual([
+      "https://cdn.test/full-dress.webp?ex=1",
+      "https://cdn.test/thumb.jpg",
+      "https://cdn.test/sticker.png",
+    ]);
+  });
+
   it("detects tall screenshots as candidates for high-resolution crop passes", () => {
     const dimensions = readImageDimensions(pngHeader(1170, 2532));
 

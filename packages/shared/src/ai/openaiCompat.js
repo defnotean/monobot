@@ -374,6 +374,7 @@ export function createOpenAICompatProvider(deps = {}) {
     botLabel = "Assistant",
     chatFailureMode = "fallback-shape",
     toolTimeoutKeys = ["toolSlow", "workerSlow", "worker"],
+    toolTimeoutForName = null,
     chatTimeoutKeys = ["workerSlow", "worker"],
     historyReadOrder = historyFlavor === "gemini" ? "parts-first" : "content-first",
   } = deps;
@@ -505,8 +506,12 @@ export function createOpenAICompatProvider(deps = {}) {
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
   }
 
-  function toolTimeoutMs() {
+  function toolTimeoutMs(toolName) {
     const { timeouts } = runtime();
+    const custom = typeof toolTimeoutForName === "function"
+      ? toolTimeoutForName(toolName, timeouts)
+      : null;
+    if (Number.isFinite(custom) && custom > 0) return custom;
     return valueFromKeys(timeouts, toolTimeoutKeys, 30_000);
   }
 
@@ -790,7 +795,7 @@ export function createOpenAICompatProvider(deps = {}) {
           log(`[${providerName(oc)}] ${fnName}(${JSON.stringify(fnArgs).slice(0, 100)})`);
           return await withTimeout(
             Promise.resolve(executeProviderTool(executor, fnName, fnArgs, message)),
-            toolTimeoutMs(),
+            toolTimeoutMs(fnName),
             `tool ${fnName}`,
           );
         } catch (err) {

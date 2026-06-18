@@ -313,6 +313,14 @@ export function registerPresenceBotTools(ADMIN_TOOLS, EVERYONE_TOOLS) {
 
   registry.registerTools(
     ADMIN_TOOLS.filter(t => [
+      "self_repair",
+    ].includes(t.name)),
+    "self_repair",
+    /\b(self.?repair|auto.?fix|bug|broken|having problems|fix yourself|patch yourself|diagnose yourself|restart yourself|codebase|tests?)\b/i
+  );
+
+  registry.registerTools(
+    ADMIN_TOOLS.filter(t => [
       "configure_birthdays", "send_test_birthday", "send_test_welcome",
     ].includes(t.name)),
     "birthday_admin",

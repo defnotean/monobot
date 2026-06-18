@@ -135,6 +135,7 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
     tileMinAspect: config.local?.visionTileMinAspect ?? 1.45,
     tileOverlapRatio: config.local?.visionTileOverlapRatio ?? 0.12,
     detailMaxChars: config.local?.visionDetailMaxChars ?? 3600,
+    keepAlive: config.local?.ollamaVisionKeepAlive ?? "30m",
   });
   const isTwinMsg = isTwin;
   // Normalize fancy Unicode usernames so AI sees readable text.

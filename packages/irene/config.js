@@ -573,11 +573,17 @@ if (!config.supabaseEnabled) {
   console.warn("[WARN] SUPABASE_URL / SUPABASE_KEY missing or invalid — running without persistence. Most Irene features will not work.");
 }
 
+const localTtsEnabled = env("LOCAL_TTS") === "1";
+const localTtsBackend = String(env("LOCAL_TTS_BACKEND", "piper") || "piper").trim().toLowerCase();
+
 // Local-stack toggles for the 100%-local self-host path. All optional —
 // existing cloud paths are unaffected when these are unset.
 config.local = {
   stt: env("LOCAL_STT") === "1",
-  tts: env("LOCAL_TTS") === "1",
+  tts: localTtsEnabled,
+  ttsBackend: localTtsBackend,
+  ttsCommand: env("LOCAL_TTS_COMMAND"),
+  ttsTimeoutMs: envNumber("LOCAL_TTS_TIMEOUT_MS", 120_000, { min: 1_000, integer: true }),
   whisperBin: env("WHISPER_BIN", `${process.env.HOME || ""}/.local/whisper-cli`),
   piperBin: env("PIPER_BIN", `${process.env.HOME || ""}/.local/piper/piper/piper`),
   piperVoice: env("PIPER_VOICE", `${process.env.HOME || ""}/.local/piper/voice.onnx`),
@@ -585,6 +591,7 @@ config.local = {
   ollamaEmbedModel: env("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
   ollamaVisionUrl: env("OLLAMA_VISION_URL"),
   ollamaVisionModel: env("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"),
+  ollamaVisionKeepAlive: env("OLLAMA_VISION_KEEP_ALIVE", localTtsEnabled && localTtsBackend !== "piper" ? "2m" : "30m"),
   visionMaxImages: envNumber("LOCAL_VISION_MAX_IMAGES", 4, { min: 1, integer: true }),
   visionImageMaxBytes: envNumber("LOCAL_VISION_IMAGE_MAX_BYTES", 12 * 1024 * 1024, { min: 1, integer: true }),
   visionMaxTiles: envNumber("LOCAL_VISION_MAX_TILES", 4, { min: 0, max: 8, integer: true }),
@@ -592,6 +599,8 @@ config.local = {
   visionTileMinAspect: envNumber("LOCAL_VISION_TILE_MIN_ASPECT", 1.45, { min: 1, max: 10 }),
   visionTileOverlapRatio: envNumber("LOCAL_VISION_TILE_OVERLAP_RATIO", 0.12, { min: 0, max: 0.4 }),
   visionDetailMaxChars: envNumber("LOCAL_VISION_DETAIL_MAX_CHARS", 3600, { min: 1200, max: 8000, integer: true }),
+  selfRepairEnabled: envBool("SELF_REPAIR_ENABLED", false),
+  selfRepairAllowRestart: envBool("SELF_REPAIR_ALLOW_RESTART", false),
 };
 
 export default config;

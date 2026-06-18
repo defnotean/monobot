@@ -56,12 +56,12 @@ export function detectTtsToggleShortcut(content = "") {
   const t = String(content).toLowerCase();
   if (!/\btts\b|text\s*(?:-|to)?\s*speech|text-to-speech/.test(t)) return null;
   if (/\bvoice\s+listen\b|\bwake\s*word\b|\blisten(?:ing)?\s+in\s+(?:vc|voice)\b/.test(t)) return null;
-  if (/\b(?:turn|switch)\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\s+off\b/.test(t)) return false;
-  if (/\b(?:turn|switch)\s+off\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\b/.test(t)) return false;
+  if (/\b(?:turn|switch)\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\s+(?:back\s+)?off\b/.test(t)) return false;
+  if (/\b(?:turn|switch)\s+(?:back\s+)?off\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\b/.test(t)) return false;
   if (/\b(?:disable|stop)\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\b/.test(t)) return false;
   if (/\b(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\s+off\b/.test(t)) return false;
-  if (/\b(?:turn|switch)\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\s+on\b/.test(t)) return true;
-  if (/\b(?:turn|switch)\s+on\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\b/.test(t)) return true;
+  if (/\b(?:turn|switch)\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\s+(?:back\s+)?on\b/.test(t)) return true;
+  if (/\b(?:turn|switch)\s+(?:back\s+)?on\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\b/.test(t)) return true;
   if (/\b(?:enable|start)\s+(?:the\s+)?(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\b/.test(t)) return true;
   if (/\b(?:tts|text\s*(?:-|to)?\s*speech|text-to-speech)\s+on\b/.test(t)) return true;
   return null;

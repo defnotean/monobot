@@ -144,6 +144,7 @@ import { execute as executeTest } from "./executors/testExecutor.js";
 import { execute as executeMedia } from "./executors/mediaExecutor.js";
 import { execute as executeInfo } from "./executors/infoExecutor.js";
 import { execute as executeWhitelist } from "./executors/whitelistExecutor.js";
+import { execute as executeSelfRepair } from "./executors/selfRepairExecutor.js";
 
 const SUB_EXECUTORS = [
   executeChannel,
@@ -169,8 +170,10 @@ const SUB_EXECUTORS = [
   executeMedia,
   executeInfo,
   executeWhitelist,
+  executeSelfRepair,
 ];
 const ADMIN_TOOL_NAMES = new Set(ADMIN_TOOLS.map((t) => t.name));
+const OWNER_ONLY_TOOL_NAMES = new Set(["self_repair"]);
 const ADMIN_TOOL_PERMISSION_OVERRIDES = new Map([
   ["ban_user", PermissionFlagsBits.BanMembers],
   ["tempban", PermissionFlagsBits.BanMembers],
@@ -389,7 +392,11 @@ export async function executeTool(toolName, input, message, opts = {}) {
     toolName = TOOL_ALIASES[toolName];
   }
 
-  if (ADMIN_TOOL_NAMES.has(toolName) && !canAttemptAdminTool(toolName, message?.member)) {
+  if (OWNER_ONLY_TOOL_NAMES.has(toolName) && message?.author?.id !== config.ownerId) {
+    log(`[SECURITY] Blocked owner-only tool "${toolName}" for non-owner`);
+    return "only the bot owner can use that tool";
+  }
+  if (ADMIN_TOOL_NAMES.has(toolName) && !OWNER_ONLY_TOOL_NAMES.has(toolName) && !canAttemptAdminTool(toolName, message?.member)) {
     log(`[SECURITY] Blocked admin tool "${toolName}" for non-admin at executeTool boundary`);
     return "only admins/mods can set or remove directives";
   }

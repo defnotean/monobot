@@ -26,6 +26,7 @@ at the repo root.
 | `DISCORD_CLIENT_ID` | Irene | **Yes** (fatal) | — | Application ID for slash command registration. Read at `packages/irene/config.js:190`; validated `:372-375`. | Same as above |
 | `BOT_OWNER_ID` | Eris | No (recommended) | — | Bot owner Discord user ID. Drives owner-only PC agent tools and the "boss" label. Read at `packages/eris/config.js:201, 325`. | Discord -> Developer Mode -> right-click your name -> Copy User ID |
 | `DISCORD_USER_ID` | Irene | No (recommended) | — | Bot owner Discord user ID. Same role on the Irene side. Read at `packages/irene/config.js:191, 306`. | Same as above |
+| `DISCORD_OWNER_NAME` | Both | No | `the owner` | Human-readable owner name used in personality/context text. Live owner display is `defnotean`. Read at `packages/eris/config.js`, `packages/irene/config.js`. | Set to your Discord username or preferred owner label |
 | `BOT_NAME` | Both | No | `eris` / `irene` | Stable identifier for personality/longmemory/audit rows in Supabase. Changing creates a fresh personality. Read at `packages/eris/config.js:206`, `packages/irene/config.js:196`. | Pick one and keep it stable |
 | `PORT` | Both | No | `3000` (Eris) / `3001` (Irene) | HTTP port for the dashboard / presence / health-check API. Render and similar PaaS hosts inject their own. Read at `packages/eris/config.js:202`, `packages/irene/config.js:192`. | Set to whatever your reverse proxy expects |
 | `AI_PROVIDER` | Both | No | `gemini` | Selects the provider module under `ai/providers/`. Accepts `gemini`, `nvidia`, `kimi`, or an OpenAI-compatible alias: `openai-compatible`, `openai`, `openrouter`, `groq`, `cerebras`, `mistral`, `deepinfra`, `together`, `github`, `cloudflare`, `lmstudio`, `ollama`. Read at `packages/eris/config.js:180`, `packages/irene/config.js:135`; validated `packages/eris/config.js:399-402`, `packages/irene/config.js:390-393`. | n/a — pick based on which provider key you have |
@@ -73,6 +74,7 @@ at the repo root.
 | `OLLAMA_EMBED_MODEL` | Both | No | `nomic-embed-text` | Ollama embedding model. `packages/eris/config.js`, `packages/irene/config.js`. | `ollama pull nomic-embed-text` |
 | `OLLAMA_VISION_URL` | Both | No | — | Local Ollama base URL for Discord image descriptions. Raw image bytes are sent only to this local service; external chat providers receive text evidence. `packages/eris/config.js`, `packages/irene/config.js`. | Your Ollama host, e.g. `http://127.0.0.1:11434` |
 | `OLLAMA_VISION_MODEL` | Both | No | `qwen2.5vl:7b` | Local vision model used for conservative image evidence. `qwen2.5vl:3b` is faster; `7b` is more accurate. | `ollama pull qwen2.5vl:7b` |
+| `OLLAMA_VISION_KEEP_ALIVE` | Both | No | `30m` (`2m` when `LOCAL_TTS=1` and `LOCAL_TTS_BACKEND` is not `piper`) | How long Ollama keeps the vision model loaded after image analysis. Keep the default for repeated image reads; lower it when testing GPU-heavy local TTS on 8 GB VRAM. | `2m`, `30m`, or Ollama-supported duration |
 | `LOCAL_VISION_MAX_IMAGES` | Both | No | `4` | Max image attachments described per Discord message. Extra images are noted as omitted. | n/a |
 | `LOCAL_VISION_IMAGE_MAX_BYTES` | Both | No | `12582912` | Per-image fetch cap before local vision analysis. | n/a |
 | `LOCAL_VISION_MAX_TILES` | Both | No | `4` | Max high-resolution crop passes per large/tall image. Set `0` to disable screenshot tiling. | n/a |
@@ -80,6 +82,14 @@ at the repo root.
 | `LOCAL_VISION_TILE_MIN_ASPECT` | Both | No | `1.45` | Aspect-ratio threshold for tall/wide screenshots when deciding whether to crop. | n/a |
 | `LOCAL_VISION_TILE_OVERLAP_RATIO` | Both | No | `0.12` | Overlap between adjacent crop passes so text near crop boundaries is still visible. | n/a |
 | `LOCAL_VISION_DETAIL_MAX_CHARS` | Both | No | `3600` | Max combined local-vision evidence characters per image after full-image and crop-pass summaries. | n/a |
+| `LOCAL_TTS` | Irene | No | `0` | Enables local TTS for `/say_tts`/voice-listener replies instead of Gemini TTS. `piper` stays CPU/lightweight and is safest beside `qwen2.5vl:7b`; `external` calls a local script. | `1` |
+| `LOCAL_TTS_BACKEND` | Irene | No | `piper` | Local TTS backend. `piper` runs the configured Piper binary; `external` runs `LOCAL_TTS_COMMAND --text-file <tmp> --output-file <tmp.wav> --voice <voice>`. Use `external` for a local Kokoro/Chatterbox wrapper. | `piper` or `external` |
+| `LOCAL_TTS_COMMAND` | Irene | Conditional | — | Executable script used when `LOCAL_TTS_BACKEND=external`. It receives `IRENE_TTS_TEXT`, `IRENE_TTS_TEXT_FILE`, `IRENE_TTS_OUTPUT`, and `IRENE_TTS_VOICE` env vars and must write a WAV to the output path. | Local script path |
+| `LOCAL_TTS_TIMEOUT_MS` | Irene | No | `120000` | Kill timeout for the external local TTS command. | n/a |
+| `PIPER_BIN` | Irene | No | `$HOME/.local/piper/piper/piper` | Piper executable path used by `LOCAL_TTS_BACKEND=piper`. | Local Piper install |
+| `PIPER_VOICE` | Irene | No | `$HOME/.local/piper/voice.onnx` | Piper voice model path. | Local Piper voice |
+| `SELF_REPAIR_ENABLED` | Irene | No | `0` | Enables Irene's owner-only guarded self-repair apply mode. The tool still rejects secret/env paths, arbitrary shell commands, and patches that do not pass `git apply --check` plus allowlisted tests. | `1` only on a trusted local host |
+| `SELF_REPAIR_ALLOW_RESTART` | Irene | No | `0` | Allows `self_repair` to schedule a systemd restart after a patch and test plan pass. Ignored unless `SELF_REPAIR_ENABLED=1`. | `1` only if user services are configured |
 | `SUPABASE_URL` | Both | No (strongly recommended) | — | Supabase project URL. Without it, the bot boots with a `[WARN]` and runs fully ephemeral. `packages/eris/config.js:282`, `packages/irene/config.js:266`; warning at `packages/eris/config.js:404-406`, `packages/irene/config.js:394-397`. | supabase.com -> Project Settings -> API -> Project URL |
 | `SUPABASE_KEY` | Both | No (strongly recommended) | — | Service-role or anon key. `packages/eris/config.js:283`, `packages/irene/config.js:267`. | supabase.com -> Project Settings -> API |
 | `SUPABASE_ANON_KEY` | Irene | No | — | Parsed for compatibility, but it does not enable persistence when `SUPABASE_KEY` is unset. `SUPABASE_KEY` is required for Irene persistence. `packages/irene/config.js:268`. | Same as above |
@@ -153,6 +163,10 @@ needs a recognized owner — owner-only commands, PC-agent authorization, and th
 personality prompt's relationship block — depends on it. If you leave it blank,
 owner-only surfaces fail closed or lose owner-specific context; set it to your
 own ID before enabling any owner-only tooling.
+
+Set `DISCORD_OWNER_NAME=defnotean` in both bot env files for this deployment.
+This is only the readable name the bots use in context/personality text; the
+Discord IDs above still control owner authorization.
 
 `BOT_NAME` controls the row key for personality, longmemory and audit rows in
 Supabase. Changing it creates a fresh personality from scratch — treat it as
@@ -400,5 +414,6 @@ Strongly recommended on top of that for either bot:
 SUPABASE_URL=...
 SUPABASE_KEY=...
 BOT_OWNER_ID / DISCORD_USER_ID=<your discord user id>
+DISCORD_OWNER_NAME=defnotean
 TWIN_API_SECRET=<openssl rand -hex 32>   # if running both bots together
 ```

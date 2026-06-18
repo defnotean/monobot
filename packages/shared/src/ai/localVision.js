@@ -255,21 +255,74 @@ function imageAttachmentName(attachment, index) {
   return attachment?.name || attachment?.filename || `image-${index + 1}`;
 }
 
+/** @param {unknown} rawUrl */
+function extensionFromUrl(rawUrl) {
+  try {
+    const pathname = new URL(String(rawUrl || "")).pathname;
+    return pathname.split(".").pop()?.toLowerCase() || "";
+  } catch {
+    return "";
+  }
+}
+
+/** @param {unknown} rawName */
+function extensionFromName(rawName) {
+  const name = String(rawName || "");
+  if (!name.includes(".")) return "";
+  return name.split(".").pop()?.toLowerCase() || "";
+}
+
 /** @param {ImageAttachment} attachment */
 export function isImageAttachment(attachment) {
   if (!attachment?.url) return false;
   const contentType = attachment.contentType || "";
   if (contentType && SUPPORTED_IMAGE_TYPES.some((t) => contentType.startsWith(t))) return true;
-  const ext = String(attachment.name || attachment.filename || "").split(".").pop()?.toLowerCase();
+  const ext = extensionFromName(attachment.name || attachment.filename)
+    || extensionFromUrl(attachment.url);
   return SUPPORTED_IMAGE_EXTENSIONS.includes(ext || "");
 }
 
 /** @param {any} message @param {{ maxImages?: number }} [options] */
 export function getImageAttachments(message, { maxImages = Infinity } = {}) {
-  const values = typeof message?.attachments?.values === "function"
+  const attachmentValues = typeof message?.attachments?.values === "function"
     ? [...message.attachments.values()]
     : [];
-  return values.filter(isImageAttachment).slice(0, maxImages);
+  const embeddedImages = Array.isArray(message?.embeds)
+    ? message.embeds.flatMap(
+      /** @param {any} embed @param {number} index @returns {ImageAttachment[]} */
+      (embed, index) => {
+        /** @type {ImageAttachment[]} */
+        const rows = [];
+        if (embed?.image?.url) rows.push({
+          url: embed.image.url,
+          name: embed.image.proxyURL ? `embed-image-${index + 1}` : `embed-image-${index + 1}.${extensionFromUrl(embed.image.url) || "png"}`,
+          contentType: embed.image.contentType || "",
+        });
+        if (embed?.thumbnail?.url) rows.push({
+          url: embed.thumbnail.url,
+          name: `embed-thumbnail-${index + 1}.${extensionFromUrl(embed.thumbnail.url) || "png"}`,
+          contentType: embed.thumbnail.contentType || "",
+        });
+        return rows;
+      })
+    : [];
+  const stickerValues = typeof message?.stickers?.values === "function"
+    ? [...message.stickers.values()].map((sticker, index) => ({
+        url: sticker?.url,
+        name: sticker?.name || `sticker-${index + 1}.${extensionFromUrl(sticker?.url) || "png"}`,
+        contentType: sticker?.contentType || "",
+      }))
+    : [];
+  const seen = new Set();
+  return [...attachmentValues, ...embeddedImages, ...stickerValues]
+    .filter(isImageAttachment)
+    .filter((item) => {
+      const key = item.url;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, maxImages);
 }
 
 /** @param {ImageDimensions | null} dimensions @param {ImageTileOptions} options */

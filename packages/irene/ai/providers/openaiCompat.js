@@ -8,7 +8,7 @@ import { TOOL_ALIASES } from "../toolAliases.js";
 import { registry } from "../toolRegistry.js";
 import { toolCoachingBlock } from "../toolCoaching.js";
 
-const TASK_KEYWORDS = /\b(set|create|make|delete|remove|update|change|configure|enable|disable|start|stop|skip|play|pause|fetch|get|show|list|search|find|add|give|send|kick|ban|mute|warn|timeout|track|watch|bet|gamble|flip|roll|spin|blackjack|hit|stand|fish|hunt|dig|work|beg|daily|weekly|monthly|rob|steal|duel|trivia|fortune|confess|curse|balance|coin|leaderboard|bump|reminder|karaoke|lyrics|music|queue|volume|filter)\b/i;
+const TASK_KEYWORDS = /\b(set|create|make|delete|remove|update|change|configure|enable|disable|start|stop|skip|play|pause|fetch|get|show|list|search|find|fix|repair|diagnose|patch|add|give|send|kick|ban|mute|warn|timeout|track|watch|bet|gamble|flip|roll|spin|blackjack|hit|stand|fish|hunt|dig|work|beg|daily|weekly|monthly|rob|steal|duel|trivia|fortune|confess|curse|balance|coin|leaderboard|bump|reminder|karaoke|lyrics|music|queue|volume|filter|self.?repair|auto.?fix)\b/i;
 
 const provider = createOpenAICompatProvider({
   getConfig: () => config,
@@ -20,6 +20,11 @@ const provider = createOpenAICompatProvider({
   defaultExecutor: (toolName, toolArgs, msgCtx) => executeTool(toolName, toolArgs, msgCtx, { aiInitiated: true }),
   postProcessToolResult: (raw, { message }) => postDeferralIfNeeded(raw, message?.channel),
   toolCoachingBlock,
+  toolTimeoutForName: (toolName, timeouts = {}) => (
+    toolName === "self_repair"
+      ? (timeouts.toolVerySlow ?? timeouts.workerSlow ?? 60_000)
+      : null
+  ),
   botLabel: "Irene",
 });
 

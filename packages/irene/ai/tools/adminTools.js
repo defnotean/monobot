@@ -844,6 +844,28 @@ export const ADMIN_TOOLS = [
     },
   },
   {
+    name: "self_repair",
+    description: "BOT OWNER ONLY. Automatically diagnose and safely apply a small code repair to Irene/Eris when the owner says the bot is broken, buggy, or should fix itself. Preferred workflow: call mode='auto' with the issue; use the returned logs/source context to create a minimal unified diff; call mode='apply' with focused tests and restart=true; then tell the owner what broke, what changed, which checks passed, and whether restart was scheduled. The executor rejects secret files, arbitrary shell, and non-allowlisted test commands. SELF_REPAIR_ENABLED must be set before patches can apply.",
+    input_schema: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["auto", "diagnose", "check", "apply"], description: "auto starts the owner-facing diagnose-to-apply workflow; diagnose reads safe local context; check validates a patch/test plan; apply validates, applies, tests, and optionally restarts." },
+        issue: { type: "string", description: "Brief bug report or symptom from the owner." },
+        files: { type: "array", description: "Optional repo-relative source files to include in diagnosis. Only allowlisted source/docs/test paths are read.", items: { type: "string" } },
+        patch: { type: "string", description: "Unified diff only. No .env/secrets/generated dependency folders." },
+        test_commands: {
+          type: "array",
+          description: "Focused allowlisted commands. If omitted, the executor chooses lint/build/test commands based on the touched package paths.",
+          items: { type: "string" },
+        },
+        restart: { type: "boolean", description: "If true and SELF_REPAIR_ALLOW_RESTART=1, schedule a systemd restart after tests pass." },
+        restart_bot: { type: "string", enum: ["irene", "eris", "both"], description: "Bot service to restart after a passing patch. Defaults to irene." },
+        notify_owner: { type: "boolean", description: "Whether to DM/fallback-message the owner during apply progress. Defaults true." },
+      },
+      required: ["mode"],
+    },
+  },
+  {
     name: "configure_birthdays",
     description: "Set up or update the birthday announcement system — channel, optional role, and custom message",
     input_schema: {
