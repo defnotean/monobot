@@ -575,6 +575,7 @@ if (!config.supabaseEnabled) {
 
 const localTtsEnabled = env("LOCAL_TTS") === "1";
 const localTtsBackend = String(env("LOCAL_TTS_BACKEND", "piper") || "piper").trim().toLowerCase();
+const elevenLabsApiKey = env("ELEVENLABS_API_KEY");
 
 // Local-stack toggles for the 100%-local self-host path. All optional —
 // existing cloud paths are unaffected when these are unset.
@@ -606,6 +607,27 @@ config.local = {
   visionDetailMaxChars: envNumber("LOCAL_VISION_DETAIL_MAX_CHARS", 3600, { min: 1200, max: 8000, integer: true }),
   selfRepairEnabled: envBool("SELF_REPAIR_ENABLED", false),
   selfRepairAllowRestart: envBool("SELF_REPAIR_ALLOW_RESTART", false),
+};
+
+config.elevenLabs = {
+  apiKey: elevenLabsApiKey,
+  baseUrl: env("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io/v1"),
+  ttsEnabled: envBool("ELEVENLABS_TTS", false),
+  sttEnabled: envBool("ELEVENLABS_STT", false),
+  isolateBeforeStt: envBool("ELEVENLABS_AUDIO_ISOLATION", false),
+  voiceId: env("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb"),
+  voiceMap: envJson("ELEVENLABS_VOICE_MAP", {}),
+  ttsModel: env("ELEVENLABS_TTS_MODEL", "eleven_multilingual_v2"),
+  dialogueModel: env("ELEVENLABS_DIALOGUE_MODEL", "eleven_v3"),
+  sttModel: env("ELEVENLABS_STT_MODEL", "scribe_v2"),
+  outputFormat: env("ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128"),
+  timeoutMs: envNumber("ELEVENLABS_TIMEOUT_MS", 60_000, { min: 1_000, integer: true }),
+};
+
+config.higgsfield = {
+  command: env("HIGGSFIELD_COMMAND"),
+  outputDir: env("HIGGSFIELD_OUTPUT_DIR", "/tmp/monobot-higgsfield"),
+  timeoutMs: envNumber("HIGGSFIELD_TIMEOUT_MS", 10 * 60_000, { min: 10_000, integer: true }),
 };
 
 export default config;

@@ -929,6 +929,7 @@ import { randomUUID } from "crypto";
 import config from "../config.js";
 import { ttsAudioCache, addTtsCache } from "../presence.js";
 import { getTtsVoice } from "../database.js";
+import { elevenLabsTextToSpeech } from "@defnotean/shared/elevenLabs";
 
 // Round-robin Gemini client for TTS
 const _ttsClients = config.geminiKeys?.map((k) => new GoogleGenAI({ apiKey: k })) ?? [];
@@ -1025,6 +1026,29 @@ async function generateLocalTTS(text, voice) {
   throw new Error(`unsupported LOCAL_TTS_BACKEND="${backend}"`);
 }
 
+function resolveElevenLabsVoiceId(voice) {
+  const map = config.elevenLabs?.voiceMap || {};
+  const requested = String(voice || "").trim();
+  return map[requested]
+    || map[requested.toLowerCase?.()]
+    || config.elevenLabs?.voiceId;
+}
+
+async function generateElevenLabsTTS(text, voice) {
+  const voiceId = resolveElevenLabsVoiceId(voice);
+  const result = await elevenLabsTextToSpeech({
+    apiKey: config.elevenLabs?.apiKey,
+    baseUrl: config.elevenLabs?.baseUrl,
+    text,
+    voiceId,
+    modelId: config.elevenLabs?.ttsModel,
+    outputFormat: config.elevenLabs?.outputFormat,
+    timeoutMs: config.elevenLabs?.timeoutMs,
+  });
+  log(`[TTS] ElevenLabs produced ${result.buffer.length} bytes voice=${voiceId}`);
+  return result;
+}
+
 // PCM → WAV header helper (Gemini returns raw PCM 24kHz 16-bit mono)
 function pcmToWav(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16) {
   const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
@@ -1057,8 +1081,9 @@ function pcmToWav(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample 
 
 export async function playTTS(guildId, text, voiceChannel, textChannel) {
   const localTts = !!config.local?.tts;
+  const elevenLabsTts = !!config.elevenLabs?.ttsEnabled && !!config.elevenLabs?.apiKey;
   const client = localTts ? null : getTtsClient();
-  if (!localTts && !client) return;
+  if (!localTts && !elevenLabsTts && !client) return;
 
   let queue = getQueue(guildId);
   if (!queue) {
@@ -1075,11 +1100,23 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
 
     if (localTts) {
       audioBuffer = await generateLocalTTS(text, voice);
-    } else {
+    } else if (elevenLabsTts) {
+      try {
+        const result = await generateElevenLabsTTS(text.slice(0, 1_000), voice);
+        audioBuffer = result.buffer;
+        contentType = result.contentType;
+      } catch (err) {
+        log(`[TTS] ElevenLabs failed: ${err?.message || err} — falling back to Gemini TTS`);
+      }
+      if (!audioBuffer && !client) return;
+    }
+
+    if (!audioBuffer && !localTts) {
+      if (!client) return;
       // Use exact format from Google's TTS docs. `client` is guaranteed
       // non-null in this branch (localTts is false → getTtsClient() ran, and
-      // the early return above bailed when it produced no client).
-      if (!client) return;
+      // the early return above bailed when it produced no client unless
+      // ElevenLabs was the primary path).
       const transcript = `Say naturally: ${text.slice(0, 500)}`;
 
       let response;

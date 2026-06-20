@@ -145,6 +145,7 @@ import { execute as executeMedia } from "./executors/mediaExecutor.js";
 import { execute as executeInfo } from "./executors/infoExecutor.js";
 import { execute as executeWhitelist } from "./executors/whitelistExecutor.js";
 import { execute as executeSelfRepair } from "./executors/selfRepairExecutor.js";
+import { execute as executeCreative } from "./executors/creativeExecutor.js";
 
 const SUB_EXECUTORS = [
   executeChannel,
@@ -154,6 +155,7 @@ const SUB_EXECUTORS = [
   executeSetup,
   executePersonalize,
   executeAudio,
+  executeCreative,
   executeLeveling,
   executeAdvanced,
   executeMemory,
@@ -173,7 +175,18 @@ const SUB_EXECUTORS = [
   executeSelfRepair,
 ];
 const ADMIN_TOOL_NAMES = new Set(ADMIN_TOOLS.map((t) => t.name));
-const OWNER_ONLY_TOOL_NAMES = new Set(["self_repair"]);
+const OWNER_ONLY_TOOL_NAMES = new Set([
+  "self_repair",
+  "generate_sound_effect",
+  "generate_dialogue_audio",
+  "clean_audio_attachment",
+  "transcribe_audio_attachment",
+  "higgsfield_generate_video",
+  "higgsfield_animate_image",
+  "higgsfield_make_shorts",
+  "higgsfield_train_character",
+  "higgsfield_score_video",
+]);
 const ADMIN_TOOL_PERMISSION_OVERRIDES = new Map([
   ["ban_user", PermissionFlagsBits.BanMembers],
   ["tempban", PermissionFlagsBits.BanMembers],

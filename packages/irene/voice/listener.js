@@ -22,6 +22,10 @@ import config from "../config.js";
 import { log } from "../utils/logger.js";
 import { playTTS } from "../music/player.js";
 import * as settingsStore from "../music/settingsStore.js";
+import {
+  elevenLabsAudioIsolation,
+  elevenLabsSpeechToText,
+} from "@defnotean/shared/elevenLabs";
 
 // ─── State ──────────────────────────────────────────────────────────────────
 // guildId → { connection, channelId, textChannelId, wakeWord, listening: Map<userId, AudioState> }
@@ -561,9 +565,15 @@ async function _whisperTranscribe(pcmChunks) {
 
 async function processAudio(state, userId, wavBuffer, pcmChunks) {
   const localStt = !!config.local?.stt;
-  const client = localStt ? null : getSttClient();
-  if (!localStt && !client) {
-    log("[VoiceListen] No Gemini client available for STT");
+  const elevenLabsStt = !!config.elevenLabs?.sttEnabled && !!config.elevenLabs?.apiKey;
+  const geminiSttClient = localStt || elevenLabsStt ? null : getSttClient();
+  const replyClient = getSttClient();
+  if (!localStt && !elevenLabsStt && !geminiSttClient) {
+    log("[VoiceListen] No STT provider available");
+    return;
+  }
+  if (!replyClient) {
+    log("[VoiceListen] No Gemini client available for voice replies");
     return;
   }
 
@@ -602,15 +612,46 @@ async function processAudio(state, userId, wavBuffer, pcmChunks) {
       // pipeline ran them through the Opus decoder). Convert straight to a
       // 16kHz mono WAV for whisper — no Opus re-decode.
       transcript = await _whisperTranscribe(pcmChunks);
+    } else if (elevenLabsStt) {
+      let sttAudio = wavBuffer;
+      let sttMime = "audio/wav";
+      if (config.elevenLabs?.isolateBeforeStt) {
+        try {
+          const isolated = await elevenLabsAudioIsolation({
+            apiKey: config.elevenLabs.apiKey,
+            baseUrl: config.elevenLabs.baseUrl,
+            audioBuffer: wavBuffer,
+            filename: "voice.wav",
+            mimeType: "audio/wav",
+            timeoutMs: config.elevenLabs.timeoutMs,
+          });
+          sttAudio = isolated.buffer;
+          sttMime = isolated.contentType;
+        } catch (err) {
+          log(`[VoiceListen] ElevenLabs audio isolation failed: ${err?.message || err} — transcribing raw audio`);
+        }
+      }
+      const stt = await elevenLabsSpeechToText({
+        apiKey: config.elevenLabs.apiKey,
+        baseUrl: config.elevenLabs.baseUrl,
+        audioBuffer: sttAudio,
+        filename: "voice.wav",
+        mimeType: sttMime,
+        modelId: config.elevenLabs.sttModel,
+        tagAudioEvents: true,
+        diarize: false,
+        timeoutMs: config.elevenLabs.timeoutMs,
+      });
+      transcript = String(stt?.text || "").trim();
     } else {
-      // `client` is guaranteed non-null here: the early return above bailed
-      // when (!localStt && !client), so in this !localStt branch client is set.
-      if (!client) return;
+      // `geminiSttClient` is guaranteed non-null here: the early return above
+      // bailed when no STT provider exists.
+      if (!geminiSttClient) return;
       // Step 1: Send audio to Gemini for transcription + wake word check.
       // We send a real WAV container (decoded from Opus → PCM, wrapped with a
       // RIFF/WAVE header) — Gemini cannot decode raw Opus frames, which is why
       // the previous "audio/ogg" path always returned "[inaudible]".
-      const transcribeResponse = await client.models.generateContent({
+      const transcribeResponse = await geminiSttClient.models.generateContent({
         model: config.geminiFastModel || "gemini-2.5-flash-preview-04-17",
         contents: [
           {
@@ -667,9 +708,7 @@ async function processAudio(state, userId, wavBuffer, pcmChunks) {
       log(`[VoiceListen] Firewall error: ${e.message}`);
     }
 
-    // Step 4: Get AI response via Gemini. `client` is non-null on the Gemini
-    // path; assert it for the type checker (runtime behavior is unchanged — a
-    // null client here would throw exactly as before).
+    // Step 4: Get AI response via Gemini.
     //
     // SECURITY INVARIANT: this voice-reply path NEVER binds tools. Transcripts
     // are untrusted speech from anyone in the VC; the request must stay a
@@ -706,7 +745,7 @@ ${fencedSpeech}
     if ("tools" in aiRequest || "toolConfig" in aiRequest || "config" in aiRequest) {
       throw new Error("voice reply path must never bind tools");
     }
-    const aiResponse = await /** @type {NonNullable<typeof client>} */ (client).models.generateContent(aiRequest);
+    const aiResponse = await replyClient.models.generateContent(aiRequest);
 
     const reply = aiResponse.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
 

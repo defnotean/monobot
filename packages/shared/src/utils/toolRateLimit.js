@@ -20,6 +20,15 @@ const TOOL_LIMITS = {
   // money and the model is slow. 5/min/user keeps cost predictable.
   // Irene-only at the moment; Eris's tool registry never dispatches it.
   generate_image: { max: 5,  windowMs: 60_000 },
+  generate_sound_effect: { max: 5, windowMs: 60_000 },
+  generate_dialogue_audio: { max: 4, windowMs: 60_000 },
+  clean_audio_attachment: { max: 4, windowMs: 60_000 },
+  transcribe_audio_attachment: { max: 4, windowMs: 60_000 },
+  higgsfield_generate_video: { max: 2, windowMs: 60_000 },
+  higgsfield_animate_image: { max: 2, windowMs: 60_000 },
+  higgsfield_make_shorts: { max: 1, windowMs: 60_000 },
+  higgsfield_train_character: { max: 1, windowMs: 60_000 },
+  higgsfield_score_video: { max: 3, windowMs: 60_000 },
   // TTS queues audio in a voice channel — a user spamming this can hijack
   // the bot's voice for everyone in the VC. 10/min is plenty for normal
   // back-and-forth without being a denial-of-voice vector.

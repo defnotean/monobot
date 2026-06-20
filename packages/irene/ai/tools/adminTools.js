@@ -844,6 +844,141 @@ export const ADMIN_TOOLS = [
     },
   },
   {
+    name: "generate_sound_effect",
+    description: "BOT OWNER ONLY. Generate a short ElevenLabs sound effect and post the audio file. Use for SFX requests like 'make a boom sound', 'generate sparkle transition audio', or 'create a soundboard effect'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "Sound effect description" },
+        duration_seconds: { type: "number", description: "Optional duration in seconds" },
+        prompt_influence: { type: "number", description: "Optional prompt adherence, provider-specific" },
+        name: { type: "string", description: "Optional filename base" },
+      },
+      required: ["prompt"],
+    },
+  },
+  {
+    name: "generate_dialogue_audio",
+    description: "BOT OWNER ONLY. Generate one audio file containing multiple ElevenLabs dialogue lines using configured voice IDs. Use for Irene/Eris skits or multi-speaker announcements.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Optional filename base" },
+        lines: {
+          type: "array",
+          description: "Dialogue lines to synthesize, in spoken order. Each line can include text plus a voice label or ElevenLabs voice ID.",
+          items: {
+            type: "object",
+            properties: {
+              speaker: { type: "string", description: "Speaker label, also checked against ELEVENLABS_VOICE_MAP" },
+              voice: { type: "string", description: "Voice label or ElevenLabs voice ID" },
+              voice_id: { type: "string", description: "Explicit ElevenLabs voice ID" },
+              text: { type: "string", description: "Line to speak" },
+            },
+            required: ["text"],
+          },
+        },
+      },
+      required: ["lines"],
+    },
+  },
+  {
+    name: "clean_audio_attachment",
+    description: "BOT OWNER ONLY. Remove background noise from an attached or linked audio/video file using ElevenLabs Audio Isolation, then post the cleaned audio.",
+    input_schema: {
+      type: "object",
+      properties: {
+        attachment_url: { type: "string", description: "Optional direct audio/video URL; otherwise use the message attachment" },
+        name: { type: "string", description: "Optional output filename base" },
+      },
+    },
+  },
+  {
+    name: "transcribe_audio_attachment",
+    description: "BOT OWNER ONLY. Transcribe an attached or linked audio/video file with ElevenLabs Scribe. Supports speaker diarization when requested.",
+    input_schema: {
+      type: "object",
+      properties: {
+        attachment_url: { type: "string", description: "Optional direct audio/video URL; otherwise use the message attachment" },
+        source_url: { type: "string", description: "Optional hosted media URL such as YouTube/TikTok/audio/video URL" },
+        language_code: { type: "string", description: "Optional ISO language code" },
+        diarize: { type: "boolean", description: "Whether to detect speakers" },
+        num_speakers: { type: "number", description: "Optional maximum speaker count" },
+        tag_audio_events: { type: "boolean", description: "Whether to include audio event tags" },
+      },
+    },
+  },
+  {
+    name: "higgsfield_generate_video",
+    description: "BOT OWNER ONLY. Send a text/product prompt to the local authenticated Higgsfield bridge to generate an image/video asset. Requires HIGGSFIELD_COMMAND.",
+    input_schema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "Video or image prompt" },
+        product_url: { type: "string", description: "Optional product URL for marketing-style generation" },
+        aspect_ratio: { type: "string", description: "Aspect ratio such as 9:16, 16:9, or 1:1" },
+        duration_seconds: { type: "number", description: "Optional target video length" },
+        style: { type: "string", description: "Optional style/preset hint" },
+      },
+      required: ["prompt"],
+    },
+  },
+  {
+    name: "higgsfield_animate_image",
+    description: "BOT OWNER ONLY. Animate an attached or linked image through the local authenticated Higgsfield bridge.",
+    input_schema: {
+      type: "object",
+      properties: {
+        image_url: { type: "string", description: "Image URL to animate" },
+        prompt: { type: "string", description: "Motion/camera/action prompt" },
+        aspect_ratio: { type: "string", description: "Aspect ratio such as 9:16, 16:9, or 1:1" },
+        duration_seconds: { type: "number", description: "Optional target video length" },
+        style: { type: "string", description: "Optional Higgsfield preset/style hint" },
+      },
+      required: ["prompt"],
+    },
+  },
+  {
+    name: "higgsfield_make_shorts",
+    description: "BOT OWNER ONLY. Ask the local authenticated Higgsfield bridge to turn a video/YouTube/source URL into vertical shorts/reels with captions.",
+    input_schema: {
+      type: "object",
+      properties: {
+        video_url: { type: "string", description: "Source video URL" },
+        youtube_url: { type: "string", description: "YouTube source URL" },
+        prompt: { type: "string", description: "Clip/caption/style instructions" },
+        count: { type: "number", description: "Number of short clips to produce" },
+        aspect_ratio: { type: "string", description: "Usually 9:16" },
+      },
+      required: ["prompt"],
+    },
+  },
+  {
+    name: "higgsfield_train_character",
+    description: "BOT OWNER ONLY. Ask the local authenticated Higgsfield bridge to create/train a reusable character from reference image URLs.",
+    input_schema: {
+      type: "object",
+      properties: {
+        character_name: { type: "string", description: "Reusable character name" },
+        reference_urls: { type: "array", items: { type: "string" }, description: "Reference image URLs" },
+        prompt: { type: "string", description: "Optional character/style notes" },
+      },
+      required: ["character_name", "reference_urls"],
+    },
+  },
+  {
+    name: "higgsfield_score_video",
+    description: "BOT OWNER ONLY. Ask the local authenticated Higgsfield bridge to analyze a video URL and score hook strength, retention risk, and viral potential.",
+    input_schema: {
+      type: "object",
+      properties: {
+        video_url: { type: "string", description: "Video URL to score" },
+        prompt: { type: "string", description: "Optional target platform/audience notes" },
+      },
+      required: ["video_url"],
+    },
+  },
+  {
     name: "self_repair",
     description: "BOT OWNER ONLY. Automatically diagnose and safely apply a small code repair to Irene/Eris when the owner says the bot is broken, buggy, or should fix itself. Preferred workflow: call mode='auto' with the issue; use the returned logs/source context to create a minimal unified diff; call mode='apply' with focused tests and restart=true; then tell the owner what broke, what changed, which checks passed, and whether restart was scheduled. The executor rejects secret files, arbitrary shell, and non-allowlisted test commands. SELF_REPAIR_ENABLED must be set before patches can apply.",
     input_schema: {

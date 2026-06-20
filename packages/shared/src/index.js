@@ -20,5 +20,7 @@ export * from "./ai/promptBudget.js";
 export * from "./ai/innerState.js";
 export * from "./ai/gifCadence.js";
 export * from "./ai/tiktokLinkFixer.js";
+export * from "./ai/elevenLabs.js";
+export * from "./ai/higgsfieldBridge.js";
 export * from "./ai/localVision.js";
 export { createFirewall, spotlight, normalizeText, InMemoryWindowStore, RedisWindowStore } from "./ai/firewall.js";

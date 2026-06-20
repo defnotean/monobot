@@ -36,9 +36,9 @@ Irene is the "good twin": a moderation and community-management bot that feels l
 
 - **Moderation:** warns, mutes, kicks, bans, purge tools, role checks, escalation policies, audit trails, one-click undo flows, anti-raid, anti-nuke, ghost-ping and edit/delete logging.
 - **Server setup:** tickets, welcome cards, logging, autoroles, reaction roles, role pickers, starboard, suggestions, custom embeds, custom commands, scheduled messages, reminders, birthdays, AFK, tags, highlights, stats channels, and setup wizards.
-- **Music and voice:** Lavalink playback, queue controls, DJ controls, filters, lyrics mode, TTS, soundboard, and wake-word listening.
+- **Music and voice:** Lavalink playback, queue controls, DJ controls, filters, lyrics mode, ElevenLabs/Gemini/local TTS, soundboard, and wake-word listening.
 - **Community systems:** leveling, XP rewards, giveaways, polls, trivia, scrims, weekly digests, smart temporary voice channels, feeds for YouTube/GitHub/Twitch/patch notes.
-- **AI workflows:** channel summaries, memory, local multi-image vision evidence through Ollama, TikTok embed fixing, web search, web reads, DM-based server management, and contextual tool use with Discord permission gates.
+- **AI workflows:** channel summaries, memory, local multi-image vision evidence through Ollama, TikTok embed fixing, ElevenLabs audio tools, owner-only Higgsfield media jobs, web search, web reads, DM-based server management, and contextual tool use with Discord permission gates.
 
 ### Eris: The Social Economy Twin
 

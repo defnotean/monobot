@@ -93,6 +93,20 @@ at the repo root.
 | `LOCAL_TTS_TIMEOUT_MS` | Irene | No | `120000` | Kill timeout for the external local TTS command. | n/a |
 | `PIPER_BIN` | Irene | No | `$HOME/.local/piper/piper/piper` | Piper executable path used by `LOCAL_TTS_BACKEND=piper`. | Local Piper install |
 | `PIPER_VOICE` | Irene | No | `$HOME/.local/piper/voice.onnx` | Piper voice model path. | Local Piper voice |
+| `ELEVENLABS_API_KEY` | Irene | No | — | Enables ElevenLabs provider calls when the related switches below are on. Never commit this value. | ElevenLabs dashboard |
+| `ELEVENLABS_TTS` | Irene | No | `false` | Use ElevenLabs first for `/say_tts`, auto-TTS, and voice-listener replies. Gemini/Piper remain fallback paths. | `1` |
+| `ELEVENLABS_STT` | Irene | No | `false` | Use ElevenLabs Scribe for `/listen` voice transcription instead of Gemini STT/local Whisper. | `1` |
+| `ELEVENLABS_AUDIO_ISOLATION` | Irene | No | `false` | Run ElevenLabs Audio Isolation before Scribe in the voice listener. Adds latency/cost, improves noisy mics. | `1` |
+| `ELEVENLABS_VOICE_ID` | Irene | No | `JBFqnCBsd6RMkjVDRZzb` | Default ElevenLabs voice ID for TTS when no voice map entry matches Irene's configured voice name. | ElevenLabs voice ID |
+| `ELEVENLABS_VOICE_MAP` | Irene | No | `{}` | JSON map from friendly names to ElevenLabs voice IDs, e.g. `{"Irene":"...","Eris":"..."}`. Used by TTS/dialogue tools. | JSON object |
+| `ELEVENLABS_TTS_MODEL` | Irene | No | `eleven_multilingual_v2` | Model for single-speaker TTS. | ElevenLabs TTS model |
+| `ELEVENLABS_DIALOGUE_MODEL` | Irene | No | `eleven_v3` | Model for multi-speaker dialogue audio generation. | ElevenLabs dialogue-capable model |
+| `ELEVENLABS_STT_MODEL` | Irene | No | `scribe_v2` | Model for ElevenLabs speech-to-text. | `scribe_v2` |
+| `ELEVENLABS_OUTPUT_FORMAT` | Irene | No | `mp3_44100_128` | Audio format for TTS, dialogue, and sound effects. | ElevenLabs output format |
+| `ELEVENLABS_TIMEOUT_MS` | Irene | No | `60000` | Per-call timeout for ElevenLabs audio requests. | n/a |
+| `HIGGSFIELD_COMMAND` | Irene | No | — | Local authenticated wrapper for Higgsfield MCP/CLI jobs. The wrapper receives JSON on stdin and should return JSON with `url`, `urls`, `file`, `files`, or `message`. | Executable script path |
+| `HIGGSFIELD_OUTPUT_DIR` | Irene | No | `/tmp/monobot-higgsfield` | Directory from which Irene is allowed to attach Higgsfield wrapper output files. Prevents arbitrary file upload. | Local output dir |
+| `HIGGSFIELD_TIMEOUT_MS` | Irene | No | `600000` | Timeout for async Higgsfield wrapper jobs. | n/a |
 | `SELF_REPAIR_ENABLED` | Irene | No | `0` | Enables Irene's owner-only guarded self-repair apply mode. The tool still rejects secret/env paths, arbitrary shell commands, and patches that do not pass `git apply --check` plus allowlisted tests. | `1` only on a trusted local host |
 | `SELF_REPAIR_ALLOW_RESTART` | Irene | No | `0` | Allows `self_repair` to schedule a systemd restart after a patch and test plan pass. Ignored unless `SELF_REPAIR_ENABLED=1`. | `1` only if user services are configured |
 | `SUPABASE_URL` | Both | No (strongly recommended) | — | Supabase project URL. Without it, the bot boots with a `[WARN]` and runs fully ephemeral. `packages/eris/config.js:282`, `packages/irene/config.js:266`; warning at `packages/eris/config.js:404-406`, `packages/irene/config.js:394-397`. | supabase.com -> Project Settings -> API -> Project URL |

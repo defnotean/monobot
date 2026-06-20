@@ -313,6 +313,18 @@ export function registerPresenceBotTools(ADMIN_TOOLS, EVERYONE_TOOLS) {
 
   registry.registerTools(
     ADMIN_TOOLS.filter(t => [
+      "generate_sound_effect", "generate_dialogue_audio",
+      "clean_audio_attachment", "transcribe_audio_attachment",
+      "higgsfield_generate_video", "higgsfield_animate_image",
+      "higgsfield_make_shorts", "higgsfield_train_character",
+      "higgsfield_score_video",
+    ].includes(t.name)),
+    "creative_media",
+    /\b(elevenlabs|higgsfield|sound effect|sfx|dialogue audio|clean audio|noise|transcribe|video|animate|shorts|reels|tiktok clip|character|viral|virality)\b/i
+  );
+
+  registry.registerTools(
+    ADMIN_TOOLS.filter(t => [
       "self_repair",
     ].includes(t.name)),
     "self_repair",
