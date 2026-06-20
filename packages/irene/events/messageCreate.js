@@ -37,7 +37,7 @@ import {
 } from "./messageCreate/aiInvoke.js";
 import {
   handleSleepWake, maybeAutoTts, runPassiveSideEffects,
-  handleTtsToggleShortcut,
+  handleTtsToggleShortcut, maybeFixTikTokLinks,
 } from "./messageCreate/passiveFeatures.js";
 import { runLockedAiTurn } from "./messageCreate/aiTurn.js";
 
@@ -133,6 +133,8 @@ export async function execute(message) {
     }
     if (isAiSilencedChannel(message.guild.id, message.channel.id)) return;
   }
+
+  if (await maybeFixTikTokLinks(message)) return;
 
   _humanityCounter++;
   if (_humanityCounter % 100 === 0) lazyHumanity().then(m => m.periodicUpdate()).catch(() => {});

@@ -24,6 +24,7 @@ describe("messageCreate orchestrator order", () => {
     expectInOrder(orchestratorSource, [
       "if (await handleSleepWake(message)) return;",
       "await maybeAutoTts(message);",
+      "if (await maybeFixTikTokLinks(message)) return;",
       "await runPassiveSideEffects({ message, isDM });",
       "const ctx = await resolveDMContext(message);",
       "if (await handleTtsToggleShortcut({ message, content, isDM, isAdmin })) return;",

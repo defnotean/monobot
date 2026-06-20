@@ -5,6 +5,8 @@ import config from "../../config.js";
 import { log } from "../../utils/logger.js";
 import { getTtsChannels } from "../../database.js";
 import { validateAssignableRole } from "../../ai/executors/customCommandExecutor.js";
+import { safeFetch } from "@defnotean/shared/safeFetch";
+import { buildTikTokFixReply } from "@defnotean/shared/tiktokLinkFixer";
 import { isSleeping, wakeSleep } from "./gates.js";
 import { processStickyMessage, processAutoResponders } from "./commandPrefix.js";
 
@@ -80,6 +82,19 @@ export async function handleTtsToggleShortcut({ message, content, isDM, isAdmin 
   const result = await executeAudioTool("toggle_tts", { enabled: ttsShortcut }, message, { guild: message.guild });
   await message.reply(String(result)).catch((e) => log(`[Error] ${e.message}`));
   return true;
+}
+
+export async function maybeFixTikTokLinks(message) {
+  if (message.author?.bot || !message.content) return false;
+  try {
+    const reply = await buildTikTokFixReply(message.content, { safeFetch });
+    if (!reply) return false;
+    await message.reply(reply);
+    return true;
+  } catch (err) {
+    log(`[TikTok] link fix failed: ${err?.message || err}`);
+    return false;
+  }
 }
 
 export async function runPassiveSideEffects({ message, isDM }) {

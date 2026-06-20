@@ -28,6 +28,8 @@
     "./memoryQuirks": "./src/ai/memoryQuirks.js",
     "./innerState": "./src/ai/innerState.js",
     "./gifCadence": "./src/ai/gifCadence.js",
+    "./tiktokLinkFixer": "./src/ai/tiktokLinkFixer.js",
+    "./tiktokLinkFixer.js": "./src/ai/tiktokLinkFixer.js",
     "./temporal": "./src/ai/temporal.js",
     "./responsestyle": "./src/ai/responsestyle.js",
     "./promptBudget": "./src/ai/promptBudget.js",

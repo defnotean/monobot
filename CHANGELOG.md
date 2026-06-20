@@ -33,6 +33,8 @@ P0 + P1 hardening pass across the monorepo. High-level summary:
 - Irene gateway watchdog and login retry helpers to recover from repeated
   Discord gateway opening-handshake timeouts without losing the HTTP liveness
   server.
+- Irene TikTok embed fixer for public TikTok links, including short
+  `vm.tiktok.com` and `vt.tiktok.com` URLs.
 
 ### Changed
 - Dev loop now uses `node --watch index.js` (Node 22.12.0+ in this repo) for both
