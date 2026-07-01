@@ -69,7 +69,7 @@
   "dependencies": {
     "canvas": "^3.2.3",
     "discord.js": "14.26.4",
-    "undici": "6.24.1"
+    "undici": "8.5.0"
   },
   "devDependencies": {
     "vitest": "^4.1.8"
