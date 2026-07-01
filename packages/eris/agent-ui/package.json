@@ -9,6 +9,7 @@
   "dependencies": {
     "@google/genai": "2.7.0",
     "@supabase/supabase-js": "2.106.2",
+    "@types/node": "^26.0.1",
     "dotenv": "^17.4.0"
   },
   "devDependencies": {
