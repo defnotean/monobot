@@ -138,6 +138,8 @@ function seedExchanges(count: number, opts: { botId?: string; userId?: string; t
       id: `${type}-${userId}-${i}`,
       bot_id: botId,
       user_id: userId,
+      channel_id: "c1",
+      guild_id: "g1",
       type,
       content: `fragment ${i}: something happened`,
       // Older rows first so the "ascending order" select returns them as the

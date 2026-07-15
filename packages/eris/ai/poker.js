@@ -14,6 +14,8 @@
 
 import { log } from "../utils/logger.js";
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { randomUUID } from "node:crypto";
+import { checkedSupabase } from "../database/supabaseResult.js";
 
 const LOBBY_DURATION_MS = 60_000;
 const MIN_PLAYERS = 2;
@@ -37,12 +39,15 @@ const _tables = new Map();
 // refunded (we can't recover the 60s setTimeout across restarts). Without
 // this, host antes vanish on every deploy.
 let _saveDebounce = null;
+let _persistenceChain = Promise.resolve();
 function _buildSnapshot() {
   const snapshot = [];
   for (const [chId, t] of _tables) {
     if (t.status === "resolved") continue;
     snapshot.push({
+      recoveryId: t.recoveryId,
       channelId: chId,
+      createdAt: t.createdAt,
       status: t.status,
       antes: [...t.players.values()].map((p) => ({ userId: p.userId, anted: p.anted })),
     });
@@ -51,16 +56,12 @@ function _buildSnapshot() {
 }
 function _saveActiveTables() {
   if (_saveDebounce) return;
-  _saveDebounce = setTimeout(async () => {
+  _saveDebounce = setTimeout(() => {
     _saveDebounce = null;
-    try {
-      const { getSupabase } = await import("../database.js");
-      const sb = getSupabase();
-      if (!sb) return;
-      await sb.from("bot_data").upsert({ id: "eris_poker_active", data: { tables: _buildSnapshot() } });
-    } catch (err) {
+    _flushActiveTables().catch((err) => {
       log(`[Poker] persist failed: ${err.message}`);
-    }
+      _saveActiveTables();
+    });
   }, 1500);
 }
 
@@ -71,14 +72,44 @@ function _saveActiveTables() {
  */
 async function _flushActiveTables() {
   if (_saveDebounce) { clearTimeout(_saveDebounce); _saveDebounce = null; }
-  try {
+  // Serialize writes across channels and build each snapshot only when its
+  // turn starts. Otherwise an older, slower upsert can land after a newer one
+  // and erase a table created in another channel.
+  const operation = _persistenceChain.catch(() => {}).then(async () => {
     const { getSupabase } = await import("../database.js");
     const sb = getSupabase();
-    if (!sb) return;
-    await sb.from("bot_data").upsert({ id: "eris_poker_active", data: { tables: _buildSnapshot() } });
-  } catch (err) {
-    log(`[Poker] flush failed: ${err.message}`);
+    if (!sb) throw new Error("poker persistence unavailable");
+    await checkedSupabase(
+      sb.from("bot_data").upsert({ id: "eris_poker_active", data: { tables: _buildSnapshot() } }),
+      "flush active poker tables",
+    );
+  });
+  _persistenceChain = operation;
+  return operation;
+}
+
+function _isMissingPokerRpc(error) {
+  return error?.code === "PGRST202" || /Could not find the function|does not exist|schema cache/i.test(error?.message || "");
+}
+
+async function _settleTableAtomically(table, payouts, reason) {
+  const { getSupabase } = await import("../database.js");
+  const sb = getSupabase();
+  if (!sb?.rpc) throw new Error("atomic_poker_unavailable");
+  const { data, error } = await sb.rpc("eris_settle_poker_table", {
+    p_recovery_id: table.recoveryId || table.channelId,
+    p_payouts: payouts,
+    p_expected_pot: table.pot,
+    p_reason: reason,
+  });
+  if (error) {
+    if (_isMissingPokerRpc(error)) {
+      throw new Error("atomic_poker_unavailable: apply migrations/015_atomic_poker_settlement_rpc.sql");
+    }
+    throw new Error(error.message || "poker settlement failed");
   }
+  if (!data?.ok) throw new Error(data?.reason || "poker settlement refused");
+  return data;
 }
 
 /**
@@ -87,35 +118,39 @@ async function _flushActiveTables() {
  */
 export async function refundStaleTablesOnStartup() {
   try {
-    const { getSupabase, updateBalance, withUserLock } = await import("../database.js");
+    const { getSupabase } = await import("../database.js");
     const sb = getSupabase();
     if (!sb) return { refunded: 0 };
-    const { data } = await sb.from("bot_data").select("data").eq("id", "eris_poker_active").single();
+    const { data } = await checkedSupabase(
+      sb.from("bot_data").select("data").eq("id", "eris_poker_active").single(),
+      "load stale poker tables",
+      { allowCodes: ["PGRST116"] },
+    );
     const tables = Array.isArray(data?.data?.tables) ? data.data.tables : [];
     if (!tables.length) return { refunded: 0 };
 
-    // Skip tables that were mid-resolution (status=playing) — those may have
-    // paid some winners before the crash; refunding would double-credit.
-    const refundable = tables.filter(t => t.status !== "playing" && t.status !== "resolved");
-    // Clear FIRST so a crash during refund doesn't cause re-refund on next restart.
-    await sb.from("bot_data").upsert({ id: "eris_poker_active", data: { tables: [] } });
-
     let refunded = 0;
-    for (const t of refundable) {
-      for (const ante of t.antes || []) {
-        const userId = ante?.userId;
-        const amt = Number(ante?.anted);
-        if (!userId || !Number.isFinite(amt) || amt <= 0) continue;
-        try {
-          // Each ante is an independent user — use the standard (locked)
-          // updateBalance so contention with other concurrent user ops is
-          // serialized correctly. (We're not inside any outer user lock.)
-          await updateBalance(userId, Math.floor(amt), "poker_refund", "bot restart — stale lobby");
-          refunded++;
-        } catch (err) {
-          log(`[Poker] startup refund failed for ${userId}: ${err.message}`);
-        }
+    for (const t of tables) {
+      if (t.status === "resolved") continue;
+      // Old releases could crash after a partial per-user payout while the
+      // persisted status was `playing`. Without a recovery id there is no safe
+      // way to distinguish that state; leave it for manual reconciliation.
+      if (t.status === "playing" && !t.recoveryId) {
+        log(`[Poker] legacy playing table ${t.channelId} requires manual reconciliation; refusing an unsafe automatic refund`);
+        continue;
       }
+
+      const payouts = (t.antes || [])
+        .map((ante) => ({ userId: String(ante?.userId || ""), amount: Math.floor(Number(ante?.anted)) }))
+        .filter((p) => /^\d{5,20}$/.test(p.userId) && Number.isFinite(p.amount) && p.amount > 0);
+      const pot = payouts.reduce((sum, p) => sum + p.amount, 0);
+      if (!payouts.length || pot <= 0) {
+        log(`[Poker] stale table ${t.channelId} has invalid persisted antes; leaving it untouched for reconciliation`);
+        continue;
+      }
+
+      await _settleTableAtomically({ ...t, pot }, payouts, "poker_refund");
+      refunded += payouts.length;
     }
     if (refunded > 0) log(`[Poker] startup sweep — refunded ${refunded} stale antes`);
     return { refunded };
@@ -292,6 +327,7 @@ export async function createTable({ channelId, guildId, hostId, ante }) {
     // From here on, the host has been debited. Any throw MUST refund.
     try {
       const table = {
+        recoveryId: randomUUID(),
         channelId,
         guildId,
         hostId,
@@ -304,16 +340,19 @@ export async function createTable({ channelId, guildId, hostId, ante }) {
         messageId: null,
       };
       _tables.set(channelId, table);
-      _saveActiveTables();
+      // The ante is already debited, so do not acknowledge the table until
+      // its recovery record is durable.
+      await _flushActiveTables();
       return { ok: true, table };
     } catch (err) {
-      // Refund on setup failure — standard locking path (no user lock held).
-      // Log if the refund itself fails so we have an audit trail for the
-      // orphaned ante. Previously this used .catch(() => {}) which silently
-      // swallowed refund errors — making it impossible to reconcile.
-      db.updateBalance(hostId, parsedAnte, "poker_refund", "create failed")
-        .catch((refundErr) => log(`[Poker] REFUND FAIL host=${hostId} ante=${parsedAnte} err=${refundErr?.message || refundErr}`));
-      throw err;
+      _tables.delete(channelId);
+      try {
+        await db.updateBalance(hostId, parsedAnte, "poker_refund", "create persistence failed");
+      } catch (refundErr) {
+        log(`[Poker] REFUND FAIL host=${hostId} ante=${parsedAnte} err=${refundErr?.message || refundErr}`);
+        throw new Error(`poker table persistence failed and refund requires reconciliation: ${err.message}`);
+      }
+      return { ok: false, error: "could not persist the poker table; your ante was refunded" };
     }
   });
 }
@@ -339,14 +378,53 @@ export async function joinTable({ channelId, userId }) {
     try {
       table.players.set(userId, { userId, anted: table.ante });
       table.pot += table.ante;
-      _saveActiveTables();
+      await _flushActiveTables();
       return { ok: true, table };
     } catch (err) {
-      db.updateBalance(userId, table.ante, "poker_refund", "join failed")
-        .catch((refundErr) => log(`[Poker] REFUND FAIL user=${userId} ante=${table.ante} err=${refundErr?.message || refundErr}`));
-      throw err;
+      table.players.delete(userId);
+      table.pot = Math.max(0, table.pot - table.ante);
+      try {
+        await db.updateBalance(userId, table.ante, "poker_refund", "join persistence failed");
+      } catch (refundErr) {
+        log(`[Poker] REFUND FAIL user=${userId} ante=${table.ante} err=${refundErr?.message || refundErr}`);
+        throw new Error(`poker join persistence failed and refund requires reconciliation: ${err.message}`);
+      }
+      return { ok: false, error: "could not persist your seat; your ante was refunded" };
     }
   });
+}
+
+async function _completePendingSettlement(channelId, table) {
+  const pending = table.pendingSettlement;
+  if (!pending) return { ok: false, reason: "settlement_state_missing" };
+  try {
+    await _settleTableAtomically(table, pending.payouts, pending.reason);
+  } catch (err) {
+    log(`[Poker] atomic settlement pending for ${channelId}: ${err.message}`);
+    setTimeout(() => resolveTable(channelId).catch((retryErr) => {
+      log(`[Poker] settlement retry failed for ${channelId}: ${retryErr.message}`);
+    }), 30_000);
+    return { ok: false, reason: "settlement_pending", error: err.message };
+  }
+
+  delete table.pendingSettlement;
+  table.status = "resolved";
+  if (pending.reason === "poker_refund") {
+    _tables.delete(channelId);
+    _saveActiveTables();
+    return { ok: false, reason: "not_enough_players", refunded: true };
+  }
+
+  table.result = pending.result;
+  _saveActiveTables();
+  const resolvedRef = table;
+  setTimeout(() => {
+    if (_tables.get(channelId) === resolvedRef) {
+      _tables.delete(channelId);
+      _saveActiveTables();
+    }
+  }, 60_000);
+  return { ok: true, result: table.result };
 }
 
 /**
@@ -360,34 +438,30 @@ export async function resolveTable(channelId) {
     const table = _tables.get(channelId);
     if (!table) return { ok: false, reason: "no_table" };
     if (table.status === "resolved") return { ok: true, alreadyResolved: true, result: table.result };
-    if (table.status === "playing")  return { ok: true, alreadyResolved: true, result: table.result };
+    if (table.status === "settling") return _completePendingSettlement(channelId, table);
+    if (table.status === "playing") return { ok: false, reason: "resolution_in_progress" };
 
     // Claim the status transition synchronously BEFORE any await — two
     // concurrent callers now see different statuses and only one proceeds.
     table.status = "playing";
     // Flush the "playing" state immediately so a mid-payout crash won't
     // cause the startup sweep to refund antes we've already started paying.
-    try { await _flushActiveTables(); } catch {}
-
-    const db = await import("../database.js");
+    try {
+      await _flushActiveTables();
+    } catch (err) {
+      table.status = "lobby";
+      log(`[Poker] refusing to resolve ${channelId} without a durable recovery record: ${err.message}`);
+      return { ok: false, reason: "persistence_unavailable" };
+    }
 
     if (table.players.size < MIN_PLAYERS || table.players.size > MAX_PLAYERS) {
-      // Refund everyone — per-user lock so concurrent balance ops don't race
-      for (const p of table.players.values()) {
-        const amt = Number(p?.anted);
-        if (!Number.isFinite(amt) || amt <= 0) continue;
-        try {
-          // Standard lock-taking updateBalance — _withTableLock is per-channel,
-          // NOT per-user, so this is not nested.
-          await db.updateBalance(p.userId, Math.floor(amt), "poker_refund", "not enough players");
-        } catch (err) {
-          log(`[Poker] refund to ${p.userId} failed: ${err.message}`);
-        }
-      }
-      table.status = "resolved";
-      _tables.delete(channelId);
-      _saveActiveTables();
-      return { ok: false, reason: "not_enough_players", refunded: true };
+      const payouts = [...table.players.values()].map((p) => ({
+        userId: p.userId,
+        amount: Math.floor(Number(p.anted)),
+      }));
+      table.status = "settling";
+      table.pendingSettlement = { reason: "poker_refund", payouts };
+      return _completePendingSettlement(channelId, table);
     }
 
     const deck = newDeck();
@@ -413,20 +487,7 @@ export async function resolveTable(channelId) {
     const { rake, payouts } = splitPot(table.pot, RAKE_PCT, winners.length);
     const perWinner = payouts[0] ?? 0; // just for the result embed's display
 
-    for (let i = 0; i < winners.length; i++) {
-      const w = winners[i];
-      const amount = payouts[i];
-      if (amount <= 0) continue;
-      try {
-        // _withTableLock is per-channel, not per-user, so the standard lock-
-        // acquiring updateBalance path is safe here.
-        await db.updateBalance(w.userId, amount, "poker_win", winners.length > 1 ? "tie" : "solo win");
-      } catch (err) {
-        log(`[Poker] payout to ${w.userId} failed: ${err.message}`);
-      }
-    }
-
-    table.result = {
+    const result = {
       community,
       players: [...playerHands.values()].map((p) => ({
         userId: p.userId,
@@ -440,21 +501,13 @@ export async function resolveTable(channelId) {
       rake,
       totalPot: table.pot,
     };
-    table.status = "resolved";
-    _saveActiveTables();
-
-    // Schedule cleanup so the channel can host a new table. Capture the
-    // resolved table reference — if a fresh lobby replaces it in the
-    // meantime, do NOT delete the new one.
-    const resolvedRef = table;
-    setTimeout(() => {
-      if (_tables.get(channelId) === resolvedRef) {
-        _tables.delete(channelId);
-        _saveActiveTables();
-      }
-    }, 60_000);
-
-    return { ok: true, result: table.result };
+    table.status = "settling";
+    table.pendingSettlement = {
+      reason: "poker_win",
+      payouts: winners.map((winner, index) => ({ userId: winner.userId, amount: payouts[index] })),
+      result,
+    };
+    return _completePendingSettlement(channelId, table);
   });
 }
 

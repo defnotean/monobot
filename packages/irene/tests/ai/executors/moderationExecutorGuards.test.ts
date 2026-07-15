@@ -154,6 +154,7 @@ describe("destructive-call guards (resilience task 2)", () => {
         action: "kick_user",
         input: { username: "victim", reason: "spam" },
         requiredPerm: PermissionFlagsBits.KickMembers,
+        targetId: target.id,
       }),
     );
 

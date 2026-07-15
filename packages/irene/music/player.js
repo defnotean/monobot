@@ -11,7 +11,7 @@
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from "discord.js";
 import { onTrackStart, onTrackEnd, hasSession, extractSongInfo, stopKaraoke } from "../ai/karaoke.js";
 import { log } from "../utils/logger.js";
-import { saveQueue as dbSaveQueue, getSavedQueues, clearSavedQueue, clearAllSavedQueues } from "../database.js";
+import { saveQueue as dbSaveQueue, getSavedQueues, clearSavedQueue } from "../database.js";
 import * as settingsStore from "./settingsStore.js";
 import { safeDiscordAction, safeDiscordSync } from "../utils/safeDiscord.js";
 
@@ -872,25 +872,29 @@ export async function restoreQueues(client) {
   if (!entries.length) return;
 
   log(`[Music] Restoring ${entries.length} saved queue(s)...`);
-  clearAllSavedQueues(); // Clear immediately so we don't restore twice
 
   for (const [guildId, queueData] of entries) {
     // Skip if saved more than 10 minutes ago (stale — deploy should take <5min)
     const ageMin = Math.round((Date.now() - (queueData.savedAt ?? 0)) / 60_000);
     if (ageMin > 10) {
       log(`[Music] Skipping stale queue for ${guildId} (saved ${ageMin}min ago)`);
+      clearSavedQueue(guildId);
       continue;
     }
 
     try {
       const guild = client.guilds.cache.get(guildId);
-      if (!guild) continue;
+      if (!guild) {
+        clearSavedQueue(guildId);
+        continue;
+      }
 
       const vc = guild.channels.cache.get(queueData.voiceChannelId);
       const tc = /** @type {import("discord.js").TextChannel | undefined} */ (guild.channels.cache.get(queueData.textChannelId));
       if (!vc) {
         log(`[Music] Cannot restore queue for ${guildId} — voice channel no longer exists`);
         if (tc) tc.send("⚠️ Your music queue couldn't be restored — the voice channel was deleted while I was restarting.").catch(() => {});
+        clearSavedQueue(guildId);
         continue;
       }
 
@@ -902,10 +906,18 @@ export async function restoreQueues(client) {
       queue.shuffle = queueData.shuffle ?? false;
       queue.songs = queueData.songs ?? [];
 
-      if (!queue.songs.length) { queues.delete(guildId); continue; }
+      if (!queue.songs.length) {
+        queues.delete(guildId);
+        clearSavedQueue(guildId);
+        continue;
+      }
 
       await connectToChannel(queue);
       await playSong(queue);
+      // Delete only after a successful reconnect + playback start. A transient
+      // Lavalink or Discord failure leaves the recovery record for the next
+      // restart instead of discarding the user's queue up front.
+      clearSavedQueue(guildId);
 
       log(`[Music] ✓ Restored queue for "${guild.name}" — ${queue.songs.length} songs, starting with "${queue.songs[0]?.title}"`);
 

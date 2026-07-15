@@ -128,8 +128,12 @@ const _OK_RE    = /\b(online|ready|success(?:fully)?|connected|started|loaded|ca
  * @param {Record<string,string>} [opts.extraCategoryColors] - per-bot
  *   overrides / additions to the default category color map.
  *
- * @returns {{ log: (m: any) => void, warn: (m: any) => void,
- *             error: (m: any) => void, info: (m: any) => void,
+ * @param {"pretty"|"json"} [opts.format] - console/file format. Defaults to
+ *   `LOG_FORMAT=json` when configured, otherwise the existing pretty format.
+ * @returns {{ log: (m: any, context?: Record<string, any>) => void,
+ *             warn: (m: any, context?: Record<string, any>) => void,
+ *             error: (m: any, context?: Record<string, any>) => void,
+ *             info: (m: any, context?: Record<string, any>) => void,
  *             redact: typeof redactValue }}
  */
 export function createLogger({
@@ -138,9 +142,8 @@ export function createLogger({
   redact = true,
   maxBytes = DEFAULT_MAX_BYTES,
   extraCategoryColors = {},
+  format = process.env.LOG_FORMAT === "json" ? "json" : "pretty",
 } = {}) {
-  void botPrefix; // reserved for future structured-log shippers
-
   const categoryColors = { ...DEFAULT_CATEGORY_COLORS, ...extraCategoryColors };
 
   /** @param {string} cat */
@@ -208,8 +211,8 @@ export function createLogger({
     }, FLUSH_INTERVAL_MS);
   }
 
-  /** @param {any} message */
-  function log(message) {
+  /** @param {any} message @param {Record<string, any>} [context] */
+  function log(message, context) {
     // Last-mile redaction. If a caller passed a non-string (e.g. a raw Error),
     // stringify first; otherwise scan-and-replace for env-var values + token-
     // shaped substrings, then truncate to MAX_LOG_LINE_BYTES. Cheap insurance
@@ -223,13 +226,32 @@ export function createLogger({
       safeMessage = typeof message === "string" ? message : String(message);
     }
 
-    const fullTs = new Date().toISOString().slice(0, 19).replace("T", " ");
-    // File line: plain text so grep/tail stay readable and ANSI never leaks
-    _buffer.push(`[${fullTs}] ${safeMessage}\n`);
+    const now = new Date();
+    let fileLine;
+    let consoleLine;
+    if (format === "json") {
+      const match = safeMessage.match(/^\[([^\]]+)\]\s*([\s\S]*)$/);
+      const body = match ? match[2] : safeMessage;
+      const structured = {
+        timestamp: now.toISOString(),
+        level: _ERROR_RE.test(body) ? "error" : _WARN_RE.test(body) ? "warn" : "info",
+        bot: botPrefix || undefined,
+        category: match?.[1] || "app",
+        message: body,
+        ...(context && typeof context === "object" ? { context: redactValue(context) } : {}),
+      };
+      consoleLine = redact ? redactLogLine(JSON.stringify(structured)) : JSON.stringify(structured);
+      fileLine = `${consoleLine}\n`;
+    } else {
+      const fullTs = now.toISOString().slice(0, 19).replace("T", " ");
+      fileLine = `[${fullTs}] ${safeMessage}\n`;
+      consoleLine = _formatForConsole(safeMessage);
+    }
+
+    _buffer.push(fileLine);
     _scheduleFlush();
-    // Console line: pretty
     // eslint-disable-next-line no-console
-    console.log(_formatForConsole(safeMessage));
+    console.log(consoleLine);
   }
 
   // Aliases — existing callers always use `log` with a `[CATEGORY]` tag, so

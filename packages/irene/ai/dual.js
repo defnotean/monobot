@@ -99,8 +99,9 @@ let _onSuccess = null;
 export function setRateLimitCallbacks(onRateLimit, onSuccess) { _onRateLimit = onRateLimit; _onSuccess = onSuccess; }
 
 // ─── Fast Conversation AI — instant acknowledgment, no tools ─────────────────
-// Returns a quick natural response. Used to acknowledge task requests immediately
-// while the worker AI handles the actual tool execution in the background.
+// Returns a quick model response. Conversational callers pass a context object
+// and receive acknowledgment coaching; null-context callers (classification,
+// translation, extraction) retain their supplied system instruction verbatim.
 
 export async function quickReply(geminiClient, systemInstruction, userText, context) {
   // Gemini quick reply
@@ -110,14 +111,14 @@ export async function quickReply(geminiClient, systemInstruction, userText, cont
       model: GEMINI_FAST_MODEL,
       contents: [{ parts: [{ text: userText }] }],
       config: {
-        systemInstruction: systemInstruction + `\n\nIMPORTANT: You are the CONVERSATION side of a dual-AI system. A separate worker AI is handling the actual task (tool calls, server actions, etc) in the background. Your ONLY job right now is to give a SHORT, natural acknowledgment that you're working on it. Keep it under 30 words. Be casual and specific to what they asked — not generic. Examples:
+        systemInstruction: context ? systemInstruction + `\n\nIMPORTANT: You are the CONVERSATION side of a dual-AI system. A separate worker AI is handling the actual task (tool calls, server actions, etc) in the background. Your ONLY job right now is to give a SHORT, natural acknowledgment that you're working on it. Keep it under 30 words. Be casual and specific to what they asked — not generic. Examples:
 - "setting up those color roles now"
 - "pulling up the latest valorant patch"
 - "lemme find that for you"
 - "on it, creating that channel"
 Do NOT say "I'll use X tool" or describe your process. Just acknowledge naturally like a person would.
 CRITICAL: Check the PERMISSION level in the system prompt above. If this user is a MEMBER asking for admin/mod actions (ban, kick, create channel, manage roles, purge, lock, etc), do NOT acknowledge — instead mock them for not having perms ("lol you wish" or "cute that you think you can do that"). Only say "on it" if they actually have the perms for what they asked.
-If this is just a casual conversation (greeting, question, chitchat) and NOT a task/command, respond normally as a full conversational reply instead.`,
+If this is just a casual conversation (greeting, question, chitchat) and NOT a task/command, respond normally as a full conversational reply instead.` : systemInstruction,
         // 512 tokens visible budget — quickReply produces a short ack but
         // the previous 150 cap collided with the 128-token thinking budget
         // and frequently truncated mid-word. Disable thinking entirely

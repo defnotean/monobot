@@ -6,6 +6,7 @@
 // seed so the next day's pot starts above zero.
 
 import { log } from "../utils/logger.js";
+import { checkedSupabase } from "../database/supabaseResult.js";
 
 const TICKET_PRICE = 100;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -52,7 +53,11 @@ async function _load() {
       const { getSupabase } = await import("../database.js");
       const sb = getSupabase();
       if (!sb) { _state = _freshState(); return _state; }
-      const { data } = await sb.from("bot_data").select("data").eq("id", "eris_lottery").single();
+      const { data } = await checkedSupabase(
+        sb.from("bot_data").select("data").eq("id", "eris_lottery").single(),
+        "load lottery state",
+        { allowCodes: ["PGRST116"] },
+      );
       const stored = data?.data;
       if (stored && typeof stored === "object" && typeof stored.drawAt === "number") {
         const tickets = {};
@@ -76,7 +81,7 @@ async function _load() {
       }
     } catch (err) {
       log(`[Lottery] Load failed: ${err.message}`);
-      _state = _freshState();
+      throw err;
     }
     return _state;
   })();
@@ -101,7 +106,7 @@ function _scheduleSave() {
       const { getSupabase } = await import("../database.js");
       const sb = getSupabase();
       if (!sb || !_state) return;
-      await sb.from("bot_data").upsert({ id: "eris_lottery", data: _state });
+      await checkedSupabase(sb.from("bot_data").upsert({ id: "eris_lottery", data: _state }), "save lottery state");
     } catch (err) {
       log(`[Lottery] Save failed: ${err.message}`);
     }
@@ -132,16 +137,19 @@ function _normalizeState(raw) {
 }
 
 async function _tryLotteryRpc(name, params) {
-  if (!_lotteryRpcAvailable) return null;
+  const unavailable = () => name === "eris_claim_lottery_draw"
+    ? { drawFired: false, payoutFailed: true, reason: "atomic_lottery_unavailable" }
+    : { ok: false, reason: "atomic_lottery_unavailable" };
+  if (!_lotteryRpcAvailable) return unavailable();
   const { getSupabase } = await import("../database.js");
   const sb = getSupabase();
-  if (!sb?.rpc) return null;
+  if (!sb?.rpc) return unavailable();
   const { data, error } = await sb.rpc(name, params);
   if (error) {
     if (_isMissingRpc(error)) {
       _lotteryRpcAvailable = false;
-      log("[Lottery] Atomic lottery RPCs not deployed — using legacy in-process path. Apply migrations/013_atomic_lottery_rpc.sql for cross-process lottery safety.");
-      return null;
+      log("[Lottery] Atomic lottery RPCs not deployed — refusing money-changing lottery operations. Apply migrations/013_atomic_lottery_rpc.sql.");
+      return unavailable();
     }
     return { ok: false, reason: error.message || "lottery_rpc_failed" };
   }

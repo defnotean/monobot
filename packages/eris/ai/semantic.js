@@ -32,6 +32,22 @@ const _SEARCH_CACHE_MAX = 500;
 const _SEARCH_CACHE_TTL = 60000;
 function canCallVoyage(type = "store") { const tracker = type === "search" ? _voyageSearch : _voyageStore; const n = Date.now(); if (n - tracker.ts < _VOYAGE_MIN_GAP) return false; tracker.ts = n; return true; }
 
+function normalizeAudience(channelId, guildId = null) {
+  const channel = String(channelId || "").trim();
+  if (!channel) return null;
+  return { channelId: channel, guildId: guildId == null ? null : String(guildId) };
+}
+
+function memoryMatchesAudience(row, audience) {
+  if (!audience || !row) return false;
+  if (String(row.channel_id || "") !== audience.channelId) return false;
+  // Channel IDs are globally unique, but preserve/verify guild provenance when
+  // the search result exposes it. DM rows must never be accepted by a guild
+  // audience (or vice versa).
+  const rowGuild = row.guild_id == null ? null : String(row.guild_id);
+  return rowGuild === audience.guildId;
+}
+
 // Local-Ollama embedding fallback. Activated by config.local.ollamaEmbedUrl
 // (env OLLAMA_EMBED_URL). When set, Voyage is bypassed entirely.
 async function _ollamaEmbed(text, maxLen) {
@@ -169,13 +185,16 @@ function cosineSimilarity(a, b) {
  * { row, similarity } when one beats the dedupe threshold, else null.
  * Falls back to exact content-match when embeddings aren't available.
  */
-export async function findDuplicateMemory(supabase, botId, userId, content, embedding) {
+/** @param {{ channelId: string, guildId?: string | null } | null} audience */
+export async function findDuplicateMemory(supabase, botId, userId, content, embedding, audience = null) {
+  if (!audience?.channelId) return null;
   try {
     const query = supabase
       .from("eris_episodic_memories")
-      .select("id, content, embedding, created_at")
+      .select("id, content, embedding, created_at, channel_id, guild_id")
       .eq("bot_id", botId)
       .eq("user_id", userId)
+      .eq("channel_id", audience.channelId)
       .order("created_at", { ascending: false })
       .limit(DEDUPE_SCAN_LIMIT);
     const { data } = await query;
@@ -246,6 +265,8 @@ export async function storeEpisode(botId, userId, channelId, guildId, type, cont
   if (opts && opts.sensitivity === "secret") {
     return { skipped: true, reason: "secret-tier-not-embedded" };
   }
+  const audience = normalizeAudience(channelId, guildId);
+  if (!audience) return { skipped: true, reason: "missing-audience" };
   try {
     const { getSupabase } = await import("../database.js");
     const supabase = getSupabase();
@@ -257,7 +278,7 @@ export async function storeEpisode(botId, userId, channelId, guildId, type, cont
     // Dedupe: if this is near-identical to a recent memory, bump it instead of
     // inserting. Skipped when neither embedding nor exact-match could find a
     // duplicate.
-    const dup = await findDuplicateMemory(supabase, botId, userId, content, embedding);
+    const dup = await findDuplicateMemory(supabase, botId, userId, content, embedding, audience);
     if (dup?.row?.id) {
       await bumpExistingMemory(supabase, dup.row.id);
       return { deduped: true, id: dup.row.id, similarity: dup.similarity };
@@ -273,8 +294,8 @@ export async function storeEpisode(botId, userId, channelId, guildId, type, cont
     const row = {
       bot_id: botId,
       user_id: userId,
-      channel_id: channelId,
-      guild_id: guildId,
+      channel_id: audience.channelId,
+      guild_id: audience.guildId,
       type,
       content: content.substring(0, 500),
       keywords,
@@ -318,8 +339,10 @@ function _cachePut(key, results) {
   _searchCache.set(key, { ts: Date.now(), results });
 }
 
-export async function searchRelevantMemories(botId, userId, messageText, limit = 3) {
-  const _ck = botId+":"+userId+":"+msgHash(messageText); const _cc = _searchCache.get(_ck); if (_cc && Date.now()-_cc.ts < _SEARCH_CACHE_TTL) return _cc.results;
+export async function searchRelevantMemories(botId, userId, messageText, limit = 3, scope = {}) {
+  const audience = normalizeAudience(scope.channelId, scope.guildId);
+  if (!audience) return [];
+  const _ck = `${botId}:${userId}:${audience.guildId ?? "dm"}:${audience.channelId}:${msgHash(messageText)}`; const _cc = _searchCache.get(_ck); if (_cc && Date.now()-_cc.ts < _SEARCH_CACHE_TTL) return _cc.results;
   try {
     const { getSupabase } = await import("../database.js");
     const supabase = getSupabase();
@@ -335,16 +358,18 @@ export async function searchRelevantMemories(botId, userId, messageText, limit =
             match_bot: botId,
             match_user: userId,
             match_threshold: 0.3,
-            match_count: limit,
+            match_count: Math.max(limit * 5, limit),
           });
           if (data?.length) {
-            const results = data.map(d => ({
+            const results = data.filter(d => memoryMatchesAudience(d, audience)).map(d => ({
               type: d.type,
               content: d.content,
               similarity: d.similarity,
-            }));
-            _cachePut(_ck, results);
-            return results;
+            })).slice(0, limit);
+            if (results.length) {
+              _cachePut(_ck, results);
+              return results;
+            }
           }
         } catch {
           // RPC might not exist yet — fall through to keyword search
@@ -364,14 +389,17 @@ export async function searchRelevantMemories(botId, userId, messageText, limit =
     try {
       const { data } = await supabase
         .from("eris_episodic_memories")
-        .select("type, content")
+        .select("type, content, channel_id, guild_id")
         .eq("bot_id", botId)
         .eq("user_id", userId)
+        .eq("channel_id", audience.channelId)
         .overlaps("keywords", keywords)
         .order("created_at", { ascending: false })
         .limit(limit);
 
-      const results = (data || []).map(d => ({ type: d.type, content: d.content, similarity: 0.5 }));
+      const results = (data || [])
+        .filter(d => memoryMatchesAudience(d, audience))
+        .map(d => ({ type: d.type, content: d.content, similarity: 0.5 }));
       _cachePut(_ck, results);
       return results;
     } catch {
@@ -613,6 +641,33 @@ export async function consolidateMemories(botId, userId, opts = {}) {
   }
   if (!supabase) return { consolidated: false, reason: "no-supabase" };
 
+  let audience = normalizeAudience(opts.channelId, opts.guildId);
+  if (!audience) {
+    // Backward-compatible direct calls may omit the scope. Infer it only when
+    // every eligible row belongs to one audience; mixed-scope users fail
+    // closed rather than being summarized into a broader synthetic memory.
+    try {
+      const { data, error } = await supabase
+        .from("eris_episodic_memories")
+        .select("channel_id, guild_id")
+        .eq("bot_id", botId)
+        .eq("user_id", userId)
+        .eq("type", CONSOLIDATABLE_TYPE)
+        .limit(50_000);
+      if (error) return { consolidated: false, reason: "select-error" };
+      const scopes = new Map();
+      for (const row of data || []) {
+        const candidate = normalizeAudience(row.channel_id, row.guild_id);
+        if (candidate) scopes.set(`${candidate.guildId ?? "dm"}:${candidate.channelId}`, candidate);
+      }
+      if (scopes.size !== 1) return { consolidated: false, reason: "missing-audience" };
+      audience = scopes.values().next().value;
+    } catch {
+      return { consolidated: false, reason: "select-error" };
+    }
+  }
+  if (!audience) return { consolidated: false, reason: "missing-audience" };
+
   const threshold = opts.threshold ?? envInt("MEMORY_CONSOLIDATION_THRESHOLD", 300);
   const batchSize = opts.batchSize ?? 100;
   const dryRun = !!opts.dryRun;
@@ -630,9 +685,10 @@ export async function consolidateMemories(botId, userId, opts = {}) {
   try {
     const { data, error } = await supabase
       .from("eris_episodic_memories")
-      .select("id, content, created_at")
+      .select("id, content, created_at, channel_id, guild_id")
       .eq("bot_id", botId)
       .eq("user_id", userId)
+      .eq("channel_id", audience.channelId)
       .eq("type", CONSOLIDATABLE_TYPE)
       .order("created_at", { ascending: true })
       .limit(selectLimit);
@@ -701,8 +757,8 @@ export async function consolidateMemories(botId, userId, opts = {}) {
   const consolidatedRow = {
     bot_id: botId,
     user_id: userId,
-    channel_id: null,
-    guild_id: null,
+    channel_id: audience.channelId,
+    guild_id: audience.guildId,
     type: CONSOLIDATED_TYPE,
     content: `[consolidated ${toFold.length} memories ${oldestAt || ""}→${newestAt || ""}] ${summary}`.slice(0, 500),
     keywords,
@@ -790,7 +846,7 @@ export async function consolidateAllOverThreshold(opts = {}) {
     try {
       const { data } = await supabase
         .from("eris_episodic_memories")
-        .select("user_id")
+        .select("user_id, channel_id, guild_id")
         .eq("bot_id", opts.botId)
         .eq("type", CONSOLIDATABLE_TYPE)
         .limit(50_000);
@@ -802,17 +858,25 @@ export async function consolidateAllOverThreshold(opts = {}) {
     const counts = new Map();
     for (const r of rows) {
       const u = r.user_id;
-      if (!u) continue;
-      counts.set(u, (counts.get(u) || 0) + 1);
+      const audience = normalizeAudience(r.channel_id, r.guild_id);
+      if (!u || !audience) continue;
+      const key = JSON.stringify([u, audience.channelId, audience.guildId]);
+      const existing = counts.get(key) || { userId: u, audience, count: 0 };
+      existing.count += 1;
+      counts.set(key, existing);
     }
-    const over = [...counts.entries()].filter(([, n]) => n > threshold).map(([u]) => u);
+    const over = [...counts.values()].filter(entry => entry.count > threshold);
 
-    for (const userId of over) {
+    for (const entry of over) {
       if (consolidationBudgetExhausted()) {
         result.skipped += 1;
         continue;
       }
-      const r = await consolidateMemories(opts.botId, userId, opts);
+      const r = await consolidateMemories(opts.botId, entry.userId, {
+        ...opts,
+        channelId: entry.audience.channelId,
+        guildId: entry.audience.guildId,
+      });
       result.users += 1;
       if (r?.consolidated) result.consolidated += 1;
       else if (r?.reason === "budget-exhausted") result.skipped += 1;

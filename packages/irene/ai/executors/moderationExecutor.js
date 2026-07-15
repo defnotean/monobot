@@ -262,8 +262,10 @@ export async function commitPendingAction(pending, { guild, member, clickedBy, d
   const reason = pending.input?.reason || "No reason";
 
   if (pending.action === "ban_user" || pending.action === "tempban") {
-    const target = findMember(guild, pending.input.username);
-    if (!target) return { ok: false, message: `Couldn't find user "${pending.input.username}" anymore` };
+    const target = findMember(guild, pending.targetId);
+    if (!target || String(target.id) !== String(pending.targetId)) {
+      return { ok: false, message: "Couldn't find the originally confirmed user anymore" };
+    }
     if (target.id === guild.client?.user?.id) return { ok: false, message: "I can't ban myself lol" };
     const hierErr = checkHierarchy(member, target, guild);
     if (hierErr) return { ok: false, message: hierErr };
@@ -316,8 +318,10 @@ export async function commitPendingAction(pending, { guild, member, clickedBy, d
   }
 
   if (pending.action === "kick_user") {
-    const target = findMember(guild, pending.input.username);
-    if (!target) return { ok: false, message: `Couldn't find user "${pending.input.username}" anymore` };
+    const target = findMember(guild, pending.targetId);
+    if (!target || String(target.id) !== String(pending.targetId)) {
+      return { ok: false, message: "Couldn't find the originally confirmed user anymore" };
+    }
     const hierErr = checkHierarchy(member, target, guild);
     if (hierErr) return { ok: false, message: hierErr };
     const kickResult = await _kickMember(target, _attributedReason(clickedBy, reason), "confirmed kick");

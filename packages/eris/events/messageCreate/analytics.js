@@ -83,7 +83,14 @@ export async function runAnalytics({
   // in dual.js (thinkingParts) — no fake generation needed
   try {
     // analyzeExchange now static import
-    analyzeExchange(message.author.id, message.channel.id, cleanMessage, result?.text || "", sentimentScore);
+    analyzeExchange(
+      message.author.id,
+      message.channel.id,
+      cleanMessage,
+      result?.text || "",
+      sentimentScore,
+      { guildId: message.guild?.id ?? null },
+    );
   } catch (e) { log(`[MSG] ${e.message}`); }
 
   // Per-message coin earning (passive income)

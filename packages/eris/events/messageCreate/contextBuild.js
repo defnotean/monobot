@@ -155,21 +155,22 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
   // Build system instruction — parallelize all async context fetches for speed
   const relationship = db.getRelationship(message.author.id);
   const mood = db.getMood();
-  const supabase = db.getSupabase();
-
-  // Use cached memory context if fresh (LRU with 60s TTL)
-  const _memCached = _memoryCtxCache.get(message.author.id);
+  // Public guild turns must never reuse a DM context containing sensitive or
+  // secret facts. Partition the cache by visibility and only load private
+  // facts while the user is actually in a DM with the bot.
+  const memoryVisibility = message.guild ? "public" : "private";
+  const memoryCacheKey = `${message.author.id}:${memoryVisibility}`;
+  const _memCached = _memoryCtxCache.get(memoryCacheKey);
   const memoryCtxPromise = _memCached
     ? Promise.resolve(_memCached)
-    : buildMemoryContext(message.author.id).then(ctx => {
-        _memoryCtxCache.set(message.author.id, ctx);
+    : buildMemoryContext(message.author.id, !message.guild).then(ctx => {
+        _memoryCtxCache.set(memoryCacheKey, ctx);
         return ctx;
       });
 
-  const [memoryCtx, customPersonality, crossChannelData, imageContext] = await Promise.all([
+  const [memoryCtx, customPersonality, imageContext] = await Promise.all([
     memoryCtxPromise,
     db.getPersonality(),
-    supabase ? supabase.from("eris_memories").select("content, channel_id, is_bot").eq("user_id", message.author.id).neq("channel_id", message.channel.id).order("created_at", { ascending: false }).limit(5) : Promise.resolve({ data: null }),
     imageContextPromise,
   ]);
 
@@ -177,17 +178,6 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
 
   // Save user message (non-blocking — don't delay AI response)
   db.saveInteraction(message.author.id, message.author.username, message.channel.id, cleanMessage, false).catch(() => {});
-
-  let crossChannelCtx = "";
-  if (crossChannelData?.data?.length) {
-    // Prefix each snippet with "you said:" so the model can't conflate
-    // "this user said it elsewhere" with "this user IS the person they
-    // mentioned in the snippet". Without the prefix, a snippet like
-    // "alice told me X" gets re-injected and the bot starts addressing
-    // the speaker as alice.
-    const summaries = crossChannelData.data.filter(m => !m.is_bot).map(m => m.content).slice(0, 3);
-    crossChannelCtx = `\n[CONTEXT: this user said in OTHER channels (not this one): ${summaries.map(s => `"${spotlight(s, "cross_channel_snippet")}"`).join(" | ")}]`;
-  }
 
   // Resolve per-server name and personality
   const serverPersona = message.guild ? db.getServerPersona(message.guild.id) : null;
@@ -242,8 +232,6 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
     systemInstruction += "\n[MOOD EFFECT: you're irritable — shorter responses and a little sarcasm, still answer the actual request]";
   }
 
-  if (crossChannelCtx) systemInstruction += crossChannelCtx;
-
   // ─── Parallel context fetch ─────────────────────────────────────────────
   // All async context builders are independent — run them all at once.
   // This turns 6 sequential awaits (~600-900ms) into 1 parallel batch.
@@ -253,7 +241,12 @@ export async function buildContext({ message, isTwin, isDM, isAwaitedReply, chan
       buildOpinionContext(cleanMessage),
       getSelfCanonContextCached(),
       buildTwinStateContextIfRelevant(cleanMessage),
-      buildLongTermContext(message.author.id, message.channel.id, cleanMessage),
+      buildLongTermContext(
+        message.author.id,
+        message.channel.id,
+        cleanMessage,
+        { guildId: message.guild?.id ?? null },
+      ),
       getPersonalityData?.()?.then(d => { tickPreoccupation(d); return buildPreoccupationContext(); }).catch(() => null),
     ]);
 

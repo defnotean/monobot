@@ -173,21 +173,35 @@ export async function enforceMessage(message) {
       return false;
     }
 
-    // Compute escalation
-    const priorList = getRecentViolations(message.guildId, message.author.id);
-    const priorOffenses = priorList.filter(v => v.ruleNumber === result.ruleNumber).length;
     const cited = rules.find(r => r.number === result.ruleNumber);
-    const action = decideAction({
-      severity: result.severity,
-      priorOffenses,
-      ruleText: cited?.text ?? "",
-      ruleNumber: result.ruleNumber,
-    });
+    const locallyCorroborated = result.corroborated === true;
+
+    // A model-only classification is useful review evidence, but it cannot be
+    // the sole authority for deletion, warning, timeout, or repeat-offense
+    // escalation. Only a same-category deterministic signal unlocks the normal
+    // escalation policy.
+    const action = locallyCorroborated
+      ? (() => {
+          const priorList = getRecentViolations(message.guildId, message.author.id);
+          const priorOffenses = priorList.filter(v => v.ruleNumber === result.ruleNumber).length;
+          return decideAction({
+            severity: result.severity,
+            priorOffenses,
+            ruleText: cited?.text ?? "",
+            ruleNumber: result.ruleNumber,
+          });
+        })()
+      : {
+          kind: "log_only",
+          deleteMessage: false,
+          timeoutMs: null,
+          reason: `model-only rule #${result.ruleNumber} detection — moderator review required`,
+        };
 
     // Apply
     if (action.kind !== "log_only") {
       await applyAction({ message, action, ruleNumber: result.ruleNumber, severity: result.severity });
-    } else {
+    } else if (locallyCorroborated) {
       // Even for log_only, count it as a recorded violation so the next
       // offense escalates correctly.
       recordViolation(message.guildId, message.author.id, result.ruleNumber, message.id, result.severity, action.kind);
@@ -207,8 +221,8 @@ export async function enforceMessage(message) {
     });
     await sendModLog(message.guild, embed).catch((err) => log(`[Enforcer] modlog failed: ${err?.message ?? err}`));
 
-    markActioned(message.author.id);
-    log(`[Enforcer] ${message.author.tag} → ${action.kind} for rule #${result.ruleNumber} in ${message.guild.name}`);
+    if (locallyCorroborated) markActioned(message.author.id);
+    log(`[Enforcer] ${message.author.tag} → ${action.kind} for rule #${result.ruleNumber} in ${message.guild.name}${locallyCorroborated ? "" : " (review only)"}`);
     return true;
   } catch (err) {
     log(`[Enforcer] unexpected error: ${err?.message ?? err}`);

@@ -84,6 +84,41 @@ describe("roleExecutor permission hardening", () => {
     expect(role.setPermissions).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["manage_messages", PermissionFlagsBits.ManageMessages],
+    ["view_audit_log", PermissionFlagsBits.ViewAuditLog],
+    ["move_members", PermissionFlagsBits.MoveMembers],
+    ["mute_members", PermissionFlagsBits.MuteMembers],
+    ["deafen_members", PermissionFlagsBits.DeafenMembers],
+  ])("blocks a ManageRoles caller from granting %s", async (permissionKey) => {
+    const role = roleFixture();
+    const { message, ctx } = buildHarness({ roles: [role] });
+
+    const result = await execute("set_role_permissions", {
+      role_name: "Member",
+      [permissionKey]: true,
+    }, message, ctx);
+
+    expect(result).toMatch(/administrator/i);
+    expect(role.setPermissions).not.toHaveBeenCalled();
+  });
+
+  it("still lets an Administrator grant a delegated moderation permission", async () => {
+    const role = roleFixture();
+    const { message, ctx } = buildHarness({
+      actorPermissions: [PermissionFlagsBits.Administrator],
+      roles: [role],
+    });
+
+    const result = await execute("set_role_permissions", {
+      role_name: "Member",
+      manage_messages: true,
+    }, message, ctx);
+
+    expect(result).toMatch(/updated/i);
+    expect(role.setPermissions).toHaveBeenCalledTimes(1);
+  });
+
   it("allows only the guild owner to grant Administrator to a role", async () => {
     const role = roleFixture();
     const { message, ctx } = buildHarness({

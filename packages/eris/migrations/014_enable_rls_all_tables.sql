@@ -127,6 +127,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     -- Shared infrastructure (both bots / packages/shared)
     'bot_data',                    -- guild settings, server whitelist, personas, stocks blob
+    'monobot_schema_migrations',   -- checksum ledger used by migrate.cjs
     'dual_write_sagas',            -- irene/migrations/20260516000000
     'local_commands',              -- host command queue (created above)
     'music_settings',              -- irene/music/settingsStore.js

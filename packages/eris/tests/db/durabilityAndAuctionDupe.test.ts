@@ -24,7 +24,8 @@ let invSeq = 1;
 let auctionSeq = 1;
 
 // When true, the debounced-flush upserts (mood / relationships / bot_data) all
-// reject — simulating the durable store being unreachable.
+// resolve with Supabase's normal `{ error }` response shape. Supabase query
+// failures are generally fulfilled promises rather than rejected promises.
 let failFlush = false;
 
 function delay(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
@@ -40,12 +41,12 @@ function makeNoopChain(): any {
   return chain;
 }
 
-// Flushable buckets (mood / relationships / bot_data). upsert resolves unless
-// failFlush is set, in which case it rejects to count as a flush failure.
+// Flushable buckets (mood / relationships / bot_data). upsert succeeds unless
+// failFlush is set, in which case it returns a fulfilled Supabase error.
 function makeFlushChain() {
   const chain: any = makeNoopChain();
   chain.upsert = (_row: any) => failFlush
-    ? Promise.reject(new Error("simulated durable store unreachable"))
+    ? Promise.resolve({ data: null, error: { code: "08006", message: "simulated durable store unreachable" } })
     : Promise.resolve({ data: null, error: null });
   return chain;
 }
@@ -360,7 +361,7 @@ describe("auction item dupe + self-raise escrow + flush durability", () => {
     failFlush = true;
     for (let i = 0; i < 5; i++) {
       updateMood(i, 50);     // marks a bucket dirty
-      await flushAll();      // one failed flush cycle (all upserts reject)
+      await flushAll();      // one failed flush cycle (all upserts return errors)
     }
 
     // Threshold (5) reached — economy-mutating writes must now refuse.

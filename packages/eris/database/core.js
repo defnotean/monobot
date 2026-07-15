@@ -19,6 +19,7 @@
 import { createClient } from "@supabase/supabase-js";
 import config from "../config.js";
 import { log } from "../utils/logger.js";
+import { checkedSupabase } from "./supabaseResult.js";
 
 /**
  * Error thrown by the balance helpers when a debit would go negative. Carries
@@ -111,25 +112,27 @@ export async function initDatabase() {
 async function _loadFromSupabase() {
   if (!supabase) return;
 
-  // Run all queries in parallel — much faster than sequential awaits
-  const [moodResult, relsResult, remsResult, gsResult] = await Promise.allSettled([
-    supabase.from("eris_mood").select("*").eq("id", "eris").single(),
-    supabase.from("eris_relationships").select("*"),
-    supabase.from("eris_reminders").select("*").eq("status", "pending"),
-    supabase.from("bot_data").select("data").eq("id", "eris_guild_settings").single(),
+  // Run all queries in parallel. Supabase normally fulfils failed queries with
+  // `{ error }`, so each result must be checked explicitly. A missing optional
+  // singleton row is fine; transport/schema/auth failures are not.
+  const [moodResult, relsResult, remsResult, gsResult] = await Promise.all([
+    checkedSupabase(supabase.from("eris_mood").select("*").eq("id", "eris").single(), "load mood", { allowCodes: ["PGRST116"] }),
+    checkedSupabase(supabase.from("eris_relationships").select("*"), "load relationships"),
+    checkedSupabase(supabase.from("eris_reminders").select("*").eq("status", "pending"), "load reminders"),
+    checkedSupabase(supabase.from("bot_data").select("data").eq("id", "eris_guild_settings").single(), "load guild settings", { allowCodes: ["PGRST116"] }),
   ]);
 
-  if (moodResult.status === "fulfilled" && moodResult.value.data) {
-    const m = moodResult.value.data;
+  if (moodResult.data) {
+    const m = moodResult.data;
     // Validate and clamp mood values from DB
     data.mood = {
       mood_score: Math.max(-100, Math.min(100, Number(m.mood_score) || 0)),
       energy: Math.max(0, Math.min(100, Number(m.energy) || 50)),
     };
   }
-  if (relsResult.status === "fulfilled" && relsResult.value.data) {
+  if (relsResult.data) {
     let pruned = 0;
-    for (const r of relsResult.value.data) {
+    for (const r of relsResult.data) {
       // Prune stale relationships: zero affinity + <3 interactions = noise
       if ((Number(r.affinity_score) || 0) === 0 && (Number(r.interactions_count) || 0) < 3) {
         pruned++;
@@ -142,11 +145,11 @@ async function _loadFromSupabase() {
     }
     if (pruned) log(`[DB] Pruned ${pruned} stale relationships on load`);
   }
-  if (remsResult.status === "fulfilled" && remsResult.value.data) {
-    data.reminders = remsResult.value.data;
+  if (remsResult.data) {
+    data.reminders = remsResult.data;
   }
-  if (gsResult.status === "fulfilled" && gsResult.value.data?.data) {
-    data.guild_settings = gsResult.value.data.data;
+  if (gsResult.data?.data) {
+    data.guild_settings = gsResult.data.data;
   }
 }
 
@@ -216,25 +219,31 @@ function _scheduleRetryFlush() {
 
 async function _flushSave() {
   _saveTimer = null;
-  if (!supabase) return;
+  if (!supabase) return false;
   const buckets = [..._dirty];
   _dirty.clear();
-  if (!buckets.length) return;
+  if (!buckets.length) return true;
 
   let anyFailed = false;
   for (const bucket of buckets) {
     try {
       if (bucket === "mood") {
-        await supabase.from("eris_mood").upsert({ id: "eris", mood_score: data.mood.mood_score, energy: data.mood.energy, last_updated: new Date().toISOString() });
+        await checkedSupabase(
+          supabase.from("eris_mood").upsert({ id: "eris", mood_score: data.mood.mood_score, energy: data.mood.energy, last_updated: new Date().toISOString() }),
+          "flush mood",
+        );
       }
       if (bucket === "relationships") {
         const rows = Object.entries(data.relationships).map(([uid, r]) => ({
           user_id: uid, affinity_score: r.affinity_score, interactions_count: r.interactions_count, last_interaction: new Date().toISOString(),
         }));
-        if (rows.length) await supabase.from("eris_relationships").upsert(rows);
+        if (rows.length) await checkedSupabase(supabase.from("eris_relationships").upsert(rows), "flush relationships");
       }
       if (bucket === "guild_settings") {
-        await supabase.from("bot_data").upsert({ id: "eris_guild_settings", data: data.guild_settings });
+        await checkedSupabase(
+          supabase.from("bot_data").upsert({ id: "eris_guild_settings", data: data.guild_settings }),
+          "flush guild settings",
+        );
       }
     } catch (e) {
       anyFailed = true;
@@ -259,6 +268,7 @@ async function _flushSave() {
     }
     _consecutiveFlushFailures = 0;
   }
+  return !anyFailed;
 }
 
 // Set up a beforeExit hook so any clean exit (no SIGTERM/SIGINT, e.g. `process.exit()`
@@ -294,11 +304,11 @@ export async function flushAll() {
   _dirty.add("relationships");
   _dirty.add("guild_settings");
   try {
-    await Promise.race([
+    const complete = await Promise.race([
       _flushSave(),
       new Promise((_, reject) => setTimeout(() => reject(new Error("flush_timeout")), _SHUTDOWN_FLUSH_TIMEOUT_MS)),
     ]);
-    log("[DB] Final flush complete");
+    log(complete ? "[DB] Final flush complete" : "[DB] Final flush incomplete: one or more buckets will retry");
   } catch (e) {
     log(`[DB] Final flush incomplete: ${e.message}`);
   }

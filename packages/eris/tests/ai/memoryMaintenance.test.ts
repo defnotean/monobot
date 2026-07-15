@@ -205,6 +205,8 @@ describe("storeEpisode dedupe", () => {
       id: "existing",
       bot_id: "b1",
       user_id: "u1",
+      channel_id: "c1",
+      guild_id: "g1",
       type: "exchange",
       content: "boss likes pineapple pizza",
       created_at: earlier,
@@ -230,6 +232,8 @@ describe("storeEpisode dedupe", () => {
       id: "u1-row",
       bot_id: "b1",
       user_id: "u1",
+      channel_id: "c1",
+      guild_id: "g1",
       type: "exchange",
       content: "we played tic-tac-toe",
       created_at: NOW(),
@@ -250,12 +254,17 @@ describe("findDuplicateMemory embedding similarity", () => {
       id: "near",
       bot_id: "b1",
       user_id: "u1",
+      channel_id: "c1",
+      guild_id: "g1",
       type: "exchange",
       content: "stored",
       embedding: JSON.stringify(b),
       created_at: NOW(),
     });
-    const dup = await semantic.findDuplicateMemory(fakeSupabase, "b1", "u1", "new content", a);
+    const dup = await semantic.findDuplicateMemory(
+      fakeSupabase, "b1", "u1", "new content", a,
+      { channelId: "c1", guildId: "g1" },
+    );
     expect(dup?.row?.id).toBe("near");
     expect(dup?.similarity).toBeGreaterThan(semantic.DEDUPE_SIMILARITY_THRESHOLD);
   });
@@ -267,12 +276,17 @@ describe("findDuplicateMemory embedding similarity", () => {
       id: "far",
       bot_id: "b1",
       user_id: "u1",
+      channel_id: "c1",
+      guild_id: "g1",
       type: "exchange",
       content: "stored",
       embedding: JSON.stringify(b),
       created_at: NOW(),
     });
-    const dup = await semantic.findDuplicateMemory(fakeSupabase, "b1", "u1", "new content", a);
+    const dup = await semantic.findDuplicateMemory(
+      fakeSupabase, "b1", "u1", "new content", a,
+      { channelId: "c1", guildId: "g1" },
+    );
     expect(dup).toBeNull();
   });
 });

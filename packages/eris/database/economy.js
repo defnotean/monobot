@@ -18,6 +18,7 @@
  */
 import { LRUCache } from "@defnotean/shared/LRUCache";
 import { getSupabase, isPersistenceHealthy, _assertPersistenceHealthy } from "./core.js";
+import { checkedSupabase } from "./supabaseResult.js";
 import { _cooldowns, _careerTiers } from "./cooldowns.js";
 import { getInventory } from "./inventory.js";
 import { log } from "../utils/logger.js";
@@ -102,7 +103,11 @@ export async function getBalance(userId) {
   if (!supabase) return { balance: 100, daily_streak: 0, last_daily: null, total_earned: 0, total_lost: 0, total_gambled: 0 };
 
   try {
-    const { data: row } = await supabase.from("eris_economy").select("*").eq("user_id", userId).single();
+    const { data: row } = await checkedSupabase(
+      supabase.from("eris_economy").select("*").eq("user_id", userId).single(),
+      `load economy row for ${userId}`,
+      { allowCodes: ["PGRST116"] },
+    );
     if (row) {
       _economyCache[userId] = row;
       _economyCacheTimes.set(userId, Date.now());
@@ -110,12 +115,15 @@ export async function getBalance(userId) {
     }
   } catch (e) {
     log(`[DB] getBalance query failed: ${e.message}`);
-    // Return cached or default on Supabase failure
-    return _economyCache[userId] ? { ..._economyCache[userId] } : { balance: 100, daily_streak: 0, last_daily: null, total_earned: 0, total_lost: 0, total_gambled: 0 };
+    // A warm cache can serve a temporary read outage. With no known row,
+    // fail closed instead of inventing the 100-coin default and risking a
+    // later write based on phantom state.
+    if (_economyCache[userId]) return { ..._economyCache[userId] };
+    throw e;
   }
   // Initialize new user
   const defaults = { user_id: userId, balance: 100, daily_streak: 0, last_daily: null, total_earned: 0, total_lost: 0, total_gambled: 0, total_stolen: 0, total_stolen_from: 0, last_rob_attempt: null, version: 0 };
-  try { await supabase.from("eris_economy").insert(defaults); } catch (e) { log(`[DB] ${e.message}`); }
+  await checkedSupabase(supabase.from("eris_economy").insert(defaults), `initialize economy row for ${userId}`);
   _economyCache[userId] = defaults;
   _economyCacheTimes.set(userId, Date.now());
   return { ...defaults };
@@ -494,7 +502,14 @@ export async function getLeaderboardByAxis(axis, limit = 10) {
 export async function logTransaction(userId, type, amount, balanceAfter, details = "") {
   const supabase = getSupabase();
   if (!supabase) return;
-  try { await supabase.from("eris_transactions").insert({ user_id: userId, type, amount, balance_after: balanceAfter, details }); } catch (e) { log(`[DB] ${e.message}`); }
+  try {
+    await checkedSupabase(
+      supabase.from("eris_transactions").insert({ user_id: userId, type, amount, balance_after: balanceAfter, details }),
+      `log ${type} transaction for ${userId}`,
+    );
+  } catch (e) {
+    log(`[DB] ${e.message}`);
+  }
 }
 
 export function checkEarnCooldown(userId) {
@@ -531,9 +546,16 @@ export async function getBankBalance(userId) {
   if (cached) return { ...cached };
   if (!supabase) return { balance: 0, last_interest: null };
   try {
-    const { data } = await supabase.from("eris_bank").select("*").eq("user_id", userId).single();
+    const { data } = await checkedSupabase(
+      supabase.from("eris_bank").select("*").eq("user_id", userId).single(),
+      `load bank balance for ${userId}`,
+      { allowCodes: ["PGRST116"] },
+    );
     if (data) { _bankCache.set(userId, data); return { ...data }; }
-  } catch (e) { log(`[DB] ${e.message}`); }
+  } catch (e) {
+    log(`[DB] ${e.message}`);
+    throw e;
+  }
   return { balance: 0, last_interest: null };
 }
 
@@ -589,7 +611,7 @@ export async function updateBankBalance(userId, delta, { maxBalance = null } = {
   }
   const row = { user_id: userId, balance: newBal, last_interest: current.last_interest || new Date().toISOString() };
   if (supabase) {
-    try { await supabase.from("eris_bank").upsert(row); } catch (e) { log(`[DB] ${e.message}`); }
+    await checkedSupabase(supabase.from("eris_bank").upsert(row), `update bank balance for ${userId}`);
   }
   _bankCache.set(userId, row);
   return newBal;
@@ -706,7 +728,10 @@ export async function applyBankInterest(userId) {
     await updateBankBalance(userId, actualInterest);
     const updated = await getBankBalance(userId);
     if (supabase) {
-      try { await supabase.from("eris_bank").update({ last_interest: new Date().toISOString() }).eq("user_id", userId); } catch (e) { log(`[DB] ${e.message}`); }
+      await checkedSupabase(
+        supabase.from("eris_bank").update({ last_interest: new Date().toISOString() }).eq("user_id", userId),
+        `stamp bank interest for ${userId}`,
+      );
     }
     _bankCache.set(userId, { ...updated, last_interest: new Date().toISOString() });
     return actualInterest;
@@ -724,8 +749,14 @@ export async function setPrestigeLevel(userId, level) {
   const supabase = getSupabase();
   if (!supabase) return;
   try {
-    await supabase.from("eris_economy").update({ prestige_level: level }).eq("user_id", userId);
-  } catch (e) { log(`[DB] ${e.message}`); }
+    await checkedSupabase(
+      supabase.from("eris_economy").update({ prestige_level: level }).eq("user_id", userId),
+      `set prestige level for ${userId}`,
+    );
+  } catch (e) {
+    log(`[DB] ${e.message}`);
+    return;
+  }
   if (_economyCache[userId]) _economyCache[userId].prestige_level = level;
 }
 
@@ -764,11 +795,15 @@ export async function getMarriage(userId) {
   if (_marriageCache.has(userId)) return _marriageCache.get(userId);
   if (!supabase) return null;
   try {
-    const { data } = await supabase.from("eris_marriages").select("*").or(`user1_id.eq.${userId},user2_id.eq.${userId}`).single();
+    const { data } = await checkedSupabase(
+      supabase.from("eris_marriages").select("*").or(`user1_id.eq.${userId},user2_id.eq.${userId}`).single(),
+      `load marriage for ${userId}`,
+      { allowCodes: ["PGRST116"] },
+    );
     _marriageCache.set(userId, data || null);
     return data || null;
-  } catch {
-    _marriageCache.set(userId, null);
+  } catch (e) {
+    log(`[DB] getMarriage failed: ${e.message}`);
     return null;
   }
 }
@@ -777,7 +812,10 @@ export async function createMarriage(user1Id, user2Id) {
   const supabase = getSupabase();
   if (!supabase) return null;
   try {
-    const { data } = await supabase.from("eris_marriages").insert({ user1_id: user1Id, user2_id: user2Id, married_at: new Date().toISOString() }).select().single();
+    const { data } = await checkedSupabase(
+      supabase.from("eris_marriages").insert({ user1_id: user1Id, user2_id: user2Id, married_at: new Date().toISOString() }).select().single(),
+      `create marriage for ${user1Id}/${user2Id}`,
+    );
     // Invalidate-then-refresh both partners so any stale "null" cached during
     // a getMarriage() that ran before the insert is replaced.
     _marriageCache.delete(user1Id);
@@ -797,7 +835,10 @@ export async function deleteMarriage(userId) {
   const marriage = await getMarriage(userId);
   if (!marriage) return false;
   try {
-    await supabase.from("eris_marriages").delete().eq("id", marriage.id);
+    await checkedSupabase(
+      supabase.from("eris_marriages").delete().eq("id", marriage.id),
+      `delete marriage ${marriage.id}`,
+    );
     // Invalidate-then-refresh — same rationale as createMarriage. Set to null
     // so subsequent reads short-circuit without hitting Supabase.
     _marriageCache.delete(marriage.user1_id);

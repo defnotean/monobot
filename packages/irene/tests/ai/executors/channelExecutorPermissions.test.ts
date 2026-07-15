@@ -125,4 +125,81 @@ describe("channel executor permission hardening", () => {
     );
     expect(message.channel.permissionOverwrites.edit).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["manage_messages", PermissionFlagsBits.ManageMessages],
+    ["mention_everyone", PermissionFlagsBits.MentionEveryone],
+    ["move_members", PermissionFlagsBits.MoveMembers],
+  ])("does not let a ManageChannels caller grant %s they do not hold", async (permissionName) => {
+    const { guild, message, ctx } = buildHarness();
+    const role = makeRole({ id: "role-123", name: "Member" });
+    guild.roles.cache.set(role.id, role);
+    ctx.findRole = vi.fn(() => role);
+
+    const result = await executeChannel("set_channel_permissions", {
+      target: "Member",
+      target_type: "role",
+      allow: [permissionName],
+    }, message, ctx);
+
+    expect(result).toMatch(/cannot grant/i);
+    expect(message.channel.permissionOverwrites.edit).not.toHaveBeenCalled();
+  });
+
+  it("lets a caller grant a channel permission they actually hold", async () => {
+    const { guild, message, ctx } = buildHarness({
+      actorPermissions: [PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages],
+    });
+    const role = makeRole({ id: "role-123", name: "Member" });
+    guild.roles.cache.set(role.id, role);
+    ctx.findRole = vi.fn(() => role);
+
+    const result = await executeChannel("set_channel_permissions", {
+      target: "Member",
+      target_type: "role",
+      allow: ["manage_messages"],
+    }, message, ctx);
+
+    expect(result).toMatch(/updated permissions/i);
+    expect(message.channel.permissionOverwrites.edit).toHaveBeenCalledWith(
+      role.id,
+      { ManageMessages: true },
+      expect.any(Object),
+    );
+  });
+
+  it("does not let a caller inherit a delegated privilege they do not hold", async () => {
+    const { guild, message, ctx } = buildHarness();
+    const role = makeRole({ id: "role-123", name: "Member" });
+    guild.roles.cache.set(role.id, role);
+    ctx.findRole = vi.fn(() => role);
+
+    const result = await executeChannel("set_channel_permissions", {
+      target: "Member",
+      target_type: "role",
+      inherit: ["manage_messages"],
+    }, message, ctx);
+
+    expect(result).toMatch(/cannot grant/i);
+    expect(message.channel.permissionOverwrites.edit).not.toHaveBeenCalled();
+  });
+
+  it("does not let reset lift a delegated-permission deny beyond the caller", async () => {
+    const { guild, message, ctx } = buildHarness();
+    const role = makeRole({ id: "role-123", name: "Member" });
+    guild.roles.cache.set(role.id, role);
+    ctx.findRole = vi.fn(() => role);
+    message.channel.permissionOverwrites.cache.set(role.id, {
+      deny: makePermissions([PermissionFlagsBits.ManageMessages]),
+    });
+
+    const result = await executeChannel("set_channel_permissions", {
+      target: "Member",
+      target_type: "role",
+      reset: true,
+    }, message, ctx);
+
+    expect(result).toMatch(/cannot grant/i);
+    expect(message.channel.permissionOverwrites.delete).not.toHaveBeenCalled();
+  });
 });

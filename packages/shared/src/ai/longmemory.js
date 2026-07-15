@@ -218,6 +218,10 @@ export function createLongMemory({
 
     episode.at = now();
     episode.userId = userId;
+    // Channel IDs are globally unique Discord audience identifiers. Persist
+    // the source audience on each user episode so a DM/restricted-channel
+    // memory is never promoted into another channel's prompt.
+    episode.channelId = channelId || null;
 
     if (!_episodes.has(userId)) _episodes.set(userId, []);
     const userEps = _episodes.get(userId);
@@ -234,12 +238,12 @@ export function createLongMemory({
     scheduleSave();
   }
 
-  async function analyzeExchange(userId, channelId, userMessage, botResponse, sentiment) {
+  async function analyzeExchange(userId, channelId, userMessage, botResponse, sentiment, audience = {}) {
     if (!userMessage || !botResponse) return;
     const userLower = userMessage.toLowerCase();
     const botLower = botResponse.toLowerCase();
 
-    const userEps = _episodes.get(userId) || [];
+    const userEps = (_episodes.get(userId) || []).filter(ep => ep.channelId === channelId);
     for (const ep of userEps) {
       if (ep.type === EPISODE.RUNNING_BIT && ep.phrase) {
         if (userLower.includes(ep.phrase) || botLower.includes(ep.phrase)) {
@@ -307,7 +311,7 @@ export function createLongMemory({
           /\b(i think|honestly|imo|ngl|tbh)\b/i.test(botLower)) {
         const summary = `user said: "${userMessage.substring(0, 100)}" — bot replied: "${botResponse.substring(0, 100)}"`;
         const type = sentiment < -0.3 ? "tension" : sentiment > 0.3 ? "bond" : "exchange";
-        storeEpisode(botId, userId, channelId, null, type, summary)
+        storeEpisode(botId, userId, channelId, audience.guildId ?? null, type, summary)
           .catch((err) => logSemantic(`[LongMemory] storeEpisode failed: ${err.message}`));
       }
     } catch (err) {
@@ -315,7 +319,7 @@ export function createLongMemory({
     }
   }
 
-  async function buildLongTermContext(userId, channelId, currentMessage = "") {
+  async function buildLongTermContext(userId, channelId, currentMessage = "", audience = {}) {
     const parts = [];
 
     const narrative = getMoodNarrative(userId) || getMoodNarrative("global");
@@ -346,7 +350,7 @@ export function createLongMemory({
       }
     } catch {}
 
-    const userEps = _episodes.get(userId) || [];
+    const userEps = (_episodes.get(userId) || []).filter(ep => ep.channelId === channelId);
     const recentEps = userEps
       .filter(e => now() - e.at < 7 * 86400_000)
       .slice(-5);
@@ -380,7 +384,10 @@ export function createLongMemory({
         const searchRelevantMemories = semantic?.searchRelevantMemories;
         if (typeof searchRelevantMemories === "function") {
           const botId = await resolveBotId();
-          const relevant = await searchRelevantMemories(botId, userId, currentMessage, 3);
+          const relevant = await searchRelevantMemories(botId, userId, currentMessage, 3, {
+            channelId,
+            guildId: audience.guildId ?? null,
+          });
           if (relevant.length) {
             const memories = relevant
               .filter(r => r.similarity > 0.35)

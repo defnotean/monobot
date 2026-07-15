@@ -8,6 +8,12 @@ import config from "../../config.js";
 import { log } from "../../utils/logger.js";
 import { stableSig } from "../dual.js";
 import { routeCatalogTool, withRouterTool } from "@defnotean/shared/toolRouter";
+import {
+  UNTRUSTED_FOLLOWUP_BLOCK,
+  isPrivilegedFollowupTool,
+  isUntrustedExternalResultTool,
+  wrapUntrustedExternalToolResult,
+} from "@defnotean/shared/openaiCompat";
 import { TOOL_ALIASES } from "../executor.js";
 import { registry } from "../toolRegistry.js";
 
@@ -253,6 +259,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
   // Some models (Llama 3.3 esp.) keep re-calling the same tool with the
   // same args even after success, treating it as not-yet-done.
   const calledSignatures = new Set();
+  let untrustedEvidenceSeen = false;
 
   // Loop for tool calling — model can call multiple tools per turn
   for (let iteration = 0; iteration < 10; iteration++) {
@@ -362,6 +369,10 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
       }
       fnName = routed.toolName;
       fnArgs = routed.args;
+      if (untrustedEvidenceSeen && isPrivilegedFollowupTool(fnName)) {
+        allDuplicates = false;
+        return { call, fnName, fnArgs, duplicate: false, blockedByUntrustedEvidence: true };
+      }
       // Use the same key-sorted signature dual.js uses for Gemini so identical
       // tool calls dedup consistently across providers — {a:1,b:2} and
       // {b:2,a:1} must collapse to one execution regardless of key order.
@@ -375,7 +386,7 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
       return { call, fnName, fnArgs, duplicate: false };
     });
 
-    const fresh = slots.filter((s) => !s.duplicate && !s.parseError && !s.routeError);
+    const fresh = slots.filter((s) => !s.duplicate && !s.parseError && !s.routeError && !s.blockedByUntrustedEvidence);
     if (fresh.length > 1) log(`[NVIDIA] running ${fresh.length} tool calls in parallel: ${fresh.map((s) => s.fnName).join(", ")}`);
     const execResults = await Promise.all(fresh.map(async ({ fnName, fnArgs }) => {
       log(`[NVIDIA] ${fnName}(${JSON.stringify(fnArgs).slice(0, 100)})`);
@@ -402,6 +413,12 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
           tool_call_id: s.call.id,
           content: s.routeError,
         });
+      } else if (s.blockedByUntrustedEvidence) {
+        messages.push({
+          role: "tool",
+          tool_call_id: s.call.id,
+          content: UNTRUSTED_FOLLOWUP_BLOCK,
+        });
       } else if (s.duplicate) {
         messages.push({
           role: "tool",
@@ -410,10 +427,15 @@ Kimi is allowed to use judgment. Call tools for clear actions, live lookups, sav
         });
       } else {
         const result = resultByCallId.get(s.call.id);
+        const untrusted = isUntrustedExternalResultTool(s.fnName);
+        const content = untrusted
+          ? wrapUntrustedExternalToolResult(s.fnName, result)
+          : (typeof result === "string" ? result : JSON.stringify(result));
+        if (untrusted) untrustedEvidenceSeen = true;
         messages.push({
           role: "tool",
           tool_call_id: s.call.id,
-          content: typeof result === "string" ? result : JSON.stringify(result),
+          content,
         });
       }
     }

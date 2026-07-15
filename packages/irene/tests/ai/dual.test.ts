@@ -28,7 +28,7 @@ vi.mock("../../config.js", () => ({
 }));
 
 // @ts-expect-error - importing JS module without types
-import { wrapUntrustedToolResult, UNTRUSTED_RESULT_TOOLS } from "../../ai/dual.js";
+import { quickReply, wrapUntrustedToolResult, UNTRUSTED_RESULT_TOOLS } from "../../ai/dual.js";
 import { spotlight } from "../../ai/firewall.js";
 
 describe("wrapUntrustedToolResult", () => {
@@ -70,5 +70,33 @@ describe("wrapUntrustedToolResult", () => {
   it("passes non-string results through unchanged", () => {
     const obj = { ok: true };
     expect(wrapUntrustedToolResult("ask_eris", obj as unknown as string)).toBe(obj);
+  });
+});
+
+describe("quickReply instruction modes", () => {
+  it("preserves the exact system instruction for null-context inference", async () => {
+    const generateContent = vi.fn(async () => ({
+      candidates: [{ content: { parts: [{ text: '{"classification":"ambiguous"}' }] } }],
+    }));
+    const client = { models: { generateContent } };
+
+    const result = await quickReply(client, "CLASSIFY AS JSON", "{}", null);
+
+    expect(result).toBe('{"classification":"ambiguous"}');
+    expect(generateContent.mock.calls[0][0].config.systemInstruction).toBe("CLASSIFY AS JSON");
+  });
+
+  it("retains acknowledgement coaching for conversational callers", async () => {
+    const generateContent = vi.fn(async () => ({
+      candidates: [{ content: { parts: [{ text: "on it" }] } }],
+    }));
+    const client = { models: { generateContent } };
+
+    await quickReply(client, "BASE PERSONA", "create a channel", { guild: {} });
+
+    const instruction = generateContent.mock.calls[0][0].config.systemInstruction;
+    expect(instruction).toContain("BASE PERSONA");
+    expect(instruction).toContain("CONVERSATION side of a dual-AI system");
+    expect(instruction).toContain("SHORT, natural acknowledgment");
   });
 });

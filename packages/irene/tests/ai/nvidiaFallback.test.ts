@@ -75,6 +75,30 @@ afterEach(() => {
 });
 
 describe("NVIDIA → Gemini fallback (Irene)", () => {
+  it("returns quickReply text to non-chat callers", async () => {
+    mockNvidiaResponse(200, successBody("classification result"));
+
+    const result = await nvidia.quickReply(null, "system", "evidence", null);
+
+    expect(result).toBe("classification result");
+  });
+
+  it("returns the same quickReply text after replying to a chat context", async () => {
+    mockNvidiaResponse(200, successBody("on it"));
+    const context = { reply: vi.fn(async () => {}) };
+
+    const result = await nvidia.quickReply(null, "system", "request", context);
+
+    expect(context.reply).toHaveBeenCalledWith("on it");
+    expect(result).toBe("on it");
+  });
+
+  it("returns null when quickReply receives a provider error", async () => {
+    mockNvidiaResponse(503, "Service Unavailable");
+
+    await expect(nvidia.quickReply(null, "system", "request", null)).resolves.toBeNull();
+  });
+
   it("sends Kimi K2.6 NVIDIA settings with balanced tool judgment", async () => {
     const savedNvidia = { ...config.nvidia };
     Object.assign(config.nvidia, {

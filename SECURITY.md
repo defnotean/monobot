@@ -26,13 +26,15 @@ how.
 
 ## Supported Versions
 
-Only the `main` branch is currently supported with security fixes. There are
-no tagged releases yet.
+Security fixes are delivered on `main`. The repository has a `v3.2.0` tag,
+but release tags are immutable snapshots; self-hosters should deploy a reviewed
+commit from `main` when they need fixes newer than that tag.
 
 | Version | Supported          |
 | ------- | ------------------ |
 | `main`  | Yes                |
-| Other   | No                 |
+| `v3.2.0` | Snapshot only     |
+| Older / forks | No           |
 
 If you self-host, treat your fork's deployed commit as your "version" and pull
 from `main` to receive fixes.

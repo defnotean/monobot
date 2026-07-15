@@ -45,6 +45,7 @@ const mockDiscordState = vi.hoisted(() => ({
   wsStatus: 0,
   userTag: null as string | null,
 }));
+const mockPersistenceState = vi.hoisted(() => ({ healthy: true }));
 
 vi.mock("http", () => ({
   default: {
@@ -91,7 +92,7 @@ vi.mock("discord.js", () => ({
 vi.mock("../../database.js", () => ({
   initDatabase: vi.fn(async () => undefined),
   flushAll: vi.fn(async () => undefined),
-  isPersistenceHealthy: vi.fn(() => true),
+  isPersistenceHealthy: vi.fn(() => mockPersistenceState.healthy),
 }));
 
 vi.mock("../../config.js", () => ({
@@ -202,6 +203,7 @@ beforeEach(() => {
   mockDiscordState.ready = true;
   mockDiscordState.wsStatus = 0;
   mockDiscordState.userTag = null;
+  mockPersistenceState.healthy = true;
 });
 
 describe("Eris early dashboard HTTP routes", () => {
@@ -223,6 +225,18 @@ describe("Eris early dashboard HTTP routes", () => {
     expect(status).toBe(503);
     expect(body.ok).toBe(false);
     expect(body.discord).toBe("disconnected");
+  });
+
+  it("keeps liveness up but marks /readyz unavailable when persistence is unhealthy", async () => {
+    mockPersistenceState.healthy = false;
+
+    const ready = await call("/readyz");
+    expect(ready.status).toBe(503);
+    expect(ready.body).toMatchObject({ ok: false, discord: "ready", persistence: "unavailable" });
+
+    const live = await call("/healthz");
+    expect(live.status).toBe(200);
+    expect(live.body.ok).toBe(true);
   });
 
   it("treats ws status 0 plus a bot user as ready even if isReady lags", async () => {

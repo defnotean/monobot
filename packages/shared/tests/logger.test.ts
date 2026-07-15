@@ -43,6 +43,20 @@ describe("createLogger — factory", () => {
 });
 
 describe("createLogger — last-mile redaction", () => {
+  it("emits queryable JSON with bot/category/level/context when configured", () => {
+    const lg = createLogger({ botPrefix: "ERIS", format: "json" });
+    lg.log("[DB] flush failed", { operation: "mood", apiKey: "secret" });
+    const parsed = JSON.parse(captured.at(-1)!);
+    expect(parsed).toMatchObject({
+      bot: "ERIS",
+      category: "DB",
+      level: "error",
+      message: "flush failed",
+      context: { operation: "mood", apiKey: "[REDACTED]" },
+    });
+    expect(parsed.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
   it("redacts a leaked DISCORD_TOKEN value", () => {
     process.env.DISCORD_TOKEN = "Bot.totallyrealtokenvalue.shhhhh";
     const lg = createLogger({ botPrefix: "TEST" });
@@ -95,7 +109,7 @@ describe("createLogger — last-mile redaction", () => {
     delete process.env.NO_COLOR;
     try {
       // Reimport-via-factory so the COLORS_ON flag captures the unset state.
-      const lg = createLogger({ botPrefix: "TEST" });
+      const lg = createLogger({ botPrefix: "TEST", format: "pretty" });
       lg.log("[bot] online");
       const joined = captured.join("\n");
       // Body color hits OK_RE because of "online"

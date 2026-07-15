@@ -1,6 +1,8 @@
 # Monitoring & observability
 
-What you can see today, where to look for it, and what's missing if you want a real production posture. Both bots ship a single homegrown logger and a couple of HTTP endpoints — that's the entire observability surface. No metrics, no traces, no error aggregator.
+What you can see today, where to look for it, and what's still missing for a
+full production posture. Both bots share a redacting logger and expose separate
+liveness/readiness endpoints. There are no metrics, traces, or error aggregator.
 
 ## 1. What logs look like today
 
@@ -21,9 +23,13 @@ Pretty console format:
 14:32:01  [Gemini]      Key rate-limited for 24s — falling back to gemini-2.5-flash
 ```
 
-There are **no log levels in the API**. Every call is `log(message)`. "Level" is detected heuristically from the message body via regex against `error|failed|fatal|crash|rejected|exception` (red), `warning|warn|slow|retry|degraded|fallback` (yellow), and `online|ready|success|connected|started` (green). Category comes from a `[Bracket]` prefix at the start of the message and drives the color column. Categories aren't structured fields — they're a string convention enforced by code review.
-
-Logs are **not JSON**. Nothing is structured. No correlation IDs, no request IDs, no user-ID fields you can `jq` on. If you want field-based queries you'll need a shipper that parses `[Category] ...` line-by-line.
+The default local format remains human-readable. Set `LOG_FORMAT=json` (the
+Render blueprint does this) to emit one JSON object per line with `timestamp`,
+`level`, `bot`, `category`, `message`, and an optional redacted `context`
+object. Existing `log("[DB] ...")` calls are parsed into those fields; new call
+sites can pass structured context as the second argument. Severity is still
+derived from the existing error/warning keywords, and distributed correlation
+IDs are not yet propagated through the message pipeline.
 
 ## 2. Key log lines to watch for
 
@@ -61,7 +67,7 @@ Primary endpoints:
 |---|---|---|---|
 | `GET /` | Eris | none | text "Eris is awake." |
 | `GET /healthz` | both | none | process liveness; returns 200 while the HTTP process is alive |
-| `GET /readyz` | both | none | Discord gateway readiness; returns 503 while reconnecting |
+| `GET /readyz` | both | none | dependency readiness; returns 503 while reconnecting (Eris also checks persistence health) |
 | `GET /health` | Irene | none | `{ok, user, bot}` — bot tag once gateway is up |
 | `GET /api/health` | both | none | `{status, uptime, memory, db_connected, bot, guilds}` |
 | `GET /presence` (and `/presence/<ownerId>`) | Irene | none, IP rate-limited 1/sec | live Discord presence cache |
@@ -114,8 +120,8 @@ Be clear-eyed about this before promising any SLO:
 - **No metrics export.** No Prometheus scrape endpoint, no statsd push, no OpenTelemetry. Not in `package.json`, not anywhere in `packages/`.
 - **No tracing.** No spans across the message → AI → tool → reply pipeline. If a turn took 12 seconds you have to read the log timestamps and guess.
 - **No error aggregator.** No Sentry, no Bugsnag, no Rollbar. Crashes go to `bot.log` and the supervisor's stderr.
-- **No structured logging.** Lines are `[Cat] free-form text`. You can't reliably query "all failures for user X" — you'd have to grep for the user ID *if* it happens to be in the message body.
-- **No log levels.** `log()` is the only emit fn. Severity is regex-guessed from message text.
+- **No end-to-end correlation IDs.** JSON context is available, but the bot does not yet attach one turn ID to every log emitted by a Discord message.
+- **Severity is inferred.** JSON has a `level` field, but legacy calls still derive it from message text rather than an explicit logging method.
 - **No request/correlation IDs.** A single Discord message → AI pipeline turn emits ~5-15 unrelated log lines you can't link.
 - **No periodic heap snapshot.** Heap is sampled only when something calls `/api/health` or `/about`.
 - **No alerting hooks built in.** Nothing fires a webhook on `[FATAL]` or `[UNHANDLED REJECTION]`. You build that with your supervisor.
@@ -135,7 +141,7 @@ If you self-host and want something better than "ssh in and tail", three escalat
 
 - Install **Vector** or **promtail** on the host. Point at PM2's log dir (`~/.pm2/logs/`) and `packages/<bot>/bot.log`.
 - Pipe to **Grafana Loki** (self-host or free Grafana Cloud tier).
-- Parse `[Category]` as a `category` label and the leading `\d{2}:\d{2}:\d{2}` as time. Now you have searchable, filterable, retained logs without changing any bot code.
+- With `LOG_FORMAT=json`, parse the native `category`, `level`, `bot`, and `context` fields directly. Now you have searchable, filterable, retained logs without a fragile regex parser.
 
 **Tier 3 — add a real metrics layer (a day):**
 

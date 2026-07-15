@@ -283,6 +283,39 @@ describe("AI-initiated destructive actions defer to confirm (Task 2)", () => {
     expect(tbPending.durationStr).toBe("1d");
   });
 
+  it("commits against the immutable target id captured at preview time", async () => {
+    const guild = buildGuild();
+    const originalTarget = buildTarget({
+      id: "123456789012345678",
+      user: { id: "123456789012345678", tag: "original#0001", username: "original", createdTimestamp: 0 },
+    });
+    const renamedCollision = buildTarget({
+      id: "223456789012345678",
+      user: { id: "223456789012345678", tag: "victim#0002", username: "victim", createdTimestamp: 0 },
+    });
+    const pending = {
+      action: "ban_user",
+      input: { username: "victim", reason: "spam" },
+      requiredPerm: PermissionFlagsBits.BanMembers,
+      targetId: originalTarget.id,
+    };
+    const findMember = vi.fn((_guild: any, lookup: string) =>
+      lookup === originalTarget.id ? originalTarget : renamedCollision
+    );
+
+    const result = await commitPendingAction(pending, {
+      guild,
+      member: buildPermedMember(PermissionFlagsBits.BanMembers, "clicker-mod"),
+      clickedBy: { id: "clicker-mod", tag: "clicker#0001" },
+      deps: { findMember, checkHierarchy: () => null, logAudit, firePunishSignal: () => Promise.resolve() },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(findMember).toHaveBeenCalledWith(guild, originalTarget.id);
+    expect(originalTarget.ban).toHaveBeenCalledTimes(1);
+    expect(renamedCollision.ban).not.toHaveBeenCalled();
+  });
+
   it("AI-initiated lockdown_server defers to confirm — no lockdown fires", async () => {
     const guild = buildGuild();
     const member = buildPermedMember(PermissionFlagsBits.ManageChannels);
@@ -432,6 +465,7 @@ describe("a confirmed ban/kick emits the same mod-log as the inline path", () =>
         action: "ban_user",
         input: { username: "victim", reason: "spam" },
         requiredPerm: PermissionFlagsBits.BanMembers,
+        targetId: target.id,
       }),
     );
     const ok = await commitPendingAction(taken, {
@@ -459,6 +493,7 @@ describe("a confirmed ban/kick emits the same mod-log as the inline path", () =>
         action: "kick_user",
         input: { username: "victim", reason: "spam" },
         requiredPerm: PermissionFlagsBits.KickMembers,
+        targetId: target.id,
       }),
     );
     const ok = await commitPendingAction(taken, {
