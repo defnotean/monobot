@@ -68,7 +68,7 @@
   },
   "dependencies": {
     "canvas": "^3.2.3",
-    "discord.js": "14.26.4",
+    "discord.js": "14.26.5",
     "undici": "6.27.0"
   },
   "devDependencies": {
