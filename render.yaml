@@ -7,15 +7,19 @@ services:
   - type: web
     name: eris-bot
     runtime: node
-    plan: free
+    # This bot maintains Discord gateway state and scheduled jobs. Render's
+    # free web tier can spin down and is not suitable for production bots.
+    plan: standard
     buildCommand: npm ci
     startCommand: npm run start:eris
-    healthCheckPath: /
+    healthCheckPath: /readyz
     envVars:
       - key: NODE_ENV
         value: production
       - key: NODE_VERSION
         value: "22.12.0"
+      - key: LOG_FORMAT
+        value: json
       - key: DISCORD_TOKEN
         sync: false
       - key: CLIENT_ID
@@ -71,12 +75,14 @@ services:
     plan: standard
     buildCommand: npm ci
     startCommand: npm run start:irene
-    healthCheckPath: /api/health
+    healthCheckPath: /readyz
     envVars:
       - key: NODE_ENV
         value: production
       - key: NODE_VERSION
         value: "22.12.0"
+      - key: LOG_FORMAT
+        value: json
       - key: DISCORD_BOT_TOKEN
         sync: false
       - key: DISCORD_CLIENT_ID

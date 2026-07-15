@@ -733,13 +733,20 @@ async function handleModUndo(interaction) {
     return interaction.reply({ content: "invalid target id", flags: 64 }).catch(() => {});
   }
 
-  // Authorize — must have ban/kick/moderate members perms, or be admin
+  // Authorize against the permission for the concrete reversal; ManageGuild
+  // alone must not borrow the bot's moderation authority.
   const member = interaction.member;
-  const isAdmin = member?.permissions?.has?.(PermissionFlagsBits.Administrator)
-               || member?.permissions?.has?.(PermissionFlagsBits.ManageGuild)
-               || member?.permissions?.has?.(PermissionFlagsBits.BanMembers);
-  if (!isAdmin) {
-    return interaction.reply({ content: "only admins can reverse mod actions", flags: 64 }).catch(() => {});
+  const requiredPermission = {
+    ban: PermissionFlagsBits.BanMembers,
+    timeout: PermissionFlagsBits.ModerateMembers,
+    mute: PermissionFlagsBits.ManageRoles,
+    warn: PermissionFlagsBits.ModerateMembers,
+  }[kind];
+  const authorized = member?.id === interaction.guild?.ownerId
+    || member?.permissions?.has?.(PermissionFlagsBits.Administrator)
+    || (requiredPermission && member?.permissions?.has?.(requiredPermission));
+  if (!authorized) {
+    return interaction.reply({ content: "you don't have permission to reverse this mod action", flags: 64 }).catch(() => {});
   }
 
   try { await interaction.deferReply({ flags: 64 }); }
@@ -849,13 +856,8 @@ async function handleModConfirm(interaction) {
     consumePendingAction, getPendingAction, commitPendingAction,
   } = await import("../ai/executors/moderationExecutor.js");
 
-  // Cancel — discard without running anything.
-  if (prefix === "modcancel") {
-    consumePendingAction(token);
-    return interaction.update({ content: "✖️ Action cancelled.", embeds: [], components: [] }).catch(() => {});
-  }
-
-  // Confirm — must have the permission the original action required.
+  // Confirm and Cancel both mutate the one-shot pending action, so both require
+  // the original action's permission before the token may be consumed.
   const pending = getPendingAction(token);
   if (!pending) {
     // TTL-expired or already consumed. Strip the now-dead buttons.
@@ -869,7 +871,12 @@ async function handleModConfirm(interaction) {
   if (!member?.permissions?.has?.(PermissionFlagsBits.Administrator)
       && member?.id !== interaction.guild?.ownerId
       && !member?.permissions?.has?.(pending.requiredPerm)) {
-    return interaction.reply({ content: "you don't have permission to confirm this action", flags: 64 }).catch(() => {});
+    return interaction.reply({ content: "you don't have permission to confirm or cancel this action", flags: 64 }).catch(() => {});
+  }
+
+  if (prefix === "modcancel") {
+    consumePendingAction(token);
+    return interaction.update({ content: "✖️ Action cancelled.", embeds: [], components: [] }).catch(() => {});
   }
 
   // Now consume — committed exactly once.

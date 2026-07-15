@@ -22,6 +22,7 @@ const privilegedFunctions = [
   ["012_atomic_stock_portfolios_rpc.sql", "eris_sell_stock_shares", "TEXT, TEXT, BIGINT, NUMERIC"],
   ["013_atomic_lottery_rpc.sql", "eris_buy_lottery_ticket", "TEXT, INTEGER, INTEGER, INTEGER, BIGINT"],
   ["013_atomic_lottery_rpc.sql", "eris_claim_lottery_draw", "NUMERIC, INTEGER, BIGINT, NUMERIC"],
+  ["015_atomic_poker_settlement_rpc.sql", "eris_settle_poker_table", "TEXT, JSONB, BIGINT, TEXT"],
 ] as const;
 
 describe("economy/security RPC grants", () => {
@@ -77,5 +78,21 @@ describe("stock RPC caller-controlled economics", () => {
     expect(sql).not.toMatch(/v_cost\s*:=\s*ceil\(p_price\s*\*\s*p_shares\)::bigint/i);
     expect(sql).not.toMatch(/v_proceeds\s*:=\s*floor\(p_price\s*\*\s*p_shares\)::bigint/i);
     expect(sql).not.toMatch(/>\s*p_max_position_value/i);
+  });
+});
+
+describe("poker settlement RPC invariants", () => {
+  const sql = stripSqlComments(readMigration("015_atomic_poker_settlement_rpc.sql"));
+
+  it("derives the pot from persisted antes and enforces exact refund/win totals", () => {
+    expect(sql).toMatch(/v_pot\s*:=\s*v_pot\s*\+\s*\(v_ante->>'anted'\)::bigint/i);
+    expect(sql).toMatch(/p_expected_pot\s+IS\s+DISTINCT\s+FROM\s+v_pot/i);
+    expect(sql).toMatch(/p_reason\s*=\s*'poker_refund'\s+AND\s+v_total\s*<>\s*v_pot/i);
+    expect(sql).toMatch(/p_reason\s*=\s*'poker_win'\s+AND\s+v_total\s*<>\s*v_pot\s*-\s*floor\(v_pot\s*\*\s*0\.05\)/i);
+  });
+
+  it("removes the recovery row in the same transaction as balance credits", () => {
+    expect(sql).toMatch(/UPDATE\s+public\.eris_economy[\s\S]*UPDATE\s+public\.bot_data\s+SET\s+data\s*=\s*v_state/i);
+    expect(sql).toContain("alreadySettled");
   });
 });

@@ -175,28 +175,31 @@ calls only deduct once.
 
 ## 7. Migration philosophy
 
-Migrations are **numbered SQL files** committed to the repo, applied manually
-against whatever Postgres your bot points at. Not Knex, not Prisma, not
-Supabase CLI migrations — just plain `.sql` you can pipe into `psql`.
+Migrations are **ordered SQL files** committed under each bot package. Eris
+currently has migrations `001` through `015`; the later files cover inventory,
+banking, stock portfolios, lottery settlement, RLS lockdown, and idempotent
+poker settlement in addition to the original balance/version work.
 
-- `packages/eris/migrations/001_add_economy_version.sql`
-- `packages/eris/migrations/002_atomic_balance_rpc.sql`
-- `packages/irene/migrations/20260427033429-per-entity-tables.sql`
+The preferred Eris path is the checksum-tracked runner:
 
-The file headers tell you how to apply them
-(`packages/eris/migrations/002_atomic_balance_rpc.sql` lines 16-18):
+```bash
+DATABASE_URL="$DATABASE_URL" npm run migrate --workspace=@defnotean/eris
+```
+
+It takes a PostgreSQL advisory lock, applies unapplied files in filename order,
+and refuses to continue if an already-applied file's checksum changed. Use a
+direct PostgreSQL connection string; `SUPABASE_URL` is the REST endpoint and
+cannot execute migrations. You can still apply one file directly:
 
 ```bash
 psql $DATABASE_URL -f packages/eris/migrations/002_atomic_balance_rpc.sql
 ```
 
-Or paste into the Supabase SQL editor. The codebase assumes migrations are
-**additive and idempotent** — every CREATE uses `IF NOT EXISTS`, every ALTER
-uses `IF NOT EXISTS`, the RPC uses `CREATE OR REPLACE`. Rolling out is a
-strict superset: apply the migration first, then deploy the code that uses
-it. The Eris atomic-balance path proves this — code without migration 002
-falls through to the CAS loop and logs the gap; code with migration 002 just
-uses it.
+Or paste it into the Supabase SQL editor. Apply migrations before the code that
+depends on them. Balance mutations retain a single-process CAS fallback when
+RPC 002 is missing; money-changing stock, lottery, and poker settlement paths
+fail closed when migrations 012, 013, or 015 are missing because their legacy
+multi-write fallbacks could duplicate or lose currency.
 
 Local Supabase / Docker Supabase / plain Postgres: same files, same
 ordering, same `psql -f`.

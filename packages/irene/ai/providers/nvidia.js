@@ -92,14 +92,18 @@ export async function quickReply(_client, systemInstruction, userText, context) 
     });
     if (!res.ok) {
       log(`[NVIDIA] quickReply HTTP ${res.status}`);
-      return;
+      return null;
     }
     const data = await res.json();
     const text = data.choices?.[0]?.message?.content?.trim();
     if (text && context?.reply) {
       await context.reply(text).catch(() => {});
     }
-  } catch (e) { log(`[NVIDIA] quickReply: ${e.message}`); }
+    return text || null;
+  } catch (e) {
+    log(`[NVIDIA] quickReply: ${e.message}`);
+    return null;
+  }
 }
 
 // ─── Looks-like-task heuristic ─────────────────────────────────────────────

@@ -10,6 +10,7 @@ import { getBadWords, saveLockdown, clearLockdown, saveSlowmode, clearSlowmode }
 const joinTimestamps  = new Map();   // guildId -> [ms, ...]
 const lockedDown      = new Set();   // guildIds in lockdown
 const lockdownTimers  = new Map();   // guildId -> timeout handle
+const lockdownSnapshots = new Map(); // guildId -> Map(channelId, SendMessages state)
 const msgTimestamps   = new Map();   // `guildId-userId` -> [ms, ...]
 const warnedSpam      = new Set();   // `guildId-userId` already warned this window
 
@@ -28,6 +29,12 @@ const SPAM_WINDOW_MS    = 4_000;
 const SPAM_TIMEOUT_S    = 60;         // timeout for spammers
 const MENTION_LIMIT     = 5;          // unique mentions per message before action
 const MENTION_TIMEOUT_S = 300;        // 5 min timeout for mention spam
+
+function permissionValue(overwrite, permission) {
+  if (overwrite?.allow?.has?.(permission)) return true;
+  if (overwrite?.deny?.has?.(permission)) return false;
+  return null;
+}
 
 // ─── Stale entry cleanup — runs every 10 minutes ─────────────────────────────
 // Prevents joinTimestamps and msgTimestamps from growing unbounded over time
@@ -65,6 +72,12 @@ export async function activateLockdown(guild, reason = "raid detected") {
 
   const everyone = guild.roles.everyone;
   const channels = guild.channels.cache.filter((c) => c.isTextBased() && !c.isThread());
+  const snapshot = new Map();
+  for (const ch of channels.values()) {
+    const overwrite = ch.permissionOverwrites.cache.get(everyone.id);
+    snapshot.set(ch.id, permissionValue(overwrite, PermissionFlagsBits.SendMessages));
+  }
+  lockdownSnapshots.set(guild.id, snapshot);
   await Promise.allSettled(
     [...channels.values()].map((ch) =>
       ch.permissionOverwrites.edit(everyone, { SendMessages: false })
@@ -89,17 +102,35 @@ export async function activateLockdown(guild, reason = "raid detected") {
 
 export async function deactivateLockdown(guild, reason = "manual unlock") {
   if (!lockedDown.has(guild.id)) return false;
+
+  const everyone = guild.roles.everyone;
+  const snapshot = lockdownSnapshots.get(guild.id);
+  if (!snapshot) {
+    // A restart can recover the lockdown marker without the original ACLs.
+    // Guessing "unset" would erase an intentional read-only deny, so leave the
+    // lockdown in place for an administrator to resolve explicitly.
+    return false;
+  }
+
+  const results = await Promise.allSettled(
+    [...snapshot].map(async ([channelId, SendMessages]) => {
+      const ch = guild.channels.cache.get(channelId);
+      if (!ch) {
+        snapshot.delete(channelId);
+        return;
+      }
+      await ch.permissionOverwrites.edit(everyone, { SendMessages });
+      snapshot.delete(channelId);
+    })
+  );
+  if (results.some((result) => result.status === "rejected") || snapshot.size > 0) {
+    return false;
+  }
+
+  lockdownSnapshots.delete(guild.id);
   lockedDown.delete(guild.id);
   clearLockdown(guild.id);
   if (lockdownTimers.has(guild.id)) { clearTimeout(lockdownTimers.get(guild.id)); lockdownTimers.delete(guild.id); }
-
-  const everyone = guild.roles.everyone;
-  const channels = guild.channels.cache.filter((c) => c.isTextBased() && !c.isThread());
-  await Promise.allSettled(
-    [...channels.values()].map((ch) =>
-      ch.permissionOverwrites.edit(everyone, { SendMessages: null })
-    )
-  );
 
   const embed = new EmbedBuilder()
     .setTitle("✅ Lockdown Lifted")

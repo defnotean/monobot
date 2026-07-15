@@ -107,7 +107,13 @@ function makeFakeSupabase() {
       .filter(r => r.bot_id === params.match_bot && r.user_id === params.match_user)
       .filter(r => typeof r.embedding === "string" && r.embedding.length > 0)
       .slice(0, (params.match_count as number) ?? 3)
-      .map(r => ({ type: r.type, content: r.content, similarity: 0.9 }));
+      .map(r => ({
+        type: r.type,
+        content: r.content,
+        similarity: 0.9,
+        channel_id: r.channel_id,
+        guild_id: r.guild_id,
+      }));
     return { data, error: null };
   }
 
@@ -137,6 +143,8 @@ function seedExchanges(count: number, userId = "u1") {
       id: `exchange-${userId}-${i}`,
       bot_id: "test-eris",
       user_id: userId,
+      channel_id: "c1",
+      guild_id: "g1",
       type: "exchange",
       content: `fragment ${i}: something happened`,
       created_at: ISO_AT(i - count),
@@ -235,7 +243,10 @@ describe("consolidateMemories writes a retrievable summary row", () => {
     });
 
     // The 100 originals are gone; only the consolidated row carries an embedding.
-    const hits = await semantic.searchRelevantMemories("test-eris", "u1", "tell me about the gaming drama");
+    const hits = await semantic.searchRelevantMemories(
+      "test-eris", "u1", "tell me about the gaming drama", 3,
+      { channelId: "c1", guildId: "g1" },
+    );
     expect(hits.length).toBeGreaterThan(0);
     expect(hits.some(h => h.type === semantic.CONSOLIDATED_TYPE)).toBe(true);
   });
@@ -257,7 +268,10 @@ describe("consolidateMemories writes a retrievable summary row", () => {
     const rpcSpy = vi.spyOn(fakeSupabase, "rpc").mockResolvedValue({ data: [], error: null });
     // Use a stale-cache-free key by querying with the keyword the summary
     // produced — "banned" overlaps the consolidated row's keywords.
-    const hits = await semantic.searchRelevantMemories("test-eris", "u1", "was anyone banned recently");
+    const hits = await semantic.searchRelevantMemories(
+      "test-eris", "u1", "was anyone banned recently", 3,
+      { channelId: "c1", guildId: "g1" },
+    );
     expect(hits.some(h => h.type === semantic.CONSOLIDATED_TYPE)).toBe(true);
     rpcSpy.mockRestore();
   });

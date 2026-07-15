@@ -141,10 +141,10 @@ npm run provision:gemini-keys    # create restricted Gemini keys with gcloud
 
 Current verification baseline:
 
-- Eris: **1,374 tests**
-- Irene: **1,613 tests**
-- Shared: **367 tests**
-- Total: **3,354 tests**
+- Eris: **1,628 tests**
+- Irene: **1,869 tests**
+- Shared: **474 tests**
+- Total: **3,971 tests**
 
 ## Documentation
 

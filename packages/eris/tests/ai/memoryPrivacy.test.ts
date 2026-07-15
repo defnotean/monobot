@@ -14,6 +14,8 @@ type Row = {
   id?: string;
   bot_id?: string;
   user_id?: string;
+  channel_id?: string | null;
+  guild_id?: string | null;
   type?: string;
   content?: string;
   keywords?: string[];
@@ -35,6 +37,10 @@ function makeFakeSupabase(opts: { deleteError?: string } = {}) {
         const builder = {
           eq(col: keyof Row, val: unknown) {
             filters.push(r => r[col] === val);
+            return builder;
+          },
+          overlaps(col: keyof Row, values: unknown[]) {
+            filters.push(r => Array.isArray(r[col]) && values.some(v => (r[col] as unknown[]).includes(v)));
             return builder;
           },
           order(col: keyof Row, o?: { ascending?: boolean }) {
@@ -159,6 +165,43 @@ describe("storeEpisode secret-tier privacy", () => {
     );
     expect(fakeSupabase._tables.eris_episodic_memories).toHaveLength(2);
   });
+
+  it("keeps dedupe isolated to the source audience", async () => {
+    await semantic.storeEpisode("test-eris", "u1", "dm-channel", null, "exchange", "private-codename-orchid");
+    await semantic.storeEpisode("test-eris", "u1", "public-channel", "guild-1", "exchange", "private-codename-orchid");
+
+    expect(fakeSupabase._tables.eris_episodic_memories).toHaveLength(2);
+    expect(fakeSupabase._tables.eris_episodic_memories.map(r => r.channel_id).sort()).toEqual(["dm-channel", "public-channel"]);
+  });
+});
+
+describe("semantic recall audience scope", () => {
+  it("recalls a DM memory in the same DM but not in a public channel", async () => {
+    seed([{
+      id: "private",
+      channel_id: "dm-channel",
+      guild_id: null,
+      content: "private-codename-orchid",
+      keywords: ["private", "codename", "orchid"],
+    }]);
+
+    const dmHits = await semantic.searchRelevantMemories(
+      "test-eris", "u1", "private codename orchid", 3,
+      { channelId: "dm-channel", guildId: null },
+    );
+    const publicHits = await semantic.searchRelevantMemories(
+      "test-eris", "u1", "private codename orchid", 3,
+      { channelId: "public-channel", guildId: "guild-1" },
+    );
+
+    expect(dmHits.map(hit => hit.content)).toContain("private-codename-orchid");
+    expect(publicHits).toEqual([]);
+  });
+
+  it("fails closed when a caller omits the current audience", async () => {
+    seed([{ id: "private", channel_id: "dm-channel", guild_id: null, content: "private-codename-orchid", keywords: ["orchid"] }]);
+    await expect(semantic.searchRelevantMemories("test-eris", "u1", "orchid")).resolves.toEqual([]);
+  });
 });
 
 // ─── Right to be forgotten: episodic delete-by-user ─────────────────────────
@@ -169,8 +212,11 @@ function seed(rows: Array<Partial<Row>>) {
       id: r.id ?? String(Math.random()),
       bot_id: r.bot_id ?? "test-eris",
       user_id: r.user_id ?? "u1",
+      channel_id: r.channel_id,
+      guild_id: r.guild_id,
       type: r.type ?? "exchange",
       content: r.content ?? "x",
+      keywords: r.keywords,
       created_at: r.created_at ?? new Date().toISOString(),
     });
   }

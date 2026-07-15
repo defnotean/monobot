@@ -25,25 +25,22 @@ You should already be set up per [GETTING_STARTED.md](../GETTING_STARTED.md). Th
 
 ## Applying database migrations locally
 
-The repo ships SQL migrations under `packages/eris/migrations/`. Current set:
-
-- `001_add_economy_version.sql` — adds the `version` column used by the version-CAS path on `irene_economy`.
-- `002_atomic_balance_rpc.sql` — installs the `eris_add_balance` Postgres function. One round-trip, server-side atomic increment with a row lock.
+The repo ships ordered SQL migrations under `packages/eris/migrations/`
+(`001` through `015`). Run the complete set so atomic bank, stock, lottery and
+poker operations and the RLS lockdown are present.
 
 Apply them against your local/dev Postgres or Supabase project (use the connection string of your **dev** project, never prod):
 
 ```bash
-# Direct psql against your DATABASE_URL (Supabase: Settings → Database → Connection string)
-psql "$DATABASE_URL" -f packages/eris/migrations/001_add_economy_version.sql
-psql "$DATABASE_URL" -f packages/eris/migrations/002_atomic_balance_rpc.sql
-
-# Or use the bundled migration runner (loads .env, applies any new files)
+# Checksum-tracked runner (loads packages/eris/.env and the root .env)
 npm run migrate --workspace=@defnotean/eris
 ```
 
 If you'd rather paste-and-run, open Supabase → SQL Editor → paste the file contents → Run.
 
-**The JS path falls back gracefully if `eris_add_balance` isn't deployed.** On the first balance mutation, `database.js` probes the RPC; if Postgres returns `PGRST202` (function not found), it logs once and switches the process over to the version-CAS path for the rest of its lifetime. Existing self-hosters who haven't applied migration 002 keep working — they just don't get the atomic-update guarantee until they do. Apply 002 and restart to opt in.
+The balance path can fall back to version-CAS if migration 002 is absent.
+Stock, lottery, and poker settlement intentionally fail closed without their
+atomic migrations; applying the complete set is required for those features.
 
 ## Terminal 1 — auto-reload bot
 

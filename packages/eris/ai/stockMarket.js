@@ -9,6 +9,7 @@
 // (catches up if bot was offline).
 
 import { log } from "../utils/logger.js";
+import { checkedSupabase } from "../database/supabaseResult.js";
 
 const TICK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const HISTORY_LEN = 96;                  // 24h of 15-min ticks
@@ -60,7 +61,11 @@ async function _load() {
       const { getSupabase } = await import("../database.js");
       const sb = getSupabase();
       if (!sb) { _state = _freshState(); return _state; }
-      const { data } = await sb.from("bot_data").select("data").eq("id", "eris_stocks").single();
+      const { data } = await checkedSupabase(
+        sb.from("bot_data").select("data").eq("id", "eris_stocks").single(),
+        "load stock-market state",
+        { allowCodes: ["PGRST116"] },
+      );
       const stored = data?.data;
       if (stored && typeof stored === "object") {
         // Validate each ticker shape — fall back to seed if corrupt
@@ -97,7 +102,7 @@ async function _load() {
       }
     } catch (err) {
       log(`[Stocks] Load failed: ${err.message}`);
-      _state = _freshState();
+      throw err;
     }
     return _state;
   })();
@@ -113,9 +118,10 @@ function _scheduleSave() {
       const { getSupabase } = await import("../database.js");
       const sb = getSupabase();
       if (!sb || !_state) return;
-      await sb.from("bot_data").upsert({ id: "eris_stocks", data: _state });
+      await checkedSupabase(sb.from("bot_data").upsert({ id: "eris_stocks", data: _state }), "save stock-market state");
     } catch (err) {
       log(`[Stocks] Save failed: ${err.message}`);
+      _scheduleSave();
     }
   }, 2000);
 }
@@ -160,16 +166,17 @@ async function _getPortfolioFromDb(userId) {
 }
 
 async function _tryTradeRpc(name, params) {
-  if (!_stockRpcAvailable) return null;
+  const unavailable = { ok: false, reason: "atomic_stock_unavailable" };
+  if (!_stockRpcAvailable) return unavailable;
   const { getSupabase } = await import("../database.js");
   const sb = getSupabase();
-  if (!sb?.rpc) return null;
+  if (!sb?.rpc) return unavailable;
   const { data, error } = await sb.rpc(name, params);
   if (error) {
     if (_isMissingDbObject(error)) {
       _stockRpcAvailable = false;
-      log("[Stocks] Atomic stock RPCs not deployed — using legacy in-process trade path. Apply migrations/012_atomic_stock_portfolios_rpc.sql for cross-process trade safety.");
-      return null;
+      log("[Stocks] Atomic stock RPCs not deployed — refusing money-changing stock trades. Apply migrations/012_atomic_stock_portfolios_rpc.sql.");
+      return unavailable;
     }
     return { ok: false, reason: error.message || "stock_rpc_failed" };
   }

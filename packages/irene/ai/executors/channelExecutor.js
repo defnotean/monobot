@@ -30,6 +30,8 @@ export const CHANNEL_PERMISSION_ALIASES = {
   move_members: "allow_move_members",
 };
 
+const DELEGATED_CHANNEL_PRIVILEGES = new Set(["MentionEveryone", "ManageMessages", "MoveMembers"]);
+
 function _setChannelPermList(out, list, value) {
   for (const key of Array.isArray(list) ? list : []) {
     const target = CHANNEL_PERMISSION_ALIASES[key];
@@ -55,6 +57,19 @@ export function normalizeChannelPermissionArgs(input = {}) {
   delete out.deny;
   delete out.inherit;
   return out;
+}
+
+function channelGrantError(member, guild, perms) {
+  if (member?.id === guild?.ownerId || member?.permissions?.has?.(PermissionFlagsBits.Administrator)) {
+    return null;
+  }
+  const missing = Object.entries(perms)
+    .filter(([permissionName, value]) => (value === true || value === null)
+      && DELEGATED_CHANNEL_PRIVILEGES.has(permissionName)
+      && !member?.permissions?.has?.(PermissionFlagsBits[permissionName]))
+    .map(([permissionName]) => permissionName);
+  if (!missing.length) return null;
+  return `You cannot grant channel permissions you do not hold: ${missing.join(", ")}`;
 }
 
 export async function execute(toolName, input, message, ctx) {
@@ -243,6 +258,14 @@ export async function execute(toolName, input, message, ctx) {
       const targetId = target.id;
       // Reset: remove all overrides for this target
       if (input.reset) {
+        const overwrite = ch.permissionOverwrites?.cache?.get?.(targetId);
+        const liftedDenies = {};
+        for (const permissionName of DELEGATED_CHANNEL_PRIVILEGES) {
+          const flag = PermissionFlagsBits[permissionName];
+          if (overwrite?.deny?.has?.(flag)) liftedDenies[permissionName] = null;
+        }
+        const resetGrantErr = channelGrantError(message.member, guild, liftedDenies);
+        if (resetGrantErr) return resetGrantErr;
         await ch.permissionOverwrites.delete(targetId, `Permissions reset ${by}`);
         return `Reset all permission overrides for ${input.target} on #${ch.name}`;
       }
@@ -263,6 +286,8 @@ export async function execute(toolName, input, message, ctx) {
       if (input.allow_stream        !== undefined) perms.Stream                = p(input.allow_stream);
       if (input.allow_move_members  !== undefined) perms.MoveMembers           = p(input.allow_move_members);
       if (!Object.keys(perms).length) return "No permission changes specified";
+      const grantErr = channelGrantError(message.member, guild, perms);
+      if (grantErr) return grantErr;
       await ch.permissionOverwrites.edit(targetId, perms, { reason: `Permissions set ${by}` });
       const changed = Object.entries(perms).map(([k, v]) => `${k}: ${v === null ? "inherit" : v}`).join(", ");
       return `Updated permissions for ${input.target} on #${ch.name} — ${changed}`;

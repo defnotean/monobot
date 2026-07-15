@@ -76,7 +76,13 @@ describe("createLongMemory", () => {
     const context = await memory.buildLongTermContext("user-1", "channel-1", "what do you remember?");
 
     expect(db.selects.some((s) => s.id === "custom_consciousness")).toBe(true);
-    expect(semanticCalls[0]).toEqual(["custom-bot", "user-1", "what do you remember?", 3]);
+    expect(semanticCalls[0]).toEqual([
+      "custom-bot",
+      "user-1",
+      "what do you remember?",
+      3,
+      { channelId: "channel-1", guildId: null },
+    ]);
     expect(context).toContain("[MOOD REASON: focused]");
     expect(context).toContain("[YOUR CURRENT ASPIRATIONS: finish the refactor]");
     expect(context).toContain("[SELF-REFLECTION: \"keep the memory layer boring\"]");
@@ -101,6 +107,18 @@ describe("createLongMemory", () => {
     fill(ireneLike);
     expect(ireneLike.getEpisodes().get("user-1")).toHaveLength(16);
     expect(ireneLike.getChannelEpisodes().get("channel-1")).toHaveLength(11);
+  });
+
+  test("does not promote a local episode into another channel's context", async () => {
+    const memory = createLongMemory({ now: () => 1_700_000_000_000 });
+    memory.recordEpisode("user-1", "dm-channel", { type: "bond", content: "private-codename-orchid" });
+
+    const dmContext = await memory.buildLongTermContext("user-1", "dm-channel");
+    const publicContext = await memory.buildLongTermContext("user-1", "public-channel");
+
+    expect(dmContext).toContain("private-codename-orchid");
+    expect(publicContext).not.toContain("private-codename-orchid");
+    memory._internal.reset();
   });
 
   test("keeps Eris-style LRU mood cache distinct from Irene-style FIFO mood cache", () => {

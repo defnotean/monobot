@@ -2,6 +2,7 @@
 
 import { log } from "./logger.js";
 import { warnEmbed, logEmbed, LC } from "./embeds.js";
+import { PermissionFlagsBits } from "discord.js";
 
 // ─── Join tracking: guildId → [{ timestamp, userId }, ...] ──────────────────
 const joinTracking = new Map();
@@ -14,6 +15,17 @@ const raidLogs = new Map();
 
 // ─── Auto-unlock timers: guildId → timeoutId ────────────────────────────────
 const unlockTimers = new Map();
+
+// guildId → channelId → permission values that existed before lockdown.
+// Repeated raid triggers must reuse the first snapshot rather than recording
+// the temporary deny as the new baseline.
+const lockdownSnapshots = new Map();
+
+function permissionValue(overwrite, permission) {
+  if (overwrite?.allow?.has?.(permission)) return true;
+  if (overwrite?.deny?.has?.(permission)) return false;
+  return null;
+}
 
 // ─── Account age whitelist: accounts older than X days bypass raid detection ──
 const TRUSTED_ACCOUNT_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -161,15 +173,29 @@ async function executeRaidAction(guild, settings, joinCount, recentJoins) {
  */
 export async function lockdownServer(guild) {
   const everyoneRole = guild.roles.everyone;
+  let snapshots = lockdownSnapshots.get(guild.id);
+  if (!snapshots) {
+    snapshots = new Map();
+    lockdownSnapshots.set(guild.id, snapshots);
+  }
 
   for (const channel of guild.channels.cache.values()) {
     if (channel.isTextBased() || channel.isVoiceBased()) {
+      if (!snapshots.has(channel.id)) {
+        const overwrite = channel.permissionOverwrites.cache.get(everyoneRole.id);
+        snapshots.set(channel.id, {
+          SendMessages: permissionValue(overwrite, PermissionFlagsBits.SendMessages),
+          Connect: permissionValue(overwrite, PermissionFlagsBits.Connect),
+        });
+      }
       try {
         await channel.permissionOverwrites.edit(everyoneRole, {
           SendMessages: false,
           Connect: false,
-        }).catch(() => {});
-      } catch {}
+        });
+      } catch (err) {
+        log(`[Raid] Failed to lock channel ${channel.id}: ${err?.message ?? err}`);
+      }
     }
   }
 }
@@ -179,17 +205,33 @@ export async function lockdownServer(guild) {
  */
 export async function unlockServer(guild) {
   const everyoneRole = guild.roles.everyone;
+  const snapshots = lockdownSnapshots.get(guild.id);
+  if (!snapshots) {
+    // Without a pre-lockdown snapshot, deleting or nulling an overwrite could
+    // expose a private/read-only channel. Fail closed instead.
+    log(`[Raid] Refusing to unlock ${guild.id} without an ACL snapshot`);
+    return false;
+  }
 
-  for (const channel of guild.channels.cache.values()) {
-    if (channel.isTextBased() || channel.isVoiceBased()) {
-      try {
-        const overwrite = channel.permissionOverwrites.cache.get(everyoneRole.id);
-        if (overwrite) {
-          await channel.permissionOverwrites.delete(everyoneRole).catch(() => {});
-        }
-      } catch {}
+  for (const [channelId, previous] of snapshots) {
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel) {
+      snapshots.delete(channelId);
+      continue;
+    }
+    try {
+      await channel.permissionOverwrites.edit(everyoneRole, previous);
+      snapshots.delete(channelId);
+    } catch (err) {
+      log(`[Raid] Failed to restore channel ${channelId}: ${err?.message ?? err}`);
     }
   }
+
+  if (snapshots.size === 0) {
+    lockdownSnapshots.delete(guild.id);
+    return true;
+  }
+  return false;
 }
 
 /**

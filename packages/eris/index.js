@@ -138,13 +138,16 @@ const server = http.createServer(async (req, res) => {
   // during Discord's normal reconnect churn. /readyz is the stricter
   // Discord-gateway readiness probe for dashboards/automation.
   if (pathname === "/healthz" || pathname === "/readyz") {
-    const ready = isDiscordGatewayReady();
+    const discordReady = isDiscordGatewayReady();
+    const persistenceReady = isPersistenceHealthy();
+    const ready = discordReady && persistenceReady;
     const liveness = pathname === "/healthz";
     res.setHeader("Content-Type", "application/json");
     res.writeHead(liveness || ready ? 200 : 503);
     res.end(JSON.stringify({
       ok: liveness ? true : ready,
-      discord: ready ? "ready" : "disconnected",
+      discord: discordReady ? "ready" : "disconnected",
+      persistence: persistenceReady ? "ready" : "unavailable",
       ws_status: client.ws?.status ?? null,
       bot: client.user?.tag || "connecting...",
       uptime: process.uptime(),
