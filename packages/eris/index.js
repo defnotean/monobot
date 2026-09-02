@@ -13,6 +13,7 @@ import http from "http";
 import config from "./config.js";
 import { initDatabase, flushAll, isPersistenceHealthy } from "./database.js";
 import { log, redact } from "./utils/logger.js";
+import { initTrustedUsers } from "./utils/permissions.js";
 import { maybeAutoDeploy } from "./utils/autoDeploy.js";
 import { sendAlert } from "@defnotean/shared/alert";
 import { handleAdminAuxRoute } from "./api/adminAuxRoutes.js";
@@ -177,6 +178,9 @@ async function main() {
 
   await initDatabase();
   startPersistenceMonitor();
+  // Trusted users live in bot_data — load before commands/events so sync
+  // permission checks (isTrusted/canCustomize) see the persisted set from boot.
+  await initTrustedUsers().catch((e) => log(`[Permissions] init: ${e.message}`));
   await loadCommands();
   await loadEvents();
 

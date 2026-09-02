@@ -118,6 +118,20 @@ export async function runLockedAiTurn({
       incrementBudget({ userId: message.author.id, guildId: message.guild?.id });
     }
 
+    // Defensive firewall check before the AI/tool loop. The verdict is already
+    // awaited by the orchestrator (events/messageCreate.js firewallGate line
+    // ~191), but re-checking here keeps the invariant local to the AI turn so a
+    // future caller reordering can't let an injected message drive tool side
+    // effects. getFirewallVerdict() is memoized — no second network call.
+    if (firewallPromise && message.author.id !== config.ownerId) {
+      const v = await getFirewallVerdict();
+      if (!v.safe) {
+        history.length = historyLenBeforeTurn;
+        saveConversation(channelKey, history);
+        return;
+      }
+    }
+
     const { runGeminiChat } = await import("../../ai/providers/index.js");
     let geminiResult;
     const t0Ai = Date.now();

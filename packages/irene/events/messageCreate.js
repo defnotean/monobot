@@ -250,15 +250,30 @@ export async function execute(message) {
     });
   } finally {
     typingRefresh.current?.();
-    _processingUsers.delete(userKey);
-    const queued = _messageQueue.get(userKey);
-    if (queued?.length) {
-      const next = queued.shift();
-      if (queued.length === 0) _messageQueue.delete(userKey);
-      execute(next).catch((err) => {
-        log(`[Error] Queued message failed: ${err.message}`);
-        _processingUsers.delete(userKey);
-      });
-    }
+    drainQueue(userKey);
   }
+}
+
+/**
+ * Process queued messages for a userKey sequentially. Each completed turn
+ * (success OR failure — including failures thrown before messageCreate's
+ * big try/finally) chains the next message, so a queued message that errors
+ * early can never orphan the rest of the queue. `_processingUsers` is
+ * re-added for the next turn and only removed once the queue is fully drained.
+ */
+function drainQueue(userKey) {
+  const queued = _messageQueue.get(userKey);
+  if (!queued?.length) {
+    _processingUsers.delete(userKey);
+    _messageQueue.delete(userKey);
+    return;
+  }
+  // Re-mark as processing for the next turn so a new incoming message queues
+  // instead of running concurrently.
+  _processingUsers.add(userKey);
+  const next = queued.shift();
+  if (queued.length === 0) _messageQueue.delete(userKey);
+  execute(next).finally(() => {
+    drainQueue(userKey);
+  });
 }

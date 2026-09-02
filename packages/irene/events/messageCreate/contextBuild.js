@@ -87,8 +87,6 @@ export function safeIdentityName(message) {
 export async function resolveDMContext(message) {
   const userId = message.author.id;
   const isBotOwner = userId === config.ownerId;
-  let bestGuild = null;
-  let isAdmin = false;
 
   const guildIds = [...message.client.guilds.cache.keys()];
   const checks = guildIds.map(async (guildId) => {
@@ -111,10 +109,19 @@ export async function resolveDMContext(message) {
   });
 
   const results = await Promise.all(checks);
+  let bestGuild = null;
+  let isAdmin = false;
   for (const res of results) {
     if (!res) continue;
-    if (!bestGuild || (!isAdmin && res.memberAdmin)) bestGuild = res.guild;
-    if (res.memberAdmin) isAdmin = true;
+    // Bind the DM context to the first guild where the user is a member, but
+    // prefer a guild where they hold admin/mod rights. `isAdmin` is set strictly
+    // from the guild we bind to — never accumulated across guilds — so an admin
+    // role in one server can't flush admin context into a DM session bound to a
+    // different (non-admin) server.
+    if (!bestGuild || (!isAdmin && res.memberAdmin)) {
+      bestGuild = res.guild;
+      isAdmin = res.memberAdmin;
+    }
   }
 
   return { guild: bestGuild, isAdmin };

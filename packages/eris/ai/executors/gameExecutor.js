@@ -110,7 +110,10 @@ export async function execute(toolName, input, message, _context) {
         db.deleteActiveGame(message.channel.id, message.author.id, "word_scramble");
         if (game.stake > 0) {
           await db.updateBalance(message.author.id, game.stake, "gamble_win", "word_scramble");
-          await db.recordGameResult(message.author.id, "word_scramble", true, game.stake, game.stake * 2);
+          // Non-escrow game: the win credits exactly `stake` to the wallet, so
+          // record that as the payout. Recording stake*2 here (as if the stake
+          // had been escrowed) inflated total_won by 2× vs. every other game.
+          await db.recordGameResult(message.author.id, "word_scramble", true, game.stake, game.stake);
         }
         const { wordScrambleResultEmbed } = await import("../gameVisuals.js");
         await message.channel.send({ embeds: [wordScrambleResultEmbed(true, game.gameState.word, game.gameState.attempts, game.stake)] });
@@ -164,14 +167,22 @@ export async function execute(toolName, input, message, _context) {
       game.gameState.attempts++;
       if (guess === game.gameState.secret) {
         db.deleteActiveGame(message.channel.id, message.author.id, "number_guess");
-        if (game.stake > 0) await db.updateBalance(message.author.id, game.stake, "gamble_win", "number_guess");
+        if (game.stake > 0) {
+          await db.updateBalance(message.author.id, game.stake, "gamble_win", "number_guess");
+          await db.recordGameResult(message.author.id, "number_guess", true, game.stake, game.stake);
+        }
         const { numberGuessResultEmbed } = await import("../gameVisuals.js");
         await message.channel.send({ embeds: [numberGuessResultEmbed(true, game.gameState.secret, game.gameState.attempts, game.stake)] });
         return "you got it";
       }
       if (game.gameState.attempts >= game.gameState.maxAttempts) {
         db.deleteActiveGame(message.channel.id, message.author.id, "number_guess");
-        if (game.stake > 0) await db.updateBalance(message.author.id, -game.stake, "gamble_loss", "number_guess");
+        if (game.stake > 0) {
+          await db.updateBalance(message.author.id, -game.stake, "gamble_loss", "number_guess");
+          // Match word_scramble/giveup: record the loss so the W/L ledger and
+          // streaks stay consistent with the wins above.
+          await db.recordGameResult(message.author.id, "number_guess", false, game.stake, 0);
+        }
         const { numberGuessResultEmbed } = await import("../gameVisuals.js");
         await message.channel.send({ embeds: [numberGuessResultEmbed(false, game.gameState.secret, game.gameState.attempts, game.stake)] });
         return "out of guesses";
@@ -235,6 +246,10 @@ export async function execute(toolName, input, message, _context) {
         const transfer = await db.transferBalance(loserId, winnerId, resolved.stake, 0, "duel_loss", `duel`);
         if (!transfer.ok) return `duel couldn't settle because the loser couldn't pay: ${transfer.reason}`;
       }
+      // Record stats to match the duel button path (interactionCreate.js).
+      const winnerPayout = resolved.escrowed ? resolved.stake * 2 : resolved.stake;
+      await db.recordGameResult(winnerId, "duel", true, resolved.stake || 0, winnerPayout);
+      await db.recordGameResult(loserId, "duel", false, resolved.stake || 0, 0);
       const guild = message.guild;
       const winnerName = guild?.members.cache.get(winnerId)?.displayName || "Winner";
       const loserName = guild?.members.cache.get(loserId)?.displayName || "Loser";

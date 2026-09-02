@@ -219,14 +219,24 @@ function _consumeServerRemoval(guildId, userId) {
 }
 
 // Track guilds we've already warned about missing ViewAuditLog — one warning
-// per guild instead of flooding logs every event.
+// per guild instead of flooding logs every event. Reclaims entries so a guild
+// that later regains the permission (or leaves) can be warned about again.
 const _missingAuditPermWarned = new Set();
+setInterval(() => _missingAuditPermWarned.clear(), 60 * 60_000);
 
 // Audit-log cache — TTL'd, includes room for up to 20 recent entries so we can
 // MATCH BY TARGET instead of blindly trusting the first row. Previously, if two
 // voice events fired back-to-back we'd attribute both to the same audit entry.
 const _auditLogCache = new Map();
 const AUDIT_CACHE_TTL = 1500;
+// Periodic sweep — stale entries were previously skipped on read but never
+// removed, so a one-off fetch per guild:type pair leaked forever.
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of _auditLogCache) {
+    if (now - v.timestamp > AUDIT_CACHE_TTL) _auditLogCache.delete(k);
+  }
+}, 60_000);
 
 async function fetchRecentAuditEntries(guild, type) {
   const key = `${guild.id}:${type}`;
@@ -575,6 +585,15 @@ export async function execute(oldState, newState) {
         await sendModLog(guild, histEmbed);
       }
 
+      // Re-check the member count BEFORE wiping any state — a member could have
+      // joined while we were awaiting sendModLog above. If so, abort the close
+      // while all tracking maps are still intact, so the VC stays managed.
+      const freshCh = guild.channels.cache.get(ch.id);
+      if (freshCh && freshCh.members.filter((m) => !m.user.bot).size > 0) {
+        log(`[TempVC] Race condition avoided — member joined "${ch.name}" while closing; aborting delete`);
+        return;
+      }
+
       // Clean up history maps
       tempVcCreatedAt.delete(ch.id);
       tempVcMembers.delete(ch.id);
@@ -588,14 +607,6 @@ export async function execute(oldState, newState) {
       const rt = renameTimers.get(ch.id);
       if (rt?.timer) clearTimeout(rt.timer);
       renameTimers.delete(ch.id);
-      // Re-check the member count right before deleting — a member could have joined
-      // while we were awaiting sendModLog above, and we don't want to delete a live channel.
-      const freshCh = guild.channels.cache.get(ch.id);
-      if (freshCh && freshCh.members.filter((m) => !m.user.bot).size > 0) {
-        log(`[TempVC] Race condition avoided — member joined "${ch.name}" while closing; aborting delete`);
-        return;
-      }
-
       // Delete paired text channel if one exists separately
       const textChId = tempTextChannels.get(ch.id);
       tempTextChannels.delete(ch.id); // always clean up, even if textChId === ch.id

@@ -154,6 +154,24 @@ export function createQueue(guildId, voiceChannel, textChannel) {
   return queue;
 }
 
+/**
+ * Get or create the queue for a guild, with the voice connection established,
+ * all under the per-guild lock so two concurrent callers can't both create the
+ * queue and double-connect to the voice channel. The lock is released before
+ * returning — callers must NOT hold it when calling playSong() (which re-enters
+ * the lock and would deadlock).
+ */
+export async function getOrCreateQueue(guildId, voiceChannel, textChannel) {
+  return withQueueLock(guildId, async () => {
+    let q = getQueue(guildId);
+    if (!q) {
+      q = createQueue(guildId, voiceChannel, textChannel);
+      await connectToChannel(q);
+    }
+    return q;
+  });
+}
+
 export function deleteQueue(guildId) {
   const queue = queues.get(guildId);
   if (!queue) return;
@@ -176,7 +194,7 @@ export function deleteQueue(guildId) {
   // object itself is also orphaned but anyone holding a reference shouldn't
   // be able to do harm to the old player.
   queue.player = null;
-  queue.tracks = [];
+  queue.songs = [];
   queue._destroyed = true;
 }
 
@@ -486,6 +504,7 @@ function handleTrackEnd(queue) {
       playSong(queue).catch((e) => log(`[Music] Auto-advance after TTS: ${e.message}`));
     } else {
       queue.playing = false;
+      if (queue._autoLeaveTimer) clearTimeout(queue._autoLeaveTimer);
       queue._autoLeaveTimer = setTimeout(() => {
         const q = queues.get(queue.guildId);
         if (q && !q.playing && q.songs.length === 0) deleteQueue(queue.guildId);
@@ -517,6 +536,7 @@ function handleTrackEnd(queue) {
   } else {
     queue.playing = false;
     // Auto-leave after 2 minutes of silence
+    if (queue._autoLeaveTimer) clearTimeout(queue._autoLeaveTimer);
     queue._autoLeaveTimer = setTimeout(() => {
       const q = queues.get(queue.guildId);
       if (q && !q.playing && q.songs.length === 0) deleteQueue(queue.guildId);
@@ -1097,11 +1117,11 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
   const client = localTts ? null : getTtsClient();
   if (!localTts && !elevenLabsTts && !client) return;
 
-  let queue = getQueue(guildId);
-  if (!queue) {
-    queue = createQueue(guildId, voiceChannel, textChannel);
-    await connectToChannel(queue);
-  }
+  // Acquire (or create) the queue + voice connection under the per-guild lock.
+  // The lock is released before the slow TTS generation below — playSong()
+  // re-enters the lock itself, and holding it here would deadlock.
+  let queue = await getOrCreateQueue(guildId, voiceChannel, textChannel);
+  if (!isQueueLive(queue)) return;
 
   try {
     const voice = getTtsVoice(guildId);
@@ -1217,6 +1237,10 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
 
     if (!track?.encoded) { log("[TTS] No track to play"); return; }
 
+    // The queue may have been torn down while we generated audio (seconds of
+    // ElevenLabs/Gemini latency). Bail instead of mutating a stale queue.
+    if (!isQueueLive(queue)) { log("[TTS] Queue died during generation — dropping TTS"); return; }
+
     if (!queue.playing || !queue.songs.length) {
       // Nothing playing — just play TTS directly
       queue.songs.unshift(ttsSong);
@@ -1254,12 +1278,15 @@ export async function playTTS(guildId, text, voiceChannel, textChannel) {
 
 export async function playSoundEffect(guildId, url, voiceChannel) {
   const resolveUrl = assertAllowedMusicUrl(url);
-
-  let queue = getQueue(guildId);
-  if (!queue) {
-    queue = createQueue(guildId, voiceChannel, null);
-    await connectToChannel(queue);
+  if (!voiceChannel?.joinable) {
+    throw new Error("You must be in a voice channel to play sounds");
   }
+
+  // Acquire (or create) the queue + voice connection under the per-guild lock
+  // (same double-connect prevention as playTTS). The lock is released before
+  // Lavalink resolution so a slow resolve doesn't serialize all music ops.
+  let queue = await getOrCreateQueue(guildId, voiceChannel, null);
+  if (!isQueueLive(queue)) throw new Error("music session ended before the sound could play");
 
   const node = shoukaku.nodes.values().next().value;
   if (!node) throw new Error("No Lavalink nodes available");
@@ -1272,6 +1299,10 @@ export async function playSoundEffect(guildId, url, voiceChannel) {
   if (!track || !track.encoded) {
     log(`[Soundboard] Lavalink couldn't resolve ${url} — skipping playback`);
     throw new Error("Could not resolve sound effect URL through Lavalink");
+  }
+  if (!isQueueLive(queue)) {
+    log(`[Soundboard] Queue died during resolution — skipping ${url}`);
+    throw new Error("music session ended before the sound could play");
   }
 
   const sfxSong = {

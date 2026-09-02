@@ -88,14 +88,18 @@ export async function execute(toolName, input, message, _context) {
       const won = result === choice;
       // Stake already deducted. On win, credit 2× stake (refund + winnings).
       let newBalance = debit.newBalance;
+      let credited = true;
       if (won) {
         try {
           newBalance = await db.updateBalance(message.author.id, amount * 2, "gamble_win", `coinflip:${choice}`);
         } catch (err) {
+          credited = false;
           log(`[coinflip_bet] win credit failed for ${message.author.id}: ${err?.message || err}`);
         }
       }
-      await db.recordGameResult(message.author.id, "coinflip", won, amount, won ? amount * 2 : 0);
+      // Only record the win stat when the credit actually landed — a swallowed
+      // credit failure must not inflate total_won/wins.
+      if (credited) await db.recordGameResult(message.author.id, "coinflip", won, amount, won ? amount * 2 : 0);
       const { animateEmbed } = await import("../gameVisuals.js");
       const { EmbedBuilder } = await import("discord.js");
       const { embed: cfEmbed, row: cfRow } = coinflipEmbed(choice, result, won, amount, newBalance);
@@ -138,14 +142,16 @@ export async function execute(toolName, input, message, _context) {
       // Stake already deducted. On win, credit 5× stake (refund + 4× winnings)
       // to preserve net payout of +amount*4 from the original semantics.
       let newBalance = debit.newBalance;
+      let credited = true;
       if (won) {
         try {
           newBalance = await db.updateBalance(message.author.id, amount * 5, "gamble_win", `dice:${guess}`);
         } catch (err) {
+          credited = false;
           log(`[dice_roll_bet] win credit failed for ${message.author.id}: ${err?.message || err}`);
         }
       }
-      await db.recordGameResult(message.author.id, "dice", won, amount, won ? amount * 5 : 0);
+      if (credited) await db.recordGameResult(message.author.id, "dice", won, amount, won ? amount * 5 : 0);
       // Play animation then show result
       const diceResultEmbed = diceEmbed(guess, roll, won, amount, newBalance);
       frames.push({ embed: diceResultEmbed });
@@ -183,14 +189,18 @@ export async function execute(toolName, input, message, _context) {
           : amount * multiplier;
       const won = multiplier > 1;
       let newBalance = debit.newBalance;
+      let creditOk = !won;
       if (credit !== 0) {
         try {
           newBalance = await db.updateBalance(message.author.id, credit, won ? "gamble_win" : "gamble_loss", `slots:${label}`);
+          if (won) creditOk = true;
         } catch (err) {
           log(`[slots_spin] credit failed for ${message.author.id}: ${err?.message || err}`);
         }
       }
-      await db.recordGameResult(message.author.id, "slots", won, amount, won ? amount * multiplier : 0);
+      // Loss/push records are always honest (debit was atomic); only gate the
+      // win record on the credit actually landing so total_won is never inflated.
+      if (!won || creditOk) await db.recordGameResult(message.author.id, "slots", won, amount, won ? amount * multiplier : 0);
       // Animated reel spin then final result
       const animFrames = slotsAnimFrames(reels);
       const { embed: slEmbed, row: slRow } = slotsEmbed(reels, label, multiplier, amount, won, newBalance);
@@ -256,12 +266,17 @@ export async function execute(toolName, input, message, _context) {
 
         const result = resolveAction({ deck, playerHand, dealerHand, stake: game.stake }, action);
         if (!result.resolved) {
+          // Still playing — save the AUTHORITATIVE engine state. On a double
+          // result.state.stake is the doubled stake; storing the original here
+          // would settle a later win at 2×orig instead of 2×doubled (wiping
+          // double-down winnings). doubled flag mirrors the engine.
+          const { deck, playerHand, dealerHand, doubled } = result.state;
           db.saveActiveGame(message.channel.id, message.author.id, "blackjack", {
-            deck: result.state.deck,
-            playerHand: result.state.playerHand,
-            dealerHand: result.state.dealerHand,
-            doubled: false,
-          }, game.stake);
+            deck,
+            playerHand,
+            dealerHand,
+            doubled,
+          }, result.state.stake);
           const { embed, row } = blackjackHitEmbed(result.state.playerHand, result.state.dealerHand, result.playerValue, game.stake);
           await message.channel.send({ embeds: [embed], components: [row] });
           return "hit or stand?";
@@ -380,12 +395,15 @@ export async function execute(toolName, input, message, _context) {
         const winnings = Math.floor(stake * 0.5);
         // Refund stake (+stake) and add winnings. Original semantics: survival
         // is a net +winnings to the user's balance.
+        let survivedCredit = false;
         try {
           newBalance = await db.updateBalance(message.author.id, stake + winnings, "gamble_win", "russian_roulette:survived");
+          survivedCredit = true;
         } catch (err) {
           log(`[russian_roulette] win credit failed for ${message.author.id}: ${err?.message || err}`);
         }
-        await db.recordGameResult(message.author.id, "russian_roulette", true, stake, stake + winnings);
+        // Only record the survive stat if the credit actually landed.
+        if (survivedCredit) await db.recordGameResult(message.author.id, "russian_roulette", true, stake, stake + winnings);
         const { embed: rrLiveEmbed, row: rrLiveRow } = rouletteEmbed(true, stake, winnings, newBalance);
         suspenseFrames.push({ embed: rrLiveEmbed, components: [rrLiveRow] });
       }
@@ -434,6 +452,7 @@ export async function execute(toolName, input, message, _context) {
       else if (wins[choice] === botChoice) result = "win";
       else result = "lose";
       let newBalance = debit ? debit.newBalance : 0;
+      let creditFailed = false;
       if (stake > 0) {
         // Stake already deducted. On win: credit 2× stake (refund + winnings).
         // On tie: refund stake. On loss: stake stays gone.
@@ -442,10 +461,11 @@ export async function execute(toolName, input, message, _context) {
           try {
             newBalance = await db.updateBalance(message.author.id, credit, result === "win" ? "gamble_win" : "gamble_push", `rps:${choice}`);
           } catch (err) {
+            creditFailed = true;
             log(`[rps_play] credit failed for ${message.author.id}: ${err?.message || err}`);
           }
         }
-        if (result !== "tie") {
+        if (result !== "tie" && !creditFailed) {
           await db.recordGameResult(message.author.id, "rps", result === "win", stake, result === "win" ? stake * 2 : 0);
         }
       }

@@ -17,7 +17,17 @@ export const processing = new Set();
 setInterval(() => processing.clear(), 300_000);
 export const _repliedMessages = new Set();
 setInterval(() => _repliedMessages.clear(), 300_000);
-export const _twinExchanges = new Map();  // channelId → { count, lastTwinMsg }
+export const _twinExchanges = new Map();  // channelId → { count, lastTwinMsg, lastContent }
+
+// Bounded twin-exchange state: the loop-prevention window is 10 minutes
+// (600s), so entries cannot be useful beyond that. Sweep hourly to keep the
+// Map from growing with every channel the twins have ever talked in.
+setInterval(() => {
+  const cutoff = Date.now() - 600_000;
+  for (const [channelId, entry] of _twinExchanges) {
+    if (entry.lastTwinMsg < cutoff) _twinExchanges.delete(channelId);
+  }
+}, 3_600_000).unref?.();
 
 // ── Sleep / Nap mode ──────────────────────────────────────────────────────
 // When Irene says she's going to sleep, ignore messages. Naps are shorter

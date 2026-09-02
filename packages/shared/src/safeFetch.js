@@ -418,6 +418,9 @@ export async function safeFetch(rawUrl, opts = {}) {
           currentMethod = "GET";
           currentBody = undefined;
         }
+        // The redirect response is about to be discarded — cancel its body so
+        // the socket/connection can be reused instead of lingering unconsumed.
+        try { await res.body?.cancel?.(); } catch {}
         currentUrl = nextUrl.toString();
         continue;
       }

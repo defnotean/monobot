@@ -2,7 +2,7 @@ import { handValue } from "./gambling.js";
 
 /**
  * @typedef {{ rank?: string, suit?: string, [key: string]: unknown }} Card
- * @typedef {{ deck: Card[], playerHand: Card[], dealerHand: Card[], stake: number }} BlackjackState
+ * @typedef {{ deck: Card[], playerHand: Card[], dealerHand: Card[], stake: number, doubled?: boolean }} BlackjackState
  * @typedef {"hit" | "stand" | "double"} BlackjackAction
  * @typedef {"continue" | "bust" | "win" | "loss" | "push"} BlackjackOutcome
  * @typedef {{
@@ -29,6 +29,7 @@ function cloneState(state) {
     playerHand: [...state.playerHand],
     dealerHand: [...state.dealerHand],
     stake: state.stake,
+    doubled: state.doubled,
   };
 }
 
@@ -94,6 +95,7 @@ export function resolveAction(state, action) {
 
   if (action === "double") {
     next.stake *= 2;
+    next.doubled = true;
     const card = next.deck.pop();
     if (card) next.playerHand.push(card);
   } else if (action === "hit") {

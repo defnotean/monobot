@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from "discord.js";
 import { musicEmbed, errorEmbed } from "../../utils/embeds.js";
-import { getQueue, createQueue, connectToChannel, playSong, searchSong, searchPlaylist } from "../../music/player.js";
+import { getOrCreateQueue, playSong, searchSong, searchPlaylist } from "../../music/player.js";
 
 export const data = new SlashCommandBuilder()
   .setName("play")
@@ -38,14 +38,11 @@ export async function execute(interaction) {
       return interaction.editReply({ embeds: [errorEmbed("Empty Playlist", "That playlist has no playable tracks.")] });
     }
 
-    let queue = getQueue(interaction.guild.id);
-    if (!queue) {
-      queue = createQueue(interaction.guild.id, voiceChannel, interaction.channel);
-      try {
-        await connectToChannel(queue);
-      } catch (error) {
-        return interaction.editReply({ embeds: [errorEmbed("Connection Failed", error.message)] });
-      }
+    let queue;
+    try {
+      queue = await getOrCreateQueue(interaction.guild.id, voiceChannel, interaction.channel);
+    } catch (error) {
+      return interaction.editReply({ embeds: [errorEmbed("Connection Failed", error.message)] });
     }
 
     const wasEmpty = queue.songs.length === 0;
@@ -76,14 +73,11 @@ export async function execute(interaction) {
     return interaction.editReply({ embeds: [errorEmbed("Not Found", "Could not find a song matching that query.")] });
   }
 
-  let queue = getQueue(interaction.guild.id);
-  if (!queue) {
-    queue = createQueue(interaction.guild.id, voiceChannel, interaction.channel);
-    try {
-      await connectToChannel(queue);
-    } catch (error) {
-      return interaction.editReply({ embeds: [errorEmbed("Connection Failed", error.message)] });
-    }
+  let queue;
+  try {
+    queue = await getOrCreateQueue(interaction.guild.id, voiceChannel, interaction.channel);
+  } catch (error) {
+    return interaction.editReply({ embeds: [errorEmbed("Connection Failed", error.message)] });
   }
 
   song.requestedBy = interaction.user.toString();

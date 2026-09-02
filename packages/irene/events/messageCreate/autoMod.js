@@ -131,6 +131,12 @@ export function shouldDropBotAuthor(message, isTwinMsg) {
 export function applyAiCooldown(message) {
   if (!globalThis._aiSpamTracker) globalThis._aiSpamTracker = new Map();
   const _ast = globalThis._aiSpamTracker;
+  // Bounded cache: prune users who have been quiet for an hour so the Map
+  // never grows with every human who ever wrote in a server.
+  if (_ast.size > 1000) {
+    const cutoff = Date.now() - 3_600_000;
+    for (const [uid, entry] of _ast) if (entry.lastMsg < cutoff) _ast.delete(uid);
+  }
   const _uid = message.author.id;
   if (!_ast.has(_uid)) _ast.set(_uid, { count: 0, lastMsg: 0, cooldownMs: config.aiCooldownMs || 1500 });
   const _stu = _ast.get(_uid);

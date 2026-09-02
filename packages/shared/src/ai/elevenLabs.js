@@ -61,6 +61,13 @@ async function request(apiKey, path, {
     });
     if (!res.ok) throw new Error(`ElevenLabs ${res.status}: ${await readError(res)}`);
     return res;
+  } catch (e) {
+    // Convert an ours-timeout abort into a diagnostic message instead of the
+    // bare "This operation was aborted" string.
+    if (controller.signal.aborted && e?.name === "AbortError") {
+      throw new Error(`ElevenLabs request timed out after ${timeoutMs}ms`);
+    }
+    throw e;
   } finally {
     clearTimeout(timer);
   }

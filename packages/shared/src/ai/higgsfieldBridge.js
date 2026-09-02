@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
+const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+const KILL_GRACE_MS = 5_000;
 
 /**
  * @typedef {{ command?: string, payload?: Record<string, any>, timeoutMs?: number, cwd?: string }} HiggsfieldCommandOptions
@@ -29,39 +31,103 @@ export async function runHiggsfieldCommand({
   }
 
   return await new Promise((resolve, reject) => {
-    const proc = spawn(command, [], {
-      cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        HIGGSFIELD_JOB: JSON.stringify(payload || {}),
-      },
-    });
+    /** @type {NodeJS.Timeout | undefined} */
+    let timeoutTimer;
+    /** @type {NodeJS.Timeout | undefined} */
+    let graceTimer;
+    let settled = false;
     let stdout = "";
     let stderr = "";
-    const timer = setTimeout(() => {
-      proc.kill("SIGTERM");
-      reject(new Error(`Higgsfield command timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    if (typeof timer.unref === "function") timer.unref();
 
-    proc.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
-    proc.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
-    proc.on("error", (err) => {
-      clearTimeout(timer);
+    let proc;
+    try {
+      proc = spawn(command, [], {
+        cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          HIGGSFIELD_JOB: JSON.stringify(payload || {}),
+        },
+      });
+    } catch (err) {
+      // spawn can throw synchronously (ENOENT, bad stdio setup, EACCES).
       reject(err);
+      return;
+    }
+
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (graceTimer) clearTimeout(graceTimer);
+      fn(value);
+    };
+
+    const killProc = (graceMs = KILL_GRACE_MS) => {
+      if (proc.pid == null || proc.killed) return;
+      try { proc.kill("SIGTERM"); } catch { /* already gone */ }
+      if (typeof proc.unref === "function") proc.unref();
+      graceTimer = setTimeout(() => {
+        // Take down the whole process group so any child processes spawned by
+        // the wrapper don't keep running (GPU/CLI jobs) after we've given up.
+        try { process.kill(-proc.pid, "SIGKILL"); } catch { /* no group */ }
+        try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+      }, graceMs);
+      if (typeof graceTimer.unref === "function") graceTimer.unref();
+    };
+
+    const overLimit = () => {
+      if (settled) return;
+      settle(
+        reject,
+        new Error(`Higgsfield command produced more than ${MAX_OUTPUT_BYTES / (1024 * 1024)} MB of output — aborting job`),
+      );
+      killProc();
+    };
+
+    timeoutTimer = setTimeout(() => {
+      if (settled) return;
+      settle(reject, new Error(`Higgsfield command timed out after ${timeoutMs}ms`));
+      killProc();
+    }, timeoutMs);
+    if (typeof timeoutTimer.unref === "function") timeoutTimer.unref();
+
+    proc.stdout?.on("data", (chunk) => {
+      if (settled) return;
+      stdout += chunk.toString();
+      if (stdout.length > MAX_OUTPUT_BYTES) overLimit();
+    });
+    proc.stderr?.on("data", (chunk) => {
+      if (settled) return;
+      stderr += chunk.toString();
+      if (stderr.length > MAX_OUTPUT_BYTES) overLimit();
+    });
+    // A child that closes a pipe before we write (or after we kill it) must
+    // never surface an unhandled 'error' event and crash the bot process.
+    proc.stdout?.on("error", () => {});
+    proc.stderr?.on("error", () => {});
+    proc.stdin?.on("error", () => {});
+
+    proc.on("error", (err) => {
+      settle(reject, err);
     });
     proc.on("close", (code) => {
-      clearTimeout(timer);
+      if (settled) return;
       if (code !== 0) {
-        reject(new Error(`Higgsfield command exit ${code}: ${stderr.replace(/\s+/g, " ").slice(0, 300)}`));
+        settle(reject, new Error(`Higgsfield command exit ${code}: ${stderr.replace(/\s+/g, " ").slice(0, 300)}`));
         return;
       }
       const result = parseJsonOrText(stdout);
       if (stderr.trim() && !result.warning) result.warning = stderr.trim().slice(0, 300);
-      resolve(result);
+      settle(resolve, result);
     });
-    proc.stdin.end(JSON.stringify(payload || {}));
+
+    // Send the job payload last, guarded against a child that already exited
+    // (fast-exit wrappers close stdin immediately — EPIPE here is normal, not
+    // a crash, thanks to the stdin error handler above).
+    try {
+      proc.stdin.end(JSON.stringify(payload || {}));
+    } catch { /* stdin already closed — the child exited early */ }
   });
 }
 

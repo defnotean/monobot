@@ -572,10 +572,12 @@ async function processAudio(state, userId, wavBuffer, pcmChunks) {
     log("[VoiceListen] No STT provider available");
     return;
   }
-  if (!replyClient) {
-    log("[VoiceListen] No Gemini client available for voice replies");
-    return;
-  }
+  // NOTE: do NOT bail here when the reply client is missing. `replyClient` is
+  // only needed for the final AI-reply step; the transcription/wake-word
+  // stages must still run so that an ElevenLabs-only STT setup (no Gemini
+  // keys) produces the correct "voice replies unavailable" message at the
+  // point where it actually matters rather than silently swallowing every
+  // utterance. The reply step checks it again before calling Gemini.
 
   const wakeWord = state.wakeWord;
 
@@ -744,6 +746,13 @@ ${fencedSpeech}
     // Cheap runtime guard: a future edit can't silently re-arm this path.
     if ("tools" in aiRequest || "toolConfig" in aiRequest || "config" in aiRequest) {
       throw new Error("voice reply path must never bind tools");
+    }
+    if (!replyClient) {
+      // We got a wake-word hit but have no model to compose a reply. Surface
+      // this only now — after a real utterance was transcribed — so an
+      // ElevenLabs STT-only setup isn't silent-dead from the first message.
+      log("[VoiceListen] No Gemini client available for voice replies");
+      return;
     }
     const aiResponse = await replyClient.models.generateContent(aiRequest);
 

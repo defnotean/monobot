@@ -36,6 +36,14 @@ export async function execute(interaction) {
   // ── Music control panel buttons ──────────────────────────────────────────
   if (interaction.isButton() && interaction.customId.startsWith("music:")) {
     const [, action, guildId] = interaction.customId.split(":");
+    // Security: the button embeds a guildId; only accept it if it actually
+    // belongs to the guild the interaction fired in. Otherwise a user could
+    // forward/reconstruct a control panel from another server and pause,
+    // skip, or stop that server's queue.
+    if (!guildId || guildId !== interaction.guild?.id) {
+      await interaction.reply({ content: "this control is for another server", flags: 64 }).catch(() => {});
+      return;
+    }
     // Dynamic import can be slow on first load — defer so the interaction doesn't expire
     const { getQueue, deleteQueue, playSong, buildNowPlayingPanel } = await import("../music/player.js");
     const queue = getQueue(guildId);

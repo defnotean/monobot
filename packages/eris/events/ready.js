@@ -460,8 +460,13 @@ Write ONE reflection — a higher-order observation about yourself. Example: "i'
         const hoursOverdue = Math.floor((Date.now() - new Date(loan.due_at).getTime()) / 3600_000);
         const total = calculateLoanTotal(loan.amount, loan.interest_rate, hoursOverdue);
         const penalty = Math.floor(total * 0.5);
-        await db.updateBalance(loan.user_id, -(total + penalty), "loan_default", `overdue ${hoursOverdue}h`);
+        // Order matters for crash-consistency: close the loan BEFORE debiting.
+        // If we debited first and crashed, the loan would stay "active" and the
+        // next collector pass would charge the same default twice. Closing first
+        // means a crash can only cause a MISSED debit (user stays in debt), which
+        // the collector re-derives on the following pass — never an exploit.
         await db.closeLoan(loan.id, "defaulted");
+        await db.updateBalance(loan.user_id, -(total + penalty), "loan_default", `overdue ${hoursOverdue}h`);
         await db.unlockAchievement(loan.user_id, "loan_defaulted");
         log(`[LOAN] Collected ${total + penalty} from ${loan.user_id} (defaulted)`);
       }
@@ -496,8 +501,13 @@ Write ONE reflection — a higher-order observation about yourself. Example: "i'
           const hoursSince = (Date.now() - new Date(t.last_collected).getTime()) / 3600_000;
           if (hoursSince >= 1) {
             const income = Math.floor(t.income_rate * Math.min(hoursSince, 24));
-            await db.updateBalance(t.owner_id, income, "territory_passive", "auto-collect");
+            // Order matters for crash-consistency: stamp last_collected BEFORE
+            // crediting. Crediting first then crashing would leave last_collected
+            // stale, so the next pass recomputes the same hoursSince and pays the
+            // territory twice (economy inflation). Stamping first means a crash
+            // can only skip one payout, self-correcting on the next cycle.
             await db.collectTerritoryIncome(t.id, income);
+            await db.updateBalance(t.owner_id, income, "territory_passive", "auto-collect");
           }
         }
       }
@@ -518,9 +528,12 @@ Write ONE reflection — a higher-order observation about yourself. Example: "i'
             // The winning bid was escrowed from the winner at bid time (see
             // bidOnAuction), so crediting the seller here just hands over the
             // already-held coins — net coin creation is zero. Grant the item to
-            // the winner to complete the trade.
-            await db.updateBalance(auction.seller_id, auction.current_bid, "auction_sale", auction.item_name);
+            // the winner to complete the trade. Item-first ordering: the winner
+            // already paid; a crash after granting loses the seller their coins
+            // (recoverable via support) rather than leaving a paid buyer with no
+            // item.
             await db.addToInventory?.(auction.current_bidder_id, auction.item_name, "auction");
+            await db.updateBalance(auction.seller_id, auction.current_bid, "auction_sale", auction.item_name);
             log(`[AUCTION] ${auction.item_name} sold to ${auction.current_bidder_id} for ${auction.current_bid}`);
           }
         }

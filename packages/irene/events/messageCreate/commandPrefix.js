@@ -124,6 +124,15 @@ export async function processStickyMessage(message) {
 
     // Debounce — only re-send if >5 seconds since last re-send
     if (!globalThis._stickyCooldowns) globalThis._stickyCooldowns = new Map();
+    // Bounded cache: the debounce window is 5s, so prune any channel that
+    // hasn't hit the debounce threshold in the last minute instead of keeping
+    // an entry per channel forever.
+    if (globalThis._stickyCooldowns.size > 500) {
+      const cutoff = Date.now() - 60_000;
+      for (const [cid, ts] of globalThis._stickyCooldowns) {
+        if (ts < cutoff) globalThis._stickyCooldowns.delete(cid);
+      }
+    }
     const _stickyKey = message.channel.id;
     const _stickyLast = globalThis._stickyCooldowns.get(_stickyKey) || 0;
     if (Date.now() - _stickyLast < 5000) return;

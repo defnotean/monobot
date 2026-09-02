@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../../../music/player.js", () => ({
-  getQueue: vi.fn(),
-  createQueue: vi.fn(),
-  connectToChannel: vi.fn(),
+  getOrCreateQueue: vi.fn(),
   playSong: vi.fn(),
   searchSong: vi.fn(),
   searchPlaylist: vi.fn(),
@@ -14,9 +12,7 @@ import { makeInteraction, makeMember, makeUser, makeChannel, makeGuild, makeClie
 import * as player from "../../../music/player.js";
 import * as play from "../../../commands/music/play.js";
 
-const getQueue = player.getQueue as unknown as ReturnType<typeof vi.fn>;
-const createQueue = player.createQueue as unknown as ReturnType<typeof vi.fn>;
-const connectToChannel = player.connectToChannel as unknown as ReturnType<typeof vi.fn>;
+const getOrCreateQueue = player.getOrCreateQueue as unknown as ReturnType<typeof vi.fn>;
 const playSong = player.playSong as unknown as ReturnType<typeof vi.fn>;
 const searchSong = player.searchSong as unknown as ReturnType<typeof vi.fn>;
 const searchPlaylist = player.searchPlaylist as unknown as ReturnType<typeof vi.fn>;
@@ -64,7 +60,7 @@ describe("/play", () => {
   it("defers, then reports Not Found for an unmatched single-song query", async () => {
     searchPlaylist.mockResolvedValue(null);
     searchSong.mockResolvedValue(null);
-    getQueue.mockReturnValue({ songs: [] });
+    getOrCreateQueue.mockResolvedValue({ songs: [] });
     const interaction = buildInteraction(makeVoiceChannel());
     await play.execute(interaction);
     expect(interaction.deferReply).toHaveBeenCalled();
@@ -75,16 +71,13 @@ describe("/play", () => {
     searchPlaylist.mockResolvedValue(null);
     const song: any = { title: "Hit Track", url: "http://x/1", duration: "3:00" };
     searchSong.mockResolvedValue(song);
-    getQueue.mockReturnValue(undefined); // no existing queue -> create
+    // no existing queue -> getOrCreateQueue creates and connects
     const createdQueue: any = { songs: [] };
-    createQueue.mockReturnValue(createdQueue);
-    connectToChannel.mockResolvedValue(undefined);
+    getOrCreateQueue.mockResolvedValue(createdQueue);
     const interaction = buildInteraction(makeVoiceChannel());
 
     await play.execute(interaction);
 
-    expect(createQueue).toHaveBeenCalled();
-    expect(connectToChannel).toHaveBeenCalledWith(createdQueue);
     // The song was pushed and tagged with the requester.
     expect(createdQueue.songs).toHaveLength(1);
     expect(createdQueue.songs[0].requestedBy).toBe(interaction.user.toString());
@@ -99,12 +92,11 @@ describe("/play", () => {
     const song: any = { title: "Second", url: "http://x/2" };
     searchSong.mockResolvedValue(song);
     const existing: any = { songs: [{ title: "First" }] };
-    getQueue.mockReturnValue(existing);
+    getOrCreateQueue.mockResolvedValue(existing);
     const interaction = buildInteraction(makeVoiceChannel());
 
     await play.execute(interaction);
 
-    expect(createQueue).not.toHaveBeenCalled();
     expect(existing.songs).toHaveLength(2);
     expect(playSong).not.toHaveBeenCalled();
     const text = repliedText(interaction);
@@ -112,12 +104,10 @@ describe("/play", () => {
     expect(text).toContain("#2");
   });
 
-  it("surfaces a connection failure when connectToChannel throws", async () => {
+  it("surfaces a connection failure when connecting throws", async () => {
     searchPlaylist.mockResolvedValue(null);
     searchSong.mockResolvedValue({ title: "X", url: "http://x" });
-    getQueue.mockReturnValue(undefined);
-    createQueue.mockReturnValue({ songs: [] });
-    connectToChannel.mockRejectedValue(new Error("node offline"));
+    getOrCreateQueue.mockRejectedValue(new Error("node offline"));
     const interaction = buildInteraction(makeVoiceChannel());
 
     await play.execute(interaction);
@@ -147,10 +137,8 @@ describe("/play", () => {
         { title: "T3" },
       ],
     });
-    getQueue.mockReturnValue(undefined);
     const createdQueue: any = { songs: [] };
-    createQueue.mockReturnValue(createdQueue);
-    connectToChannel.mockResolvedValue(undefined);
+    getOrCreateQueue.mockResolvedValue(createdQueue);
     const interaction = buildInteraction(makeVoiceChannel());
 
     await play.execute(interaction);
