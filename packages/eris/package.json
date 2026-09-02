@@ -21,21 +21,21 @@
   "license": "ISC",
   "dependencies": {
     "@defnotean/shared": "*",
-    "@google/genai": "2.7.0",
+    "@google/genai": "2.19.0",
     "@octokit/rest": "^22.0.1",
-    "@supabase/supabase-js": "2.106.2",
+    "@supabase/supabase-js": "2.112.4",
     "canvas": "^3.2.3",
     "cheerio": "^1.2.0",
-    "discord.js": "14.26.4",
+    "discord.js": "14.27.0",
     "dotenv": "^17.4.0",
     "googleapis": "^173.0.0",
-    "pg": "8.22.0",
-    "voyageai": "0.2.1"
+    "pg": "8.23.0",
+    "voyageai": "0.4.0"
   },
   "devDependencies": {
     "@types/node": "^24.12.4",
     "electron": "^42.3.0",
-    "tsx": "4.23.1",
+    "tsx": "4.23.13",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   }
